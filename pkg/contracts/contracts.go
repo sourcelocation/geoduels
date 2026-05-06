@@ -202,7 +202,7 @@ func ClientSnapshotForPlayer(snap *MatchSnapshot, userID string) *ClientMatchSna
 		RoundPhase:      snap.RoundPhase,
 		PhaseStartedAt:  snap.PhaseStartedAt,
 		PhaseEndsAt:     snap.PhaseEndsAt,
-		CurrentRound:    snap.CurrentRound,
+		CurrentRound:    clientCurrentRound(snap),
 		LastRoundResult: snap.LastRoundResult,
 		RoundResults:    snap.RoundResults,
 		RoundMSLeft:     snap.RoundMSLeft,
@@ -235,6 +235,31 @@ func ClientSnapshotForPlayer(snap *MatchSnapshot, userID string) *ClientMatchSna
 		}
 	}
 	return client
+}
+
+func clientCurrentRound(snap *MatchSnapshot) *RoundState {
+	if snap == nil || snap.CurrentRound == nil {
+		return nil
+	}
+	round := *snap.CurrentRound
+	if shouldRedactLiveLocation(snap) {
+		round.Location.Lat = 0
+		round.Location.Lng = 0
+		round.Location.Country = ""
+	}
+	return &round
+}
+
+func shouldRedactLiveLocation(snap *MatchSnapshot) bool {
+	if snap == nil || snap.Phase != PhaseLive {
+		return false
+	}
+	switch snap.RoundPhase {
+	case RoundPhaseIntro, RoundPhaseLive, RoundPhaseTransition:
+		return true
+	default:
+		return false
+	}
 }
 
 func clientSelfState(snap *MatchSnapshot, player PlayerState) *ClientSelfState {

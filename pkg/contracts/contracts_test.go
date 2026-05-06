@@ -92,3 +92,38 @@ func TestClientSnapshotForPlayerKeepsZeroCoordinateSelfGuess(t *testing.T) {
 		t.Fatalf("expected zero-coordinate own guess, got lat=%v lng=%v", got.Lat, got.Lng)
 	}
 }
+
+func TestClientSnapshotForPlayerRedactsLiveRoundLocationCoordinates(t *testing.T) {
+	snap := &MatchSnapshot{
+		Phase:      PhaseLive,
+		RoundPhase: RoundPhaseLive,
+		CurrentRound: &RoundState{
+			RoundID:     "r1",
+			RoundNumber: 1,
+			Location: LocationPoint{
+				Lat:    51.5074,
+				Lng:    -0.1278,
+				PanoID: ptrString("pano-abc"),
+			},
+		},
+		Players: map[string]PlayerState{
+			"u1": {UserID: "u1"},
+		},
+	}
+
+	client := ClientSnapshotForPlayer(snap, "u1")
+	if client == nil || client.CurrentRound == nil {
+		t.Fatalf("expected current round in client snapshot")
+	}
+	if client.CurrentRound.Location.Lat != 0 || client.CurrentRound.Location.Lng != 0 {
+		t.Fatalf("expected live round coordinates to be redacted, got lat=%v lng=%v", client.CurrentRound.Location.Lat, client.CurrentRound.Location.Lng)
+	}
+	if client.CurrentRound.Location.PanoID == nil || *client.CurrentRound.Location.PanoID != "pano-abc" {
+		t.Fatalf("expected pano id to remain available")
+	}
+	if snap.CurrentRound.Location.Lat != 51.5074 || snap.CurrentRound.Location.Lng != -0.1278 {
+		t.Fatalf("expected original snapshot to remain unchanged")
+	}
+}
+
+func ptrString(v string) *string { return &v }

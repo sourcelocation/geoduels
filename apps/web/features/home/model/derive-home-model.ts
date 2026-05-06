@@ -32,13 +32,14 @@ export function formatHpPct(maxHP: number, hp: number) {
 }
 
 function buildStreetViewSrc(snapshot: Snapshot | null, googleEmbedKey: string) {
-  if (!snapshot?.currentRound) return "";
+  if (!googleEmbedKey || !snapshot?.currentRound) return "";
   const loc = snapshot.currentRound.location;
+  if (!loc.panoId) return "";
   const params = new URLSearchParams({
-    location: `${loc.lat},${loc.lng}`,
     key: googleEmbedKey,
     fov: "100",
     language: "en",
+    pano: loc.panoId,
   });
   if (Number.isFinite(loc.heading)) {
     params.set("heading", String(loc.heading));
@@ -64,7 +65,11 @@ function getSelfQueueName(params: {
   return direct;
 }
 
-function avatarFallback(value: string, fallback: string, noLinkedAccount = false) {
+function avatarFallback(
+  value: string,
+  fallback: string,
+  noLinkedAccount = false,
+) {
   if (noLinkedAccount) return "?";
   return (value || fallback).slice(0, 1).toUpperCase();
 }
@@ -186,7 +191,8 @@ export function deriveHomeModel({
   const opponentDisconnected = !!oppPlayer?.disconnected;
   const selfAvatarUrl = selfPlayer?.avatarUrl || auth.userAvatar;
   const oppAvatarUrl = oppPlayer?.avatarUrl || "";
-  const selfHasNoLinkedAccount = !auth.userEmail || !!(selfPlayer?.isGuest ?? auth.isGuest);
+  const selfHasNoLinkedAccount =
+    !auth.userEmail || !!(selfPlayer?.isGuest ?? auth.isGuest);
   const selfFallback = avatarFallback(
     selfName || auth.userEmail,
     "Y",
@@ -432,9 +438,7 @@ export function deriveHomeModel({
               opponentUserId: isSingleplayer ? undefined : oppId,
               selfElo: isSingleplayer ? undefined : selfElo,
               opponentElo: isSingleplayer ? undefined : opponentElo,
-              selfEloDelta: selfReceivesEloDelta
-                ? selfEloDelta
-                : undefined,
+              selfEloDelta: selfReceivesEloDelta ? selfEloDelta : undefined,
               opponentEloDelta: opponentReceivesEloDelta
                 ? opponentEloDelta
                 : undefined,

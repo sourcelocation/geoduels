@@ -47,7 +47,7 @@ function createSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     currentRound: {
       roundId: 'round-1',
       roundNumber: 3,
-      location: { lat: 1, lng: 2 }
+      location: { lat: 1, lng: 2, panoId: 'test-pano-id' }
     },
     players: {
       self: {
@@ -178,7 +178,7 @@ describe('deriveHomeModel', () => {
           roundId: 'round-1',
           roundNumber: 3,
           timerStarted: false,
-          location: { lat: 1, lng: 2 }
+          location: { lat: 1, lng: 2, panoId: 'test-pano-id' }
         }
       })),
       game: createGameState({ roundMSLeft: 0, displayRoundSeconds: 0 }),
@@ -204,7 +204,7 @@ describe('deriveHomeModel', () => {
         currentRound: {
           roundId: 'round-1',
           roundNumber: 1,
-          location: { lat: 1, lng: 2 }
+          location: { lat: 1, lng: 2, panoId: 'test-pano-id' }
         }
       })),
       game: createGameState({ roundMSLeft: 0, displayRoundSeconds: 0 }),
@@ -240,14 +240,14 @@ describe('deriveHomeModel', () => {
     expect(model.game.opponentDisconnected).toBe(true);
   });
 
-  it('includes the round camera heading and pitch in the Street View URL', () => {
+  it('uses pano-based Street View URL without exposing coordinates', () => {
     const model = deriveHomeModel({
       auth: createAuthState(),
       match: createMatchState(createSnapshot({
         currentRound: {
           roundId: 'round-1',
           roundNumber: 3,
-          location: { lat: 1, lng: 2, heading: 123.5, pitch: -4 }
+          location: { lat: 1, lng: 2, panoId: 'secure-pano', heading: 123.5, pitch: -4 }
         }
       })),
       game: createGameState(),
@@ -256,9 +256,28 @@ describe('deriveHomeModel', () => {
     });
 
     const streetViewURL = new URL(model.game.streetViewSrc);
-    expect(streetViewURL.searchParams.get('location')).toBe('1,2');
+    expect(streetViewURL.searchParams.get('pano')).toBe('secure-pano');
+    expect(streetViewURL.searchParams.get('location')).toBeNull();
     expect(streetViewURL.searchParams.get('heading')).toBe('123.5');
     expect(streetViewURL.searchParams.get('pitch')).toBe('-4');
+  });
+
+  it('returns empty Street View URL when panoId is missing', () => {
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(createSnapshot({
+        mode: 'singleplayer',
+        currentRound: {
+          roundId: 'round-1',
+          roundNumber: 1,
+          location: { lat: 12.34, lng: 56.78 }
+        }
+      })),
+      game: createGameState(),
+      config,
+      routeMatchId: 'match-1'
+    });
+    expect(model.game.streetViewSrc).toBe('');
   });
 
   it('derives round result overlay state', () => {

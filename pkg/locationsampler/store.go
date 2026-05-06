@@ -73,7 +73,10 @@ func (d *DBStore) FetchRows(ctx context.Context, catalogID string, after float64
 	q := `
 		select id, lat, lng, country, pano_id, heading, pitch
 		from locations
-		where map_revision_id = $1 and rand_key >= $2
+		where map_revision_id = $1
+		  and rand_key >= $2
+		  and pano_id is not null
+		  and btrim(pano_id) <> ''
 		order by rand_key asc
 		limit $3
 	`
@@ -100,7 +103,10 @@ func (d *DBStore) FetchRows(ctx context.Context, catalogID string, after float64
 	rows2, err := d.pool.Query(ctx, `
 		select id, lat, lng, country, pano_id, heading, pitch
 		from locations
-		where map_revision_id = $1 and rand_key < $2
+		where map_revision_id = $1
+		  and rand_key < $2
+		  and pano_id is not null
+		  and btrim(pano_id) <> ''
 		order by rand_key asc
 		limit $3
 	`, catalogID, after, remaining)

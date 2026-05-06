@@ -152,7 +152,7 @@ export type Snapshot = {
     roundId: string;
     roundNumber: number;
     timerStarted?: boolean;
-    location: { lat: number; lng: number; heading?: number; pitch?: number };
+    location: { lat: number; lng: number; panoId?: string; heading?: number; pitch?: number };
   };
   lastRoundResult?: RoundResult;
   roundResults?: RoundResult[];

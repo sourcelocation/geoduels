@@ -2,7 +2,7 @@
 
 # GeoDuels
 
-GeoDuels is a production-ready + dev-ready GeoGuessr-style platform built for horizontal scaling.
+GeoDuels is a production-ready + dev-ready GeoGuessr-style platform built for horizontal scaling. test
 
 https://geoduels.io/
 

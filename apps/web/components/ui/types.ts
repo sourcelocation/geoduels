@@ -153,7 +153,7 @@ export type Snapshot = {
   matchId: string;
   mode?: "duel" | "singleplayer" | "team_duel" | "free_for_all";
   config?: {
-    ruleset?: "moving" | "nmpz";
+    ruleset?: "moving" | "no_move" | "nmpz";
     mapKey?: string;
     roundTimerMode?: "none" | "pressure" | "fixed";
     roundTimeLimitMs?: number;

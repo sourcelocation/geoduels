@@ -49,6 +49,25 @@ const PRESSURE_OPTIONS = [
   { value: "15", label: "15s" },
 ] as const;
 
+const DUEL_RULESET_OPTIONS = [
+  ["moving", "Moving"],
+  ["nmpz", "NMPZ"],
+] as const;
+
+const SINGLEPLAYER_RULESET_OPTIONS = [
+  ["moving", "Moving"],
+  ["no_move", "No Move"],
+  ["nmpz", "NMPZ"],
+] as const;
+
+function isDuelRuleset(value: unknown): value is GameRuleset {
+  return value === "moving" || value === "nmpz";
+}
+
+function isSingleplayerRuleset(value: unknown): value is GameRuleset {
+  return value === "moving" || value === "no_move" || value === "nmpz";
+}
+
 function lobbyTeamLabel(teamId?: string) {
   return teamId === "b" ? "Team Blue" : "Team Red";
 }
@@ -97,7 +116,7 @@ type Props = {
   status: string;
   queueStartedAt: number | null;
   joinQueue: (rulesets?: GameRuleset[]) => void;
-  startSingleplayer: () => void | Promise<string>;
+  startSingleplayer: (ruleset?: GameRuleset) => void | Promise<string>;
   cancelQueue: () => void;
   privateLobby?: PrivateLobbyView;
   createInviteLobby?: (mode?: PartyMode) => Promise<boolean>;
@@ -499,6 +518,7 @@ export default function LobbyScreen({
   const [isEditingProfileName, setIsEditingProfileName] = useState(false);
   const [isBlogExpanded, setIsBlogExpanded] = useState(false);
   const [queueRulesets, setQueueRulesets] = useState<GameRuleset[]>(["moving"]);
+  const [singleplayerRuleset, setSingleplayerRuleset] = useState<GameRuleset>("moving");
   const [inviteCopied, setInviteCopied] = useState(false);
   const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -530,7 +550,7 @@ export default function LobbyScreen({
       const raw = window.localStorage.getItem("geoduels.queueRulesets");
       const parsed = raw ? JSON.parse(raw) : null;
       if (Array.isArray(parsed)) {
-        const next = parsed.filter((item): item is GameRuleset => item === "moving" || item === "nmpz");
+        const next = parsed.filter(isDuelRuleset);
         setQueueRulesets(Array.from(new Set(next)));
       }
     } catch {
@@ -545,6 +565,25 @@ export default function LobbyScreen({
       // Ignore storage failures; defaults still work.
     }
   }, [queueRulesets]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("geoduels.singleplayerRuleset");
+      if (isSingleplayerRuleset(raw)) {
+        setSingleplayerRuleset(raw);
+      }
+    } catch {
+      setSingleplayerRuleset("moving");
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("geoduels.singleplayerRuleset", singleplayerRuleset);
+    } catch {
+      // Ignore storage failures; defaults still work.
+    }
+  }, [singleplayerRuleset]);
 
   const isQueueing = status === "queueing";
   const isSingleplayerLoading = status === "matched_connecting";
@@ -2091,10 +2130,7 @@ export default function LobbyScreen({
 
                     {!isQueueing ? (
                       <div className="mb-3 overflow-hidden rounded-[14px] border border-white/10 bg-black/25">
-                        {([
-                          ["moving", "Moving"],
-                          ["nmpz", "NMPZ"],
-                        ] as const).map(([ruleset, label]) => (
+                        {DUEL_RULESET_OPTIONS.map(([ruleset, label]) => (
                           <button
                             key={ruleset}
                             type="button"
@@ -2185,8 +2221,37 @@ export default function LobbyScreen({
                   </div>
 
                   <div className="relative z-10 mx-auto mt-5 flex h-full w-full flex-col justify-end px-0 pb-1 sm:mt-6 sm:px-2">
+                    {!isSingleplayerLoading ? (
+                      <div className="mb-3 overflow-hidden rounded-[14px] border border-white/10 bg-black/25">
+                        {SINGLEPLAYER_RULESET_OPTIONS.map(([ruleset, label]) => (
+                          <button
+                            key={ruleset}
+                            type="button"
+                            aria-pressed={singleplayerRuleset === ruleset}
+                            onClick={() => setSingleplayerRuleset(ruleset)}
+                            className={`flex min-h-[44px] w-full items-center justify-between px-4 text-left text-[13px] font-extrabold uppercase tracking-[0.08em] transition ${
+                              singleplayerRuleset === ruleset
+                                ? "bg-[#3b82f6]/14 text-[#dbeafe]"
+                                : "text-white/70 hover:bg-white/[0.07] hover:text-white"
+                            }`}
+                          >
+                            <span>{label}</span>
+                            <span className="flex h-[18px] w-[18px] items-center justify-center">
+                              {singleplayerRuleset === ruleset ? (
+                                <CheckCircle2
+                                  size={18}
+                                  strokeWidth={2.5}
+                                  className="text-[#60a5fa]"
+                                />
+                              ) : null}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
                     <button
-                      onClick={startSingleplayer}
+                      onClick={() => startSingleplayer(singleplayerRuleset)}
                       disabled={singleplayerDisabled}
                       className="w-full flex items-center justify-center rounded-[16px] bg-[#3b82f6] py-[14px] text-[16px] font-extrabold uppercase tracking-[0.08em] text-white shadow-[0_4px_16px_rgba(59,130,246,0.3)] transition-all duration-200 hover:scale-[1.01] hover:bg-[#4b8df8] hover:shadow-[0_6px_24px_rgba(59,130,246,0.4)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                     >

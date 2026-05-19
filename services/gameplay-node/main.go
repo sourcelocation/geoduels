@@ -121,8 +121,17 @@ func main() {
 	}
 
 	duelConfigs := newMatchConfigRegistry()
+	singleplayerConfigs := newMatchConfigRegistry()
 	roundForConfig := func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
 		cfg := duelConfigs.Get(matchID)
+		sampler := samplers[cfg.MapKey]
+		if sampler == nil {
+			sampler = samplers[contracts.MapKeyMoving]
+		}
+		return sampler.NextRound(context.Background(), matchID, roundIndex)
+	}
+	roundForSingleplayerConfig := func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
+		cfg := singleplayerConfigs.Get(matchID)
 		sampler := samplers[cfg.MapKey]
 		if sampler == nil {
 			sampler = samplers[contracts.MapKeyMoving]
@@ -143,12 +152,10 @@ func main() {
 		samplerCleanup: samplerCleanup,
 		redisCleanup:   redisCleanup,
 		runtimes: map[contracts.MatchMode]gameplayRuntime{
-			contracts.ModeDuel:       duelRuntime{mode: contracts.ModeDuel, engine: duel.New(roundForConfig), configs: duelConfigs},
-			contracts.ModeTeamDuel:   duelRuntime{mode: contracts.ModeTeamDuel, engine: duel.New(roundForConfig), configs: duelConfigs},
-			contracts.ModeFreeForAll: duelRuntime{mode: contracts.ModeFreeForAll, engine: duel.New(roundForConfig), configs: duelConfigs},
-			contracts.ModeSingleplayer: singleplayerRuntime{engine: singleplayer.New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
-				return samplers[contracts.MapKeyMoving].NextRound(context.Background(), matchID, roundIndex)
-			})},
+			contracts.ModeDuel:         duelRuntime{mode: contracts.ModeDuel, engine: duel.New(roundForConfig), configs: duelConfigs},
+			contracts.ModeTeamDuel:     duelRuntime{mode: contracts.ModeTeamDuel, engine: duel.New(roundForConfig), configs: duelConfigs},
+			contracts.ModeFreeForAll:   duelRuntime{mode: contracts.ModeFreeForAll, engine: duel.New(roundForConfig), configs: duelConfigs},
+			contracts.ModeSingleplayer: singleplayerRuntime{engine: singleplayer.New(roundForSingleplayerConfig), configs: singleplayerConfigs},
 		},
 		conns:      map[string]*websocket.Conn{},
 		connWrite:  map[string]*sync.Mutex{},

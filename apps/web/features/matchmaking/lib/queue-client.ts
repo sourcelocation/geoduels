@@ -3,7 +3,7 @@ import { normalizeHTTPBase, normalizeWSBase } from '../../../lib/runtime-config'
 import type { Snapshot } from '../../../components/ui/types';
 import type { AuthSessionSnapshot } from '../../auth/session';
 
-export type GameRuleset = 'moving' | 'nmpz';
+export type GameRuleset = 'moving' | 'no_move' | 'nmpz';
 export type MatchConfig = {
   ruleset?: GameRuleset;
   mapKey?: string;
@@ -373,11 +373,16 @@ export async function bootstrapMatchSession(
 export async function startSingleplayerSession(
   config: RuntimeConfig,
   accessToken: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  ruleset: GameRuleset = 'moving'
 ): Promise<{ matchId: string; mode?: string; ticket: string; node: string; wsPath: string }> {
   const resp = await fetch(`${config.apiURL}/v1/singleplayer/session`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ ruleset }),
     signal
   });
   if (!resp.ok) {

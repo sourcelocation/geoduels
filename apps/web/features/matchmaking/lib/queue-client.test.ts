@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRuntimeConfigFixture } from '../../../test/runtime-config.fixture';
-import { bootstrapMatchSession, fetchMatchSession, resolveMatchRoute } from './queue-client';
+import { bootstrapMatchSession, fetchMatchSession, resolveMatchRoute, startSingleplayerSession } from './queue-client';
 
 describe('queue-client match bootstrap', () => {
   const originalFetch = global.fetch;
@@ -82,6 +82,35 @@ describe('queue-client match bootstrap', () => {
         wsPath: '/ws/game-1'
       }
     });
+  });
+
+  it('sends the selected ruleset when starting singleplayer', async () => {
+    global.fetch = vi.fn(async (_input, init) => {
+      expect(init?.method).toBe('POST');
+      expect(init?.headers).toEqual({
+        Authorization: 'Bearer access-token',
+        'Content-Type': 'application/json'
+      });
+      expect(JSON.parse(String(init?.body))).toEqual({ ruleset: 'nmpz' });
+      return {
+        ok: true,
+        json: async () => ({
+          matchId: 'solo-nmpz',
+          mode: 'singleplayer',
+          node: 'game-1',
+          ticket: 'ticket-1',
+          wsPath: '/ws/game-1'
+        })
+      } as Response;
+    }) as typeof fetch;
+
+    const response = await startSingleplayerSession(runtimeConfig, 'access-token', new AbortController().signal, 'nmpz');
+
+    expect(response.matchId).toBe('solo-nmpz');
+    expect(global.fetch).toHaveBeenCalledWith(
+      `${runtimeConfig.apiURL}/v1/singleplayer/session`,
+      expect.objectContaining({ body: JSON.stringify({ ruleset: 'nmpz' }) })
+    );
   });
 
   it('resolves a public history route without an access token', async () => {

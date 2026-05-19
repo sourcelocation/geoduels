@@ -201,7 +201,7 @@ export type HomeViewModel = {
 
 export type HomeActions = {
   joinQueue: (rulesets?: GameRuleset[]) => void;
-  startSingleplayer: () => Promise<string>;
+  startSingleplayer: (ruleset?: GameRuleset) => Promise<string>;
   cancelQueue: () => void;
   createInviteLobby: (mode?: PartyMode) => Promise<boolean>;
   joinInviteLobby: (inviteCode?: string) => Promise<boolean>;

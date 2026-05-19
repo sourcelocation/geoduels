@@ -493,7 +493,7 @@ describe('MatchController', () => {
     } as any;
 
     const controller = new MatchController({ config: runtimeConfig, sessionController });
-    const firstStart = controller.startSingleplayer();
+    const firstStart = controller.startSingleplayer('nmpz');
     const secondStart = await controller.startSingleplayer();
 
     expect(secondStart).toBe('');
@@ -503,6 +503,7 @@ describe('MatchController', () => {
     resolveSession(session);
     await expect(firstStart).resolves.toBe('solo-1');
     expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((global.fetch as any).mock.calls[0]?.[1]?.body))).toEqual({ ruleset: 'nmpz' });
 
     controller.destroy();
   });

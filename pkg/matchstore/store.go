@@ -187,7 +187,7 @@ const (
 )
 
 var allQueuePools = []QueuePool{QueuePoolGuest, QueuePoolRegistered}
-var allQueueRulesets = []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ}
+var allQueueRulesets = []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNoMove, contracts.RulesetNMPZ}
 
 func AllQueuePools() []QueuePool {
 	return append([]QueuePool(nil), allQueuePools...)

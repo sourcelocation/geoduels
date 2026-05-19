@@ -166,7 +166,7 @@ func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize 
 			continue
 		}
 		for _, pool := range matchstore.AllQueuePools() {
-			for _, ruleset := range []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ} {
+			for _, ruleset := range []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNoMove, contracts.RulesetNMPZ} {
 				if _, err := q.store.RunMatchmaking(pool, ruleset, batchSize); err != nil {
 					observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(pool), "ruleset": string(ruleset), "error": err.Error()})
 				}
@@ -396,7 +396,7 @@ func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	q.touchPresence(claims.Sub)
 
-	status, err := q.store.Heartbeat(matchstore.PoolForGuest(identity.AccountType == "guest"), []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ}, claims.Sub)
+	status, err := q.store.Heartbeat(matchstore.PoolForGuest(identity.AccountType == "guest"), []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNoMove, contracts.RulesetNMPZ}, claims.Sub)
 	if err != nil {
 		http.Error(w, "queue unavailable", http.StatusBadGateway)
 		return

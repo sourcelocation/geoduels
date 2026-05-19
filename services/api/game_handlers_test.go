@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,5 +167,31 @@ func TestMatchSessionAllowsGuestAssignedToLiveMatch(t *testing.T) {
 	}
 	if resp.MatchID != matchID || resp.Node != "node-1" || resp.WSPath != "/ws/node-1" || resp.Ticket == "" {
 		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestSingleplayerConfigFromRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want contracts.GameRuleset
+	}{
+		{name: "empty defaults moving", body: `{}`, want: contracts.RulesetMoving},
+		{name: "top level nmpz", body: `{"ruleset":"nmpz"}`, want: contracts.RulesetNMPZ},
+		{name: "config no move", body: `{"config":{"ruleset":"no_move"}}`, want: contracts.RulesetNoMove},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/singleplayer/session", strings.NewReader(tt.body))
+			var payload startSingleplayerSessionRequest
+			if err := decodeJSONBody(req, &payload); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			cfg := singleplayerConfigFromRequest(payload.Ruleset, payload.Config)
+			if cfg.Ruleset != tt.want {
+				t.Fatalf("ruleset = %q, want %q", cfg.Ruleset, tt.want)
+			}
+		})
 	}
 }

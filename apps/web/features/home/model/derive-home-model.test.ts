@@ -601,4 +601,21 @@ describe('deriveHomeModel', () => {
     expect(model.game.timerProgressPct).toBe(50);
     expect(model.game.isTimerCritical).toBe(true);
   });
+
+  it('derives no-move singleplayer restrictions from the match config', () => {
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(createSnapshot({
+        mode: 'singleplayer',
+        config: { ruleset: 'no_move' }
+      })),
+      game: createGameState(),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.modeName).toBe('No Move Practice');
+    expect(model.game.mapName).toBe('A Source World');
+    expect(model.game.streetViewInteractive).toBe(false);
+  });
 });

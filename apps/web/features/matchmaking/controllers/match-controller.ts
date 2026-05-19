@@ -51,6 +51,7 @@ export class MatchController extends ObservableStore<MatchState> {
   private recoverAbort: AbortController | null = null;
   private queueAbort: AbortController | null = null;
   private singleplayerStartInFlight = false;
+  private lastSingleplayerRuleset: GameRuleset = 'moving';
   private lastSocketOpenedAt = 0;
   private lastServerSeenAt = 0;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -445,10 +446,11 @@ export class MatchController extends ObservableStore<MatchState> {
     })();
   };
 
-  startSingleplayer = async () => {
+  startSingleplayer = async (ruleset: GameRuleset = this.lastSingleplayerRuleset) => {
     if (this.singleplayerStartInFlight) {
       return '';
     }
+    this.lastSingleplayerRuleset = ruleset;
     this.singleplayerStartInFlight = true;
     this.recoverAbort?.abort();
     this.queueAbort?.abort();
@@ -464,7 +466,7 @@ export class MatchController extends ObservableStore<MatchState> {
         this.dispatchMatchmaking({ type: 'set_status', status: 'ready' });
         return '';
       }
-      const assignment = await startSingleplayerSession(this.config, session.accessToken, controller.signal);
+      const assignment = await startSingleplayerSession(this.config, session.accessToken, controller.signal, ruleset);
       if (!assignment.node || !assignment.ticket) {
         throw new Error('Singleplayer unavailable');
       }

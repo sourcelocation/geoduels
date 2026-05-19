@@ -132,3 +132,14 @@ func TestClientSnapshotForPlayerKeepsZeroCoordinateSelfGuess(t *testing.T) {
 		t.Fatalf("expected zero-coordinate own guess, got lat=%v lng=%v", got.Lat, got.Lng)
 	}
 }
+
+func TestNormalizeMatchConfigKeepsNoMoveOnMovingMap(t *testing.T) {
+	cfg := NormalizeMatchConfig(MatchConfig{Ruleset: RulesetNoMove})
+
+	if cfg.Ruleset != RulesetNoMove {
+		t.Fatalf("ruleset = %q, want %q", cfg.Ruleset, RulesetNoMove)
+	}
+	if cfg.MapKey != MapKeyMoving {
+		t.Fatalf("map key = %q, want %q", cfg.MapKey, MapKeyMoving)
+	}
+}

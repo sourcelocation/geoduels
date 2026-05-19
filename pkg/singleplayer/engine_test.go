@@ -94,3 +94,30 @@ func TestSingleplayerDisconnectResume(t *testing.T) {
 		t.Fatal("expected player to be resumed")
 	}
 }
+
+func TestSingleplayerSnapshotKeepsConfig(t *testing.T) {
+	engine := New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{
+			Lat:     float64(roundIndex),
+			Lng:     float64(roundIndex),
+			Country: "US",
+		}, nil
+	})
+	_, err := engine.CreateMatchWithConfig("solo-nmpz", []string{"u1"}, map[string]contracts.PlayerProfile{
+		"u1": {UserID: "u1", DisplayName: "Solo"},
+	}, contracts.MatchConfig{Ruleset: contracts.RulesetNMPZ})
+	if err != nil {
+		t.Fatalf("create match: %v", err)
+	}
+
+	snap, err := engine.GetSnapshot("solo-nmpz")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snap.Config.Ruleset != contracts.RulesetNMPZ {
+		t.Fatalf("ruleset = %q, want %q", snap.Config.Ruleset, contracts.RulesetNMPZ)
+	}
+	if snap.Config.MapKey != contracts.MapKeyNMPZ {
+		t.Fatalf("map key = %q, want %q", snap.Config.MapKey, contracts.MapKeyNMPZ)
+	}
+}

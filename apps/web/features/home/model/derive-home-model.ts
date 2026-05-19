@@ -225,7 +225,12 @@ export function deriveHomeModel({
   const selfPlayer = snapshot?.players?.[selfId];
   const oppPlayer = oppId ? snapshot?.players?.[oppId] : undefined;
   const matchConfig = snapshot?.config || {};
-  const ruleset = matchConfig.ruleset === "nmpz" ? "nmpz" : "moving";
+  const ruleset =
+    matchConfig.ruleset === "nmpz"
+      ? "nmpz"
+      : matchConfig.ruleset === "no_move"
+        ? "no_move"
+        : "moving";
   const pressureTimeLimitMs =
     typeof matchConfig.pressureTimeLimitMs === "number" &&
     matchConfig.pressureTimeLimitMs > 0
@@ -585,7 +590,11 @@ export function deriveHomeModel({
       opponentGuessAlert: isPointsMode ? false : game.opponentGuessAlert,
       connectionIssue: match.connectionIssue,
       modeName: isSingleplayer
-        ? "Practice"
+        ? ruleset === "nmpz"
+          ? "NMPZ Practice"
+          : ruleset === "no_move"
+            ? "No Move Practice"
+            : "Practice"
         : isTeamDuel
           ? "Team Duel"
           : isFreeForAll
@@ -594,7 +603,7 @@ export function deriveHomeModel({
           ? "NMPZ"
           : "Moving",
       mapName: ruleset === "nmpz" ? "A Location World" : "A Source World",
-      streetViewInteractive: ruleset !== "nmpz",
+      streetViewInteractive: ruleset === "moving",
       selfUserId: selfId,
     },
     chat: {

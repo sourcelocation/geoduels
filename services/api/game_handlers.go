@@ -502,10 +502,22 @@ func (a *api) startSession(w http.ResponseWriter, r *http.Request) {
 	mode := sessionpolicy.NormalizeMode(req.Mode, "")
 	switch mode {
 	case contracts.ModeSingleplayer:
-		a.startSingleplayerSession(w, r)
+		a.startSingleplayerSessionWithConfig(w, r, singleplayerConfigFromRequest(req.Ruleset, req.Config))
 	default:
 		http.Error(w, "unsupported mode", http.StatusBadRequest)
 	}
+}
+
+type startSingleplayerSessionRequest struct {
+	Ruleset contracts.GameRuleset `json:"ruleset,omitempty"`
+	Config  contracts.MatchConfig `json:"config,omitempty"`
+}
+
+func singleplayerConfigFromRequest(ruleset contracts.GameRuleset, config contracts.MatchConfig) contracts.MatchConfig {
+	if config.Ruleset == "" {
+		config.Ruleset = ruleset
+	}
+	return contracts.NormalizeMatchConfig(config)
 }
 
 func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +530,15 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, maintenancePlayMessage(status), http.StatusServiceUnavailable)
 		return
 	}
+	var req startSingleplayerSessionRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	a.startSingleplayerSessionWithConfig(w, r, singleplayerConfigFromRequest(req.Ruleset, req.Config))
+}
+
+func (a *api) startSingleplayerSessionWithConfig(w http.ResponseWriter, r *http.Request, config contracts.MatchConfig) {
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -575,7 +596,7 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 	found := contracts.MatchFound{
 		MatchID: "solo-" + soloSessionID(),
 		Mode:    contracts.ModeSingleplayer,
-		Config:  contracts.NormalizeMatchConfig(contracts.MatchConfig{Ruleset: contracts.RulesetMoving}),
+		Config:  contracts.NormalizeMatchConfig(config),
 		Players: []string{userID},
 		Profiles: map[string]contracts.PlayerProfile{
 			userID: {

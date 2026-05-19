@@ -90,10 +90,31 @@ describe('LobbyScreen', () => {
     const playButton = screen.getAllByRole('button', { name: 'Play' })[0];
     expect(playButton).not.toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Moving' }));
+    const duelMovingButton = screen.getAllByRole('button', { name: 'Moving' })[0];
+    fireEvent.click(duelMovingButton);
 
-    expect(screen.getByRole('button', { name: 'Moving' })).toHaveAttribute('aria-pressed', 'false');
+    expect(duelMovingButton).toHaveAttribute('aria-pressed', 'false');
     expect(playButton).toBeDisabled();
+  });
+
+  it('starts the selected singleplayer mode', () => {
+    const startSingleplayer = vi.fn();
+    renderLobbyScreen({ startSingleplayer });
+
+    const singleplayerMovingButton = screen.getAllByRole('button', { name: 'Moving' })[1];
+    const noMoveButton = screen.getByRole('button', { name: 'No Move' });
+    const nmpzButton = screen.getAllByRole('button', { name: 'NMPZ' })[1];
+
+    expect(singleplayerMovingButton).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(noMoveButton);
+
+    expect(singleplayerMovingButton).toHaveAttribute('aria-pressed', 'false');
+    expect(noMoveButton).toHaveAttribute('aria-pressed', 'true');
+    expect(nmpzButton).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Play' })[1]);
+
+    expect(startSingleplayer).toHaveBeenCalledWith('no_move');
   });
 
   it('shows singleplayer as loading while a start is connecting', () => {

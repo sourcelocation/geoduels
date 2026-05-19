@@ -97,13 +97,18 @@ func (r duelRuntime) Tick() []string {
 }
 
 type singleplayerRuntime struct {
-	engine *singleplayer.Engine
+	engine  *singleplayer.Engine
+	configs *matchConfigRegistry
 }
 
 func (r singleplayerRuntime) Mode() contracts.MatchMode { return contracts.ModeSingleplayer }
 
 func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error {
-	_, err := r.engine.CreateMatch(matchID, playerIDs, profiles)
+	config = contracts.NormalizeMatchConfig(config)
+	if r.configs != nil {
+		r.configs.Set(matchID, config)
+	}
+	_, err := r.engine.CreateMatchWithConfig(matchID, playerIDs, profiles, config)
 	return err
 }
 

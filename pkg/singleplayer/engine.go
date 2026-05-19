@@ -20,6 +20,7 @@ type Guess struct {
 
 type Session struct {
 	ID              string
+	Config          contracts.MatchConfig
 	Player          *contracts.PlayerState
 	CurrentLocation contracts.LocationPoint
 	CurrentIndex    int
@@ -51,12 +52,17 @@ func New(roundProvider RoundProvider) *Engine {
 }
 
 func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile) (*Session, error) {
+	return e.CreateMatchWithConfig(matchID, playerIDs, profiles, contracts.MatchConfig{})
+}
+
+func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, config contracts.MatchConfig) (*Session, error) {
 	if len(playerIDs) != 1 {
 		return nil, errors.New("singleplayer requires exactly one player")
 	}
 	if e.roundProvider == nil {
 		return nil, errors.New("round provider required")
 	}
+	config = contracts.NormalizeMatchConfig(config)
 	firstRound, err := e.roundProvider(matchID, 0)
 	if err != nil {
 		return nil, err
@@ -75,6 +81,7 @@ func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[st
 	}
 	session := &Session{
 		ID:              matchID,
+		Config:          config,
 		Player:          &contracts.PlayerState{UserID: playerID, DisplayName: name, MMR: profile.MMR, RatingRD: profile.RatingRD, RankedGamesPlayed: profile.RankedGamesPlayed, AvatarURL: profile.AvatarURL, IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin, SelectedBadge: profile.SelectedBadge},
 		CurrentLocation: firstRound,
 		CurrentIndex:    0,
@@ -305,6 +312,7 @@ func (s *Session) snapshot() *contracts.MatchSnapshot {
 	return &contracts.MatchSnapshot{
 		MatchID:         s.ID,
 		Mode:            contracts.ModeSingleplayer,
+		Config:          contracts.NormalizeMatchConfig(s.Config),
 		State:           s.State,
 		Phase:           phase,
 		RoundPhase:      roundPhase,

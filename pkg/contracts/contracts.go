@@ -65,6 +65,7 @@ type GameRuleset string
 
 const (
 	RulesetMoving GameRuleset = "moving"
+	RulesetNoMove GameRuleset = "no_move"
 	RulesetNMPZ   GameRuleset = "nmpz"
 )
 
@@ -95,6 +96,8 @@ type MatchConfig struct {
 
 func NormalizeRuleset(v GameRuleset) GameRuleset {
 	switch v {
+	case RulesetNoMove:
+		return RulesetNoMove
 	case RulesetNMPZ:
 		return RulesetNMPZ
 	default:
@@ -452,7 +455,9 @@ type MatchAssignedPayload struct {
 }
 
 type SessionStartRequest struct {
-	Mode MatchMode `json:"mode"`
+	Mode    MatchMode   `json:"mode"`
+	Ruleset GameRuleset `json:"ruleset,omitempty"`
+	Config  MatchConfig `json:"config,omitempty"`
 }
 
 type MatchSessionResponse struct {

@@ -38,7 +38,7 @@ export default function GameHUD({
   const multiplierLabel = formatDamageMultiplierLabel(damageMultiplier);
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[91px] z-40 animate-hudSlideIn md:top-4">
+    <div className="pointer-events-none absolute inset-x-0 top-[91px] z-40 animate-hudSlideIn md:top-[76px]">
       <div className="absolute left-1/2 -translate-x-1/2">
         <div className="flex items-center gap-2.5 md:gap-3">
           <AnimatePresence initial={false}>

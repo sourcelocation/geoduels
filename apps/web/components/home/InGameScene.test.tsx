@@ -6,7 +6,7 @@ import type { InGameSceneProps } from './InGameScene';
 function createProps(overrides: Partial<InGameSceneProps> = {}): InGameSceneProps {
   return {
     uiPhase: 'live_round',
-    streetViewSrc: 'https://www.google.com/maps/embed/v1/streetview?key=test&pano=pano-1',
+    streetViewSrc: 'https://www.google.com/maps/embed/v1/streetview?key=test&pano=pano-1&heading=93.5',
     streetViewInteractive: true,
     showResultStage: false,
     isSingleplayer: false,
@@ -78,6 +78,27 @@ describe('InGameScene', () => {
     const streetViewFrame = screen.getByTitle('Street View');
 
     expect(streetViewFrame).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('shows a top-centered direction HUD from the Street View heading', () => {
+    render(<InGameScene {...createProps()} />);
+
+    expect(screen.getByTestId('direction-hud')).toBeInTheDocument();
+    expect(screen.getByTestId('direction-hud-heading')).toHaveTextContent('E 94°');
+  });
+
+  it('updates the direction HUD when the Street View source heading changes', () => {
+    const { rerender } = render(<InGameScene {...createProps()} />);
+
+    rerender(
+      <InGameScene
+        {...createProps({
+          streetViewSrc: 'https://www.google.com/maps/embed/v1/streetview?key=test&pano=pano-2&heading=181',
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('direction-hud-heading')).toHaveTextContent('S 181°');
   });
 
   it('releases focus if the Street View iframe captures it', () => {

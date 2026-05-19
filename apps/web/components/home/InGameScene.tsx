@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, LogOut, RotateCcw, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from 'react';
+import DirectionHUD from '../ui/DirectionHUD';
 import GameHUD from '../ui/GameHUD';
 import MinimapPanel from '../ui/MinimapPanel';
 import PlayerHPCard from '../ui/PlayerHPCard';
@@ -14,6 +15,7 @@ import { ResultDistanceBar } from '../ui/RoundResultOverlay';
 import type { RatingDeltaPreview, RoundResultOverlayProps, UIPhase } from '../ui/types';
 import type { PlayerBadgeInfo } from '../ui/PlayerBadge';
 import type { ParticipantIdentityView } from '../ui/PlayerIdentity';
+import StreetViewPane, { getStreetViewInitialHeading } from './StreetViewPane';
 
 export type InGameSceneProps = {
   uiPhase: UIPhase;
@@ -142,6 +144,7 @@ export default function InGameScene({
   const [confirmForfeit, setConfirmForfeit] = useState(false);
   const [forfeitRequested, setForfeitRequested] = useState(false);
   const [streetViewResetCount, setStreetViewResetCount] = useState(0);
+  const [streetViewHeading, setStreetViewHeading] = useState(() => getStreetViewInitialHeading(streetViewSrc));
   const sceneRef = useRef<HTMLElement | null>(null);
   const streetViewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const canShowForfeit = uiPhase !== 'match_end';
@@ -209,6 +212,7 @@ export default function InGameScene({
 
   useEffect(() => {
     setStreetViewResetCount(0);
+    setStreetViewHeading(getStreetViewInitialHeading(streetViewSrc));
   }, [streetViewSrc]);
 
   useEffect(() => {
@@ -245,20 +249,21 @@ export default function InGameScene({
     >
       {(uiPhase === 'live_round' || uiPhase === 'prematch_countdown') && (
         <div className="absolute inset-0 overflow-hidden">
-          <iframe
-            key={`${streetViewSrc}-${streetViewResetCount}`}
-            ref={streetViewFrameRef}
-            title="Street View"
+          <StreetViewPane
             src={streetViewSrc}
-            tabIndex={-1}
-            onFocus={releaseStreetViewFocus}
-            className={`absolute left-0 top-[-75px] h-[calc(100%+75px)] w-full border-0 ${streetViewInteractive ? '' : 'pointer-events-none'}`}
-            allowFullScreen
-            loading="eager"
+            interactive={streetViewInteractive}
+            resetCount={streetViewResetCount}
+            iframeRef={streetViewFrameRef}
+            onFrameFocus={releaseStreetViewFocus}
+            onHeadingChange={setStreetViewHeading}
           />
           {!streetViewInteractive ? <div className="absolute inset-0 z-[1]" aria-hidden="true" /> : null}
         </div>
       )}
+
+      {(uiPhase === 'live_round' || uiPhase === 'prematch_countdown') && streetViewSrc ? (
+        <DirectionHUD heading={streetViewHeading} />
+      ) : null}
 
       <AnimatePresence>
         {showResultStage && resultOverlay && <RoundResultOverlay {...resultOverlay} />}

@@ -1,4 +1,4 @@
-<img src="apps/web/public/icon.png" height=64 />
+<img src="apps/web/public/icon.v1.png" height=64 />
 
 # GeoDuels
 

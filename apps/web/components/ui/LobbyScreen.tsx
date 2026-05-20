@@ -2108,8 +2108,8 @@ export default function LobbyScreen({
                                 : "text-white/70 hover:bg-white/[0.07] hover:text-white"
                             }`}
                           >
-                            <span>{label}</span>
-                            <span className="flex items-center gap-2">
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span>{label}</span>
                               {ruleset === "nmpz" ? (
                                 <span className="group/nmpz-help relative flex h-[22px] w-[22px] items-center justify-center">
                                   <span className="flex h-[20px] w-[20px] items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-white/65 transition group-hover/nmpz-help:border-[#2ad18f]/50 group-hover/nmpz-help:text-[#d7ffec] group-focus-visible/ruleset:border-[#2ad18f]/50 group-focus-visible/ruleset:text-[#d7ffec]">
@@ -2118,12 +2118,14 @@ export default function LobbyScreen({
                                   <span
                                     id="nmpz-mode-help"
                                     role="tooltip"
-                                    className="pointer-events-none absolute bottom-[calc(100%+8px)] right-0 z-20 w-[220px] translate-y-1 rounded-[10px] border border-[#2ad18f]/25 bg-[#0b1418] px-3 py-2 text-left text-[11px] font-semibold leading-4 tracking-normal text-[#c9d9df] opacity-0 shadow-[0_12px_28px_rgba(0,0,0,0.45)] transition normal-case group-hover/nmpz-help:translate-y-0 group-hover/nmpz-help:opacity-100 group-focus-visible/ruleset:translate-y-0 group-focus-visible/ruleset:opacity-100"
+                                    className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 w-[220px] translate-y-1 rounded-[10px] border border-[#2ad18f]/25 bg-[#0b1418] px-3 py-2 text-left text-[11px] font-semibold leading-4 tracking-normal text-[#c9d9df] opacity-0 shadow-[0_12px_28px_rgba(0,0,0,0.45)] transition normal-case group-hover/nmpz-help:translate-y-0 group-hover/nmpz-help:opacity-100 group-focus-visible/ruleset:translate-y-0 group-focus-visible/ruleset:opacity-100"
                                   >
                                     No move, pan, or zoom. You place your guess from the starting view only.
                                   </span>
                                 </span>
                               ) : null}
+                            </span>
+                            <span className="flex items-center">
                               <span className="flex h-[18px] w-[18px] items-center justify-center">
                                 {queueRulesets.includes(ruleset) ? (
                                   <CheckCircle2

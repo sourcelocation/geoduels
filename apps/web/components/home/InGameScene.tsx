@@ -463,7 +463,12 @@ export default function InGameScene({
       </AnimatePresence>
 
       {uiPhase === 'live_round' && (
-        <MinimapPanel onFinalize={onFinalizeGuess} canFinalizeGuess={canFinalizeGuess} guessSubmitted={guessSubmitted}>
+        <MinimapPanel
+          onFinalize={onFinalizeGuess}
+          canFinalizeGuess={canFinalizeGuess}
+          guessSubmitted={guessSubmitted}
+          roundKey={streetViewSrc}
+        >
           {guessMapNode}
         </MinimapPanel>
       )}

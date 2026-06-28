@@ -788,8 +788,17 @@ func (e *Engine) roundExpired(m *Match, now time.Time) bool {
 	if !m.RoundDeadline.IsZero() {
 		return now.After(m.RoundDeadline)
 	}
+	// No fixed deadline (time limit "none", or pressure mode before the first
+	// finalize). Fall back to an idle watchdog so genuinely abandoned rounds
+	// don't pin a gameplay node forever. Measure the idle window from the last
+	// player activity (pin placement/move, (re)connect) rather than the round
+	// start, so an actively-played unlimited round is never force-resolved.
 	liveAt := m.RoundStartedAt.Add(roundIntro)
-	return now.After(liveAt.Add(roundIdleCap))
+	idleSince := m.LastActivity
+	if idleSince.Before(liveAt) {
+		idleSince = liveAt
+	}
+	return now.After(idleSince.Add(roundIdleCap))
 }
 
 func roundID(matchID string, round int) string {

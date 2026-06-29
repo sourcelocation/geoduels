@@ -148,8 +148,8 @@ func TestCalculateDuelRatingUpdatesRestoresUpsetPenaltyAgainstEstablishedUnderdo
 		now,
 	)
 
-	if favorite.Delta > -55 || favorite.Delta < -65 {
-		t.Fatalf("expected established underdog upset to keep normal penalty, got %d", favorite.Delta)
+	if favorite.Delta != -maxDuelMMRDelta {
+		t.Fatalf("expected established underdog upset penalty to cap at -%d, got %d", maxDuelMMRDelta, favorite.Delta)
 	}
 }
 

@@ -59,7 +59,7 @@ describe('MinimapPanel', () => {
       renderPanel();
 
       expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument();
-      expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('hidden');
+      expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('opacity-0');
       expect(screen.queryByRole('button', { name: 'Back to Street View' })).not.toBeInTheDocument();
     });
 
@@ -85,7 +85,7 @@ describe('MinimapPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Back to Street View' }));
 
       expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument();
-      expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('hidden');
+      expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('opacity-0');
     });
 
     it('keeps the map mounted when toggling Street View', () => {
@@ -98,7 +98,7 @@ describe('MinimapPanel', () => {
 
       expect(screen.getByTestId('guess-map')).toBe(map);
       expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('inset-0');
-      expect(screen.getByTestId('mobile-map-overlay')).not.toHaveClass('hidden');
+      expect(screen.getByTestId('mobile-map-overlay')).not.toHaveClass('opacity-0');
     });
 
     it('closes the map when roundKey changes', () => {
@@ -119,7 +119,7 @@ describe('MinimapPanel', () => {
       );
 
       expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument();
-      expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('hidden');
+      expect(screen.getByTestId('mobile-map-overlay')).toHaveClass('opacity-0');
     });
   });
 

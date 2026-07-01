@@ -244,7 +244,7 @@ export default function MinimapPanel({
           className={
             mapViewOpen
               ? 'absolute inset-0 z-30 flex flex-col gap-2 p-3'
-              : 'hidden'
+              : 'pointer-events-none fixed inset-0 -z-10 flex flex-col gap-2 p-3 opacity-0'
           }
           aria-hidden={!mapViewOpen}
         >

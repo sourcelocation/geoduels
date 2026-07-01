@@ -378,6 +378,8 @@ function WrappedResultsLayer({
 
 function InvalidateOnResize() {
   const map = useMap();
+  const savedViewRef = useRef<{ center: L.LatLng; zoom: number } | null>(null);
+  const lastSizeRef = useRef({ width: 0, height: 0 });
 
   useEffect(() => {
     const container = map.getContainer();
@@ -385,11 +387,28 @@ function InvalidateOnResize() {
 
     let frame = 0;
     const observer = new ResizeObserver(() => {
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      const lastSize = lastSizeRef.current;
+
+      if (width === 0 || height === 0) {
+        savedViewRef.current = { center: map.getCenter(), zoom: map.getZoom() };
+        lastSizeRef.current = { width, height };
+        return;
+      }
+
+      const wasHidden = lastSize.width === 0 || lastSize.height === 0;
+      lastSizeRef.current = { width, height };
+
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         try {
-          // Avoid pan animation during transition teardown to prevent Leaflet position races.
-          map.invalidateSize({ pan: true, animate: false });
+          map.invalidateSize({ animate: false });
+          if (wasHidden && savedViewRef.current) {
+            const { center, zoom } = savedViewRef.current;
+            savedViewRef.current = null;
+            map.setView(center, zoom, { animate: false });
+          }
         } catch {
           // Ignore transient lifecycle races while view transitions.
         }

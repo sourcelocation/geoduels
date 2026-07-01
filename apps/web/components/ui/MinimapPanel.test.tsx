@@ -1,3 +1,4 @@
+import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MinimapPanel from './MinimapPanel';
@@ -54,39 +55,43 @@ describe('MinimapPanel', () => {
       mockMatchMedia(false);
     });
 
-    it('shows only the Guess FAB when the map is closed', () => {
+    it('shows only the Open Map FAB when the map is closed', () => {
       renderPanel();
 
-      expect(screen.getByRole('button', { name: 'Open map to place guess' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument();
       expect(screen.queryByTestId('guess-map')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Back to Street View' })).not.toBeInTheDocument();
     });
 
-    it('opens the fullscreen map when the Guess FAB is clicked', () => {
+    it('opens the fullscreen map when the Open Map FAB is clicked', () => {
       renderPanel();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open map to place guess' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open map' }));
 
+      const overlay = screen.getByTestId('mobile-map-overlay');
+      expect(overlay).toHaveClass('inset-0');
       expect(screen.getByTestId('guess-map')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Back to Street View' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Place Pin' })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Open map to place guess' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Open map' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Collapse minimap' })).not.toBeInTheDocument();
+      expect(screen.queryByTestId('minimap-panel')).not.toBeInTheDocument();
     });
 
     it('returns to Street View when Back is clicked', () => {
       renderPanel();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open map to place guess' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open map' }));
       fireEvent.click(screen.getByRole('button', { name: 'Back to Street View' }));
 
-      expect(screen.getByRole('button', { name: 'Open map to place guess' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument();
       expect(screen.queryByTestId('guess-map')).not.toBeInTheDocument();
     });
 
     it('closes the map when roundKey changes', () => {
       const { rerender, onFinalize } = renderPanel({ roundKey: 'round-1' });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open map to place guess' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open map' }));
       expect(screen.getByTestId('guess-map')).toBeInTheDocument();
 
       rerender(
@@ -100,7 +105,7 @@ describe('MinimapPanel', () => {
         </MinimapPanel>,
       );
 
-      expect(screen.getByRole('button', { name: 'Open map to place guess' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument();
       expect(screen.queryByTestId('guess-map')).not.toBeInTheDocument();
     });
   });
@@ -110,12 +115,12 @@ describe('MinimapPanel', () => {
       mockMatchMedia(true);
     });
 
-    it('renders the minimap panel without the mobile Guess FAB', () => {
+    it('renders the minimap panel without the mobile Open Map FAB', () => {
       renderPanel();
 
       expect(screen.getByTestId('guess-map')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Place Pin' })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Open map to place guess' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Open map' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Back to Street View' })).not.toBeInTheDocument();
     });
   });

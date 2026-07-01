@@ -1,3 +1,4 @@
+import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MinimapPanel from '../MinimapPanel';
@@ -65,7 +66,7 @@ describe('MinimapPanel', () => {
       </MinimapPanel>
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open map to place guess' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open map' }));
 
     expect(screen.queryByRole('button', { name: 'Resize minimap' })).not.toBeInTheDocument();
   });

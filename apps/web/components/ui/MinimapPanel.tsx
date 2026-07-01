@@ -1,5 +1,11 @@
-import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import { ChevronLeft, MapPin, MoveDiagonal2 } from 'lucide-react';
 
 type Props = {
@@ -65,7 +71,6 @@ export default function MinimapPanel({
   const activePointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
   const activeResizeRef = useRef<({ id: number; x: number; y: number } & MinimapSize) | null>(null);
   const resizeLockedRef = useRef(false);
-  const suppressNextPanelClickRef = useRef(false);
   const [desktopHovered, setDesktopHovered] = useState(false);
   const [mapViewOpen, setMapViewOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -133,8 +138,6 @@ export default function MinimapPanel({
   }, [isDesktop]);
 
   const expanded = desktopHovered;
-  const mobileExpanded = !isDesktop && mapViewOpen;
-  const reserveRightGutter = isDesktop;
   const finalizeLabel = guessSubmitted ? 'Waiting for opponent...' : canFinalizeGuess ? 'Guess' : 'Place Pin';
   const finalizeDisabledClassName = guessSubmitted ? 'opacity-45' : 'disabled:opacity-70';
 
@@ -145,7 +148,6 @@ export default function MinimapPanel({
       y: event.clientY,
     };
     resizeLockedRef.current = true;
-    suppressNextPanelClickRef.current = false;
   };
 
   const trackPointerGesture = (event: ReactPointerEvent) => {
@@ -155,7 +157,7 @@ export default function MinimapPanel({
     const dx = event.clientX - activePointer.x;
     const dy = event.clientY - activePointer.y;
     if (Math.hypot(dx, dy) > GESTURE_MOVE_THRESHOLD_PX) {
-      suppressNextPanelClickRef.current = true;
+      resizeLockedRef.current = true;
     }
   };
 
@@ -166,26 +168,6 @@ export default function MinimapPanel({
   const handleFinalizeClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     onFinalize();
-  };
-
-  const handlePanelClick = () => {
-    if (suppressNextPanelClickRef.current) {
-      suppressNextPanelClickRef.current = false;
-      return;
-    }
-
-    if (!isDesktop) {
-      setMapViewOpen(true);
-    }
-  };
-
-  const handleBackdropClick = () => {
-    if (suppressNextPanelClickRef.current) {
-      suppressNextPanelClickRef.current = false;
-      return;
-    }
-
-    setMapViewOpen(false);
   };
 
   const finalizeButton = (
@@ -201,7 +183,7 @@ export default function MinimapPanel({
 
   const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const panel = panelRef.current;
-    if (!isDesktop || !panel) return;
+    if (!panel) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -247,7 +229,7 @@ export default function MinimapPanel({
   };
 
   const desktopExpandedStyle =
-    isDesktop && expanded && expandedSize
+    expanded && expandedSize
       ? {
           width: `${expandedSize.width}px`,
           height: `${expandedSize.height}px`,
@@ -258,105 +240,97 @@ export default function MinimapPanel({
     return (
       <button
         type="button"
-        aria-label="Open map to place guess"
+        aria-label="Open map"
         onClick={() => setMapViewOpen(true)}
         className="font-hud absolute bottom-4 right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
       >
         <MapPin size={16} strokeWidth={2.4} aria-hidden="true" />
-        Guess
+        Open Map
       </button>
     );
   }
 
-  return (
-    <>
-      {!isDesktop && mobileExpanded ? (
+  if (!isDesktop && mapViewOpen) {
+    return (
+      <>
+        <div
+          data-testid="mobile-map-overlay"
+          className="absolute inset-0 z-30 flex flex-col gap-2 p-3"
+        >
+          <div className="min-h-0 flex-1 overflow-hidden rounded-panel border border-white/20 bg-slate-900/70 shadow-elev-4">
+            {children}
+          </div>
+          {finalizeButton}
+        </div>
         <button
           type="button"
-          aria-label="Collapse minimap"
-          className="absolute inset-0 z-20 cursor-default bg-transparent"
-          onPointerDown={beginPointerGesture}
-          onPointerMove={trackPointerGesture}
-          onPointerUp={endPointerGesture}
-          onPointerCancel={endPointerGesture}
-          onClick={handleBackdropClick}
-        />
-      ) : null}
+          aria-label="Back to Street View"
+          onClick={() => setMapViewOpen(false)}
+          className="font-hud absolute bottom-[calc(1rem+3.25rem)] right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
+        >
+          <ChevronLeft size={16} strokeWidth={2.4} aria-hidden="true" />
+          Back
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <div
+      ref={panelRef}
+      data-testid="minimap-panel"
+      onMouseEnter={(event) => {
+        if (resizeLockedRef.current || event.buttons !== 0) {
+          resizeLockedRef.current = true;
+          return;
+        }
+        setDesktopHovered(true);
+      }}
+      onMouseLeave={(event) => {
+        if (resizeLockedRef.current || event.buttons !== 0) {
+          resizeLockedRef.current = true;
+          return;
+        }
+        setDesktopHovered(false);
+      }}
+      className={`absolute bottom-0 right-0 z-30 flex w-full flex-col gap-2 p-3 transition-[width,height] duration-150 ease-out md:bottom-4 md:right-4 md:h-[min(33vh,360px)] md:w-[min(34vw,460px)] md:p-0 ${
+        expanded ? 'md:h-[min(52vh,560px)] md:w-[min(90vw,800px)]' : ''
+      }`}
+      style={{
+        right: `${RIGHT_GUTTER_PX}px`,
+        ...desktopExpandedStyle,
+      }}
+    >
+      {expanded ? <div aria-hidden="true" className="absolute -inset-24 z-0" /> : null}
 
       <div
-        ref={panelRef}
-        data-testid="minimap-panel"
-        onMouseEnter={(event) => {
-          if (!isDesktop) return;
-          if (resizeLockedRef.current || event.buttons !== 0) {
-            resizeLockedRef.current = true;
-            return;
-          }
-          setDesktopHovered(true);
-        }}
-        onMouseLeave={(event) => {
-          if (!isDesktop) return;
-          if (resizeLockedRef.current || event.buttons !== 0) {
-            resizeLockedRef.current = true;
-            return;
-          }
-          setDesktopHovered(false);
-        }}
-        className={`absolute bottom-0 right-0 z-30 flex w-full flex-col gap-2 p-3 transition-[width,height] duration-150 ease-out md:bottom-4 md:right-4 md:w-[min(34vw,460px)] md:h-[min(33vh,360px)] md:p-0 ${
-          expanded ? 'md:w-[min(90vw,800px)] md:h-[min(52vh,560px)]' : ''
+        onPointerDown={beginPointerGesture}
+        onPointerMove={trackPointerGesture}
+        onPointerUp={endPointerGesture}
+        onPointerCancel={endPointerGesture}
+        className={`group relative z-10 min-h-0 w-full origin-bottom-right overflow-hidden rounded-panel border border-white/20 bg-slate-900/70 shadow-elev-4 transition-[opacity,box-shadow] duration-150 ease-out md:h-auto md:min-h-0 md:flex-1 md:opacity-85 md:hover:opacity-100 ${
+          expanded ? 'opacity-100' : 'opacity-70'
         }`}
-        style={{
-          right: reserveRightGutter ? `${RIGHT_GUTTER_PX}px` : '0px',
-          width: isDesktop ? undefined : reserveRightGutter ? `calc(100% - ${RIGHT_GUTTER_PX}px)` : '100%',
-          ...desktopExpandedStyle,
-        }}
       >
-        {isDesktop && expanded ? <div aria-hidden="true" className="absolute -inset-24 z-0" /> : null}
-
-        <div
-          onClick={handlePanelClick}
-          onPointerDown={beginPointerGesture}
-          onPointerMove={trackPointerGesture}
-          onPointerUp={endPointerGesture}
-          onPointerCancel={endPointerGesture}
-          className={`group relative z-10 min-h-0 w-full origin-bottom-right overflow-hidden rounded-panel border border-white/20 bg-slate-900/70 shadow-elev-4 transition-[height,opacity,box-shadow] duration-150 ease-out ${
-            expanded
-              ? 'h-[50vh] min-h-[280px] opacity-100 sm:h-[55vh] sm:min-h-[320px]'
-              : 'h-[22vh] min-h-[150px] opacity-70 sm:h-[27vh] sm:min-h-[190px]'
-          } md:h-auto md:min-h-0 md:flex-1 md:opacity-85 md:hover:opacity-100`}
-        >
-          {children}
-        </div>
-
-        {finalizeButton}
-
-        {isDesktop && expanded ? (
-          <button
-            type="button"
-            aria-label="Resize minimap"
-            title="Resize minimap"
-            className="absolute -left-3 -top-3 z-20 flex h-8 w-8 touch-none items-center justify-center rounded-lg border border-white/20 bg-slate-950/90 text-emerald-100 shadow-elev-3 transition-colors hover:border-emerald-200/50 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-            onPointerDown={beginResize}
-            onPointerMove={resize}
-            onPointerUp={finishResize}
-            onPointerCancel={finishResize}
-          >
-            <MoveDiagonal2 size={16} strokeWidth={2.5} />
-          </button>
-        ) : null}
-
-        {!isDesktop ? (
-          <button
-            type="button"
-            aria-label="Back to Street View"
-            onClick={() => setMapViewOpen(false)}
-            className="font-hud absolute bottom-[calc(1rem+3.25rem)] right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
-          >
-            <ChevronLeft size={16} strokeWidth={2.4} aria-hidden="true" />
-            Back
-          </button>
-        ) : null}
+        {children}
       </div>
-    </>
+
+      {finalizeButton}
+
+      {expanded ? (
+        <button
+          type="button"
+          aria-label="Resize minimap"
+          title="Resize minimap"
+          className="absolute -left-3 -top-3 z-20 flex h-8 w-8 touch-none items-center justify-center rounded-lg border border-white/20 bg-slate-950/90 text-emerald-100 shadow-elev-3 transition-colors hover:border-emerald-200/50 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+          onPointerDown={beginResize}
+          onPointerMove={resize}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+        >
+          <MoveDiagonal2 size={16} strokeWidth={2.5} />
+        </button>
+      ) : null}
+    </div>
   );
 }

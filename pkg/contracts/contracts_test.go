@@ -132,3 +132,42 @@ func TestClientSnapshotForPlayerKeepsZeroCoordinateSelfGuess(t *testing.T) {
 		t.Fatalf("expected zero-coordinate own guess, got lat=%v lng=%v", got.Lat, got.Lng)
 	}
 }
+
+func TestNormalizeMatchConfigDoesNotChooseMap(t *testing.T) {
+	config := NormalizeMatchConfig(MatchConfig{})
+
+	if config.MapID != "" {
+		t.Fatalf("MapID = %q, want empty until the owning workflow resolves a map", config.MapID)
+	}
+	if config.Ruleset != RulesetMoving {
+		t.Fatalf("Ruleset = %q, want %q", config.Ruleset, RulesetMoving)
+	}
+	if config.StreetNames != StreetNamesShown {
+		t.Fatalf("StreetNames = %q, want %q", config.StreetNames, StreetNamesShown)
+	}
+}
+
+func TestNormalizeMatchConfigKeepsNoMoveAndHiddenStreetNames(t *testing.T) {
+	config := NormalizeMatchConfig(MatchConfig{
+		Ruleset:     RulesetNoMove,
+		StreetNames: StreetNamesHidden,
+	})
+
+	if config.Ruleset != RulesetNoMove {
+		t.Fatalf("Ruleset = %q, want %q", config.Ruleset, RulesetNoMove)
+	}
+	if config.StreetNames != StreetNamesHidden {
+		t.Fatalf("StreetNames = %q, want %q", config.StreetNames, StreetNamesHidden)
+	}
+}
+
+func TestNormalizeMatchConfigMigratesLegacyMapKey(t *testing.T) {
+	config := NormalizeMatchConfig(MatchConfig{MapKey: "legacy-map"})
+
+	if config.MapID != "legacy-map" {
+		t.Fatalf("MapID = %q, want legacy-map", config.MapID)
+	}
+	if config.MapKey != "" {
+		t.Fatalf("MapKey = %q, want empty after migration", config.MapKey)
+	}
+}

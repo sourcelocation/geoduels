@@ -58,17 +58,27 @@ const (
 	ModeSingleplayer MatchMode = "singleplayer"
 	ModeTeamDuel     MatchMode = "team_duel"
 	ModeFreeForAll   MatchMode = "free_for_all"
+	MinPartyMembers            = 2
+	MaxPartyMembers            = 64
 )
 
 func IsPrivatePartyMode(mode MatchMode) bool {
 	return mode == ModeDuel || mode == ModeTeamDuel || mode == ModeFreeForAll
 }
 
-type GameRuleset string
+type GameRuleset = string
 
 const (
 	RulesetMoving GameRuleset = "moving"
+	RulesetNoMove GameRuleset = "no_move"
 	RulesetNMPZ   GameRuleset = "nmpz"
+)
+
+type StreetNamesVisibility = string
+
+const (
+	StreetNamesShown  StreetNamesVisibility = "shown"
+	StreetNamesHidden StreetNamesVisibility = "hidden"
 )
 
 type RoundTimerMode string
@@ -89,15 +99,20 @@ const (
 )
 
 type MatchConfig struct {
-	Ruleset             GameRuleset    `json:"ruleset,omitempty"`
-	MapKey              string         `json:"mapKey,omitempty"`
-	RoundTimerMode      RoundTimerMode `json:"roundTimerMode,omitempty"`
-	RoundTimeLimitMS    int64          `json:"roundTimeLimitMs,omitempty"`
-	PressureTimeLimitMS int64          `json:"pressureTimeLimitMs,omitempty"`
+	Ruleset             GameRuleset           `json:"ruleset,omitempty"`
+	StreetNames         StreetNamesVisibility `json:"streetNames,omitempty"`
+	MapID               string                `json:"mapId,omitempty"`
+	MapName             string                `json:"mapName,omitempty"`
+	MapKey              string                `json:"mapKey,omitempty"` // Legacy read compatibility.
+	RoundTimerMode      RoundTimerMode        `json:"roundTimerMode,omitempty"`
+	RoundTimeLimitMS    int64                 `json:"roundTimeLimitMs,omitempty"`
+	PressureTimeLimitMS int64                 `json:"pressureTimeLimitMs,omitempty"`
 }
 
 func NormalizeRuleset(v GameRuleset) GameRuleset {
 	switch v {
+	case RulesetNoMove:
+		return RulesetNoMove
 	case RulesetNMPZ:
 		return RulesetNMPZ
 	default:
@@ -105,18 +120,20 @@ func NormalizeRuleset(v GameRuleset) GameRuleset {
 	}
 }
 
-func MapKeyForRuleset(ruleset GameRuleset) string {
-	if NormalizeRuleset(ruleset) == RulesetNMPZ {
-		return MapKeyNMPZ
+func NormalizeStreetNames(v StreetNamesVisibility) StreetNamesVisibility {
+	if v == StreetNamesHidden {
+		return StreetNamesHidden
 	}
-	return MapKeyMoving
+	return StreetNamesShown
 }
 
 func NormalizeMatchConfig(cfg MatchConfig) MatchConfig {
 	cfg.Ruleset = NormalizeRuleset(cfg.Ruleset)
-	if cfg.MapKey == "" {
-		cfg.MapKey = MapKeyForRuleset(cfg.Ruleset)
+	cfg.StreetNames = NormalizeStreetNames(cfg.StreetNames)
+	if cfg.MapID == "" {
+		cfg.MapID = cfg.MapKey
 	}
+	cfg.MapKey = ""
 	switch cfg.RoundTimerMode {
 	case "":
 		cfg.RoundTimerMode = RoundTimerNone
@@ -276,6 +293,60 @@ type MatchSnapshot struct {
 	EventSequence   int64                         `json:"eventSequence"`
 	ServerUnixMS    int64                         `json:"serverUnixMs"`
 	GraceWindowSec  int                           `json:"graceWindowSec"`
+}
+
+// NormalizeSnapshotEntityIDs upgrades retained legacy replay payloads after
+// database entity keys have moved to UUIDs.
+func NormalizeSnapshotEntityIDs(snap MatchSnapshot, resolve func(entityType, value string) string) MatchSnapshot {
+	if resolve == nil {
+		return snap
+	}
+	snap.MatchID = resolve("match", snap.MatchID)
+	players := make(map[string]PlayerState, len(snap.Players))
+	for key, player := range snap.Players {
+		id := resolve("user", key)
+		player.UserID = resolve("user", player.UserID)
+		if player.UserID == "" {
+			player.UserID = id
+		}
+		players[id] = player
+	}
+	snap.Players = players
+	for key, team := range snap.Teams {
+		for index, userID := range team.Players {
+			team.Players[index] = resolve("user", userID)
+		}
+		snap.Teams[key] = team
+	}
+	ratings := make(map[string]RatingDeltaPreview, len(snap.RatingPreview))
+	for userID, preview := range snap.RatingPreview {
+		ratings[resolve("user", userID)] = preview
+	}
+	snap.RatingPreview = ratings
+	normalizeRoundResult := func(result *RoundResult) {
+		if result == nil {
+			return
+		}
+		roundPlayers := make(map[string]RoundPlayerResult, len(result.Players))
+		for key, player := range result.Players {
+			id := resolve("user", key)
+			player.UserID = resolve("user", player.UserID)
+			if player.UserID == "" {
+				player.UserID = id
+			}
+			roundPlayers[id] = player
+		}
+		result.Players = roundPlayers
+		for key, team := range result.Teams {
+			team.RepresentativeUserID = resolve("user", team.RepresentativeUserID)
+			result.Teams[key] = team
+		}
+	}
+	normalizeRoundResult(snap.LastRoundResult)
+	for _, result := range snap.RoundResults {
+		normalizeRoundResult(result)
+	}
+	return snap
 }
 
 type ClientGuessPoint struct {
@@ -450,8 +521,8 @@ type MatchAssignedPayload struct {
 	Node                  string      `json:"node"`
 	Ticket                string      `json:"ticket"`
 	WSPath                string      `json:"wsPath"`
-	SourceLobbyID         string      `json:"sourceLobbyId,omitempty"`
-	SourceLobbyInviteCode string      `json:"sourceLobbyInviteCode,omitempty"`
+	SourcePartyID         string      `json:"sourcePartyId,omitempty"`
+	SourcePartyInviteCode string      `json:"sourcePartyInviteCode,omitempty"`
 }
 
 type SessionStartRequest struct {
@@ -470,8 +541,8 @@ type MatchSessionResponse struct {
 	Snapshot              *MatchSnapshot        `json:"snapshot,omitempty"`
 	ReplacementMatchID    string                `json:"replacementMatchId,omitempty"`
 	Replacement           *MatchAssignedPayload `json:"replacement,omitempty"`
-	SourceLobbyID         string                `json:"sourceLobbyId,omitempty"`
-	SourceLobbyInviteCode string                `json:"sourceLobbyInviteCode,omitempty"`
+	SourcePartyID         string                `json:"sourcePartyId,omitempty"`
+	SourcePartyInviteCode string                `json:"sourcePartyInviteCode,omitempty"`
 }
 
 type AuthUser struct {
@@ -504,7 +575,7 @@ type LeaderboardSummary struct {
 
 type AuthSessionPayload struct {
 	AccessToken           string   `json:"accessToken"`
-	OnboardingRequired    bool     `json:"onboardingRequired"`
+	NicknameRequired      bool     `json:"nicknameRequired"`
 	SuggestedNickname     string   `json:"suggestedNickname,omitempty"`
 	LinkedProviders       []string `json:"linkedProviders,omitempty"`
 	AuthMigrationRequired bool     `json:"authMigrationRequired,omitempty"`
@@ -524,25 +595,25 @@ type ResumableSessionResponse struct {
 	Mode    string `json:"mode,omitempty"`
 }
 
-type LobbyState string
+type PartyState string
 
 const (
-	LobbyOpen    LobbyState = "open"
-	LobbyInMatch LobbyState = "in_match"
-	LobbyStarted LobbyState = "started"
-	LobbyClosed  LobbyState = "closed"
-	LobbyExpired LobbyState = "expired"
+	PartyOpen    PartyState = "open"
+	PartyInMatch PartyState = "in_match"
+	PartyStarted PartyState = "started"
+	PartyClosed  PartyState = "closed"
+	PartyExpired PartyState = "expired"
 )
 
-type LobbyPresenceStatus string
+type PartyPresenceStatus string
 
 const (
-	LobbyPresenceOnline  LobbyPresenceStatus = "online"
-	LobbyPresenceAway    LobbyPresenceStatus = "away"
-	LobbyPresenceOffline LobbyPresenceStatus = "offline"
+	PartyPresenceOnline  PartyPresenceStatus = "online"
+	PartyPresenceAway    PartyPresenceStatus = "away"
+	PartyPresenceOffline PartyPresenceStatus = "offline"
 )
 
-type LobbyMember struct {
+type PartyMember struct {
 	UserID         string              `json:"userId"`
 	DisplayName    string              `json:"displayName"`
 	AvatarURL      string              `json:"avatarUrl,omitempty"`
@@ -553,54 +624,57 @@ type LobbyMember struct {
 	Role           string              `json:"role"`
 	Ready          bool                `json:"ready"`
 	Connected      bool                `json:"connected,omitempty"`
-	PresenceStatus LobbyPresenceStatus `json:"presenceStatus,omitempty"`
+	PresenceStatus PartyPresenceStatus `json:"presenceStatus,omitempty"`
+	InActiveMatch  bool                `json:"inActiveMatch,omitempty"`
 	JoinedAt       time.Time           `json:"joinedAt"`
 }
 
-type LobbySnapshot struct {
-	ID             string        `json:"id"`
-	InviteCode     string        `json:"inviteCode"`
-	OwnerUserID    string        `json:"ownerUserId"`
-	State          LobbyState    `json:"state"`
-	Mode           MatchMode     `json:"mode"`
-	MapScope       string        `json:"mapScope"`
-	Config         MatchConfig   `json:"config,omitempty"`
-	ActiveMatchID  string        `json:"activeMatchId,omitempty"`
-	LastMatchID    string        `json:"lastMatchId,omitempty"`
-	StartedMatchID string        `json:"startedMatchId,omitempty"`
-	CreatedAt      time.Time     `json:"createdAt"`
-	ExpiresAt      time.Time     `json:"expiresAt"`
-	Members        []LobbyMember `json:"members"`
+type PartySnapshot struct {
+	ID               string        `json:"id"`
+	InviteCode       string        `json:"inviteCode"`
+	OwnerUserID      string        `json:"ownerUserId"`
+	State            PartyState    `json:"state"`
+	Mode             MatchMode     `json:"mode"`
+	MapScope         string        `json:"mapScope"`
+	MapName          string        `json:"mapName,omitempty"`
+	MapLocationCount int           `json:"mapLocationCount,omitempty"`
+	Config           MatchConfig   `json:"config,omitempty"`
+	ActiveMatchID    string        `json:"activeMatchId,omitempty"`
+	LastMatchID      string        `json:"lastMatchId,omitempty"`
+	StartedMatchID   string        `json:"startedMatchId,omitempty"`
+	CreatedAt        time.Time     `json:"createdAt"`
+	ExpiresAt        time.Time     `json:"expiresAt"`
+	Members          []PartyMember `json:"members"`
 }
 
-type LobbyPatch struct {
+type PartyPatch struct {
 	Revision        int64         `json:"revision"`
-	State           *LobbyState   `json:"state,omitempty"`
+	State           *PartyState   `json:"state,omitempty"`
 	OwnerUserID     *string       `json:"ownerUserId,omitempty"`
 	Mode            *MatchMode    `json:"mode,omitempty"`
 	Config          *MatchConfig  `json:"config,omitempty"`
 	ActiveMatchID   *string       `json:"activeMatchId,omitempty"`
 	LastMatchID     *string       `json:"lastMatchId,omitempty"`
 	StartedMatchID  *string       `json:"startedMatchId,omitempty"`
-	UpsertMembers   []LobbyMember `json:"upsertMembers,omitempty"`
+	UpsertMembers   []PartyMember `json:"upsertMembers,omitempty"`
 	RemoveMemberIDs []string      `json:"removeMemberIds,omitempty"`
 }
 
-type LobbyCreateRequest struct {
+type PartyCreateRequest struct {
 	Mode     MatchMode   `json:"mode,omitempty"`
 	MapScope string      `json:"mapScope,omitempty"`
 	Config   MatchConfig `json:"config,omitempty"`
 }
 
-type LobbyMemberRequest struct {
+type PartyMemberRequest struct {
 	UserID string `json:"userId"`
 }
 
-type LobbyTeamRequest struct {
+type PartyTeamRequest struct {
 	TeamID string `json:"teamId"`
 }
 
-type LobbyStartResponse struct {
+type PartyStartResponse struct {
 	Assignment MatchAssignedPayload `json:"assignment"`
 }
 
@@ -619,9 +693,39 @@ type MatchFound struct {
 	Players               []string                 `json:"players"`
 	Profiles              map[string]PlayerProfile `json:"profiles,omitempty"`
 	Teams                 map[string]string        `json:"teams,omitempty"`
-	MapScope              string                   `json:"mapScope"`
-	SourceLobbyID         string                   `json:"sourceLobbyId,omitempty"`
-	SourceLobbyInviteCode string                   `json:"sourceLobbyInviteCode,omitempty"`
+	ResolvedMap           ResolvedMap              `json:"resolvedMap"`
+	PlannedRounds         []PlannedRound           `json:"plannedRounds"`
+	MapAccessUserID       string                   `json:"mapAccessUserId,omitempty"`
+	MapScope              string                   `json:"mapScope,omitempty"` // Legacy read compatibility.
+	SourcePartyID         string                   `json:"sourcePartyId,omitempty"`
+	SourcePartyInviteCode string                   `json:"sourcePartyInviteCode,omitempty"`
+}
+
+type MatchPresetID string
+
+const (
+	MatchPresetRankedDuel  MatchPresetID = "ranked_duel"
+	MatchPresetPrivateDuel MatchPresetID = "private_duel"
+	MatchPresetTeamDuel    MatchPresetID = "team_duel"
+	MatchPresetFreeForAll  MatchPresetID = "free_for_all"
+	MatchPresetSolo        MatchPresetID = "solo"
+)
+
+type MatchParticipant struct {
+	UserID        string    `json:"userId"`
+	TeamID        string    `json:"teamId,omitempty"`
+	JoinedPartyAt time.Time `json:"joinedPartyAt,omitempty"`
+	InGame        bool      `json:"inGame"`
+}
+
+type ResolvedMap struct {
+	MapID       string `json:"mapId"`
+	DisplayName string `json:"displayName"`
+}
+
+type PlannedRound struct {
+	RoundIndex int           `json:"roundIndex"`
+	Location   LocationPoint `json:"location"`
 }
 
 type AdminPlayerSummary struct {
@@ -653,89 +757,81 @@ type AdminUserIdentity struct {
 	DeletedAt      time.Time `json:"deletedAt,omitempty"`
 }
 
-type ModerationCaseSummary struct {
-	ID                   int64          `json:"id"`
-	TargetUserID         string         `json:"targetUserId"`
-	TargetDisplayName    string         `json:"targetDisplayName"`
-	Status               string         `json:"status"`
-	Queue                string         `json:"queue,omitempty"`
-	Source               string         `json:"source,omitempty"`
-	Priority             string         `json:"priority"`
-	Score                float64        `json:"score"`
-	RiskScore            float64        `json:"riskScore,omitempty"`
-	RiskBreakdown        map[string]any `json:"riskBreakdown,omitempty"`
-	Confidence           float64        `json:"confidence,omitempty"`
-	ReporterScore        float64        `json:"reporterScore,omitempty"`
-	RecentReportPressure float64        `json:"recentReportPressure,omitempty"`
-	GameplayEvidence     float64        `json:"gameplayEvidence,omitempty"`
-	ReportCount          int            `json:"reportCount"`
-	UniqueReporterCount  int            `json:"uniqueReporterCount"`
-	Categories           map[string]int `json:"categories"`
-	Summary              string         `json:"summary,omitempty"`
-	AssignedTo           string         `json:"assignedTo,omitempty"`
-	ClaimedAt            time.Time      `json:"claimedAt,omitempty"`
-	ClaimExpiresAt       time.Time      `json:"claimExpiresAt,omitempty"`
-	LatestActivityAt     time.Time      `json:"latestActivityAt"`
-	CreatedAt            time.Time      `json:"createdAt"`
-	NotificationSentAt   time.Time      `json:"notificationSentAt,omitempty"`
-	ResolvedAt           time.Time      `json:"resolvedAt,omitempty"`
-	ResolvedBy           string         `json:"resolvedBy,omitempty"`
-	ResolutionCode       string         `json:"resolutionCode,omitempty"`
-	ResolutionNote       string         `json:"resolutionNote,omitempty"`
+type ModerationSignalSummary struct {
+	ID               int64           `json:"id"`
+	SubjectUserID    string          `json:"subjectUserId"`
+	SubjectName      string          `json:"subjectName,omitempty"`
+	SignalType       string          `json:"signalType"`
+	Source           string          `json:"source"`
+	Severity         string          `json:"severity"`
+	EvidenceStrength string          `json:"evidenceStrength"`
+	DetectorKey      string          `json:"detectorKey,omitempty"`
+	DetectorVersion  string          `json:"detectorVersion,omitempty"`
+	ReasonCode       string          `json:"reasonCode"`
+	Score            float64         `json:"score"`
+	RecommendedQueue bool            `json:"recommendedQueue"`
+	ReporterUserID   string          `json:"reporterUserId,omitempty"`
+	ReporterName     string          `json:"reporterName,omitempty"`
+	MatchID          string          `json:"matchId,omitempty"`
+	Payload          json.RawMessage `json:"payload,omitempty"`
+	OccurredAt       time.Time       `json:"occurredAt"`
+	CreatedAt        time.Time       `json:"createdAt"`
 }
 
-type ModerationReportSummary struct {
-	ID             int64     `json:"id"`
-	CaseID         int64     `json:"caseId"`
-	MatchID        string    `json:"matchId"`
-	ReporterUserID string    `json:"reporterUserId"`
-	ReporterName   string    `json:"reporterName"`
-	ReportedUserID string    `json:"reportedUserId"`
-	ReportedName   string    `json:"reportedName"`
-	Category       string    `json:"category"`
-	Reason         string    `json:"reason,omitempty"`
-	ReporterWeight float64   `json:"reporterWeight"`
-	CreatedAt      time.Time `json:"createdAt"`
+type ModerationIncidentSummary struct {
+	ID                  int64     `json:"id"`
+	SubjectUserID       string    `json:"subjectUserId"`
+	SubjectName         string    `json:"subjectName,omitempty"`
+	Status              string    `json:"status"`
+	Severity            string    `json:"severity"`
+	EvidenceStrength    string    `json:"evidenceStrength"`
+	ReasonCode          string    `json:"reasonCode"`
+	Summary             string    `json:"summary,omitempty"`
+	SignalCount         int       `json:"signalCount"`
+	UniqueReporterCount int       `json:"uniqueReporterCount"`
+	AssignedTo          string    `json:"assignedTo,omitempty"`
+	WatchUntil          time.Time `json:"watchUntil,omitempty"`
+	LatestSignalAt      time.Time `json:"latestSignalAt"`
+	ResolvedAt          time.Time `json:"resolvedAt,omitempty"`
+	ResolvedBy          string    `json:"resolvedBy,omitempty"`
+	ResolutionNote      string    `json:"resolutionNote,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
-type ModerationCaseEvent struct {
-	ID          int64     `json:"id"`
-	CaseID      int64     `json:"caseId"`
-	ActorUserID string    `json:"actorUserId,omitempty"`
-	EventType   string    `json:"eventType"`
-	Body        string    `json:"body,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
+type ModerationReviewTaskSummary struct {
+	ID             int64                     `json:"id"`
+	IncidentID     int64                     `json:"incidentId"`
+	Status         string                    `json:"status"`
+	Queue          string                    `json:"queue"`
+	Priority       string                    `json:"priority"`
+	AssignedTo     string                    `json:"assignedTo,omitempty"`
+	ClaimedAt      time.Time                 `json:"claimedAt,omitempty"`
+	ClaimExpiresAt time.Time                 `json:"claimExpiresAt,omitempty"`
+	CompletedAt    time.Time                 `json:"completedAt,omitempty"`
+	CreatedAt      time.Time                 `json:"createdAt"`
+	UpdatedAt      time.Time                 `json:"updatedAt"`
+	Incident       ModerationIncidentSummary `json:"incident"`
 }
 
-type ModerationActionSummary struct {
-	ID           int64     `json:"id"`
-	CaseID       int64     `json:"caseId"`
-	ActorUserID  string    `json:"actorUserId,omitempty"`
-	TargetUserID string    `json:"targetUserId"`
-	ActionType   string    `json:"actionType"`
-	Reason       string    `json:"reason,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
+type ModerationVerdictSummary struct {
+	ID                int64           `json:"id"`
+	IncidentID        int64           `json:"incidentId"`
+	TaskID            int64           `json:"taskId,omitempty"`
+	ActorUserID       string          `json:"actorUserId,omitempty"`
+	ActorName         string          `json:"actorName,omitempty"`
+	Verdict           string          `json:"verdict"`
+	ReasonCode        string          `json:"reasonCode"`
+	Note              string          `json:"note,omitempty"`
+	EnforcementAction string          `json:"enforcementAction,omitempty"`
+	Metadata          json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt         time.Time       `json:"createdAt"`
 }
 
-type ModerationEvidenceSummary struct {
-	ID              int64           `json:"id"`
-	CaseID          int64           `json:"caseId"`
-	EvidenceType    string          `json:"evidenceType"`
-	MatchID         string          `json:"matchId,omitempty"`
-	RoundID         string          `json:"roundId,omitempty"`
-	SubjectUserID   string          `json:"subjectUserId,omitempty"`
-	DetectorVersion string          `json:"detectorVersion,omitempty"`
-	RuleID          string          `json:"ruleId,omitempty"`
-	Score           float64         `json:"score"`
-	Weight          float64         `json:"weight"`
-	Payload         json.RawMessage `json:"payload,omitempty"`
-	OccurredAt      time.Time       `json:"occurredAt,omitempty"`
-	CreatedAt       time.Time       `json:"createdAt"`
-}
-
-type ModerationCaseLogEntry struct {
+type ModerationAuditLogEntry struct {
 	ID          int64           `json:"id"`
-	CaseID      int64           `json:"caseId"`
+	IncidentID  int64           `json:"incidentId,omitempty"`
+	TaskID      int64           `json:"taskId,omitempty"`
 	ActorUserID string          `json:"actorUserId,omitempty"`
 	EventType   string          `json:"eventType"`
 	ReasonCode  string          `json:"reasonCode,omitempty"`
@@ -744,31 +840,70 @@ type ModerationCaseLogEntry struct {
 	CreatedAt   time.Time       `json:"createdAt"`
 }
 
-type ModerationCaseDetail struct {
-	Case         ModerationCaseSummary       `json:"case"`
-	TargetPlayer *AdminPlayerSummary         `json:"targetPlayer,omitempty"`
-	Reports      []ModerationReportSummary   `json:"reports"`
-	Events       []ModerationCaseEvent       `json:"events"`
-	Actions      []ModerationActionSummary   `json:"actions"`
-	Evidence     []ModerationEvidenceSummary `json:"evidence,omitempty"`
-	Timeline     []ModerationCaseLogEntry    `json:"timeline,omitempty"`
+type ModerationReporterState struct {
+	UserID              string    `json:"userId"`
+	ReportsSubmitted    int       `json:"reportsSubmitted"`
+	ReportsUseful       int       `json:"reportsUseful"`
+	ReportsDismissed    int       `json:"reportsDismissed"`
+	ReportsInconclusive int       `json:"reportsInconclusive"`
+	ReportsAbusive      int       `json:"reportsAbusive"`
+	ReportWeight        float64   `json:"reportWeight"`
+	MutedUntil          time.Time `json:"mutedUntil,omitempty"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+type ModerationMatchPlayerSummary struct {
+	UserID      string `json:"userId"`
+	DisplayName string `json:"displayName"`
+	TotalScore  int    `json:"totalScore"`
+	FinalHP     int    `json:"finalHp"`
+}
+
+type ModerationMatchSummary struct {
+	MatchID      string                         `json:"matchId"`
+	Mode         string                         `json:"mode,omitempty"`
+	StartedAt    *time.Time                     `json:"startedAt,omitempty"`
+	EndedAt      *time.Time                     `json:"endedAt,omitempty"`
+	WinnerUserID string                         `json:"winnerUserId,omitempty"`
+	RoundCount   int                            `json:"roundCount"`
+	Players      []ModerationMatchPlayerSummary `json:"players"`
+}
+
+type ModerationIncidentDetail struct {
+	Incident      ModerationIncidentSummary     `json:"incident"`
+	SubjectPlayer *AdminPlayerSummary           `json:"subjectPlayer,omitempty"`
+	Tasks         []ModerationReviewTaskSummary `json:"tasks"`
+	Signals       []ModerationSignalSummary     `json:"signals"`
+	Matches       []ModerationMatchSummary      `json:"matches"`
+	Verdicts      []ModerationVerdictSummary    `json:"verdicts"`
+	AuditLog      []ModerationAuditLogEntry     `json:"auditLog,omitempty"`
+	ReporterState []ModerationReporterState     `json:"reporterState,omitempty"`
+}
+
+type ModerationSubjectProfile struct {
+	Player      AdminPlayerSummary          `json:"player"`
+	Stats       any                         `json:"stats,omitempty"`
+	Incidents   []ModerationIncidentSummary `json:"incidents"`
+	Signals     []ModerationSignalSummary   `json:"signals"`
+	Enforcement []EnforcementActionSummary  `json:"enforcement"`
 }
 
 type EnforcementActionSummary struct {
-	ID           int64           `json:"id"`
-	TargetUserID string          `json:"targetUserId"`
-	TargetName   string          `json:"targetName,omitempty"`
-	ActorUserID  string          `json:"actorUserId,omitempty"`
-	ActorName    string          `json:"actorName,omitempty"`
-	SourceCaseID int64           `json:"sourceCaseId,omitempty"`
-	ActionType   string          `json:"actionType"`
-	ReasonCode   string          `json:"reasonCode,omitempty"`
-	ReasonNote   string          `json:"reasonNote,omitempty"`
-	Metadata     json.RawMessage `json:"metadata,omitempty"`
-	StartsAt     time.Time       `json:"startsAt"`
-	EndsAt       time.Time       `json:"endsAt,omitempty"`
-	RevokedAt    time.Time       `json:"revokedAt,omitempty"`
-	CreatedAt    time.Time       `json:"createdAt"`
+	ID               int64           `json:"id"`
+	TargetUserID     string          `json:"targetUserId"`
+	TargetName       string          `json:"targetName,omitempty"`
+	ActorUserID      string          `json:"actorUserId,omitempty"`
+	ActorName        string          `json:"actorName,omitempty"`
+	SourceIncidentID int64           `json:"sourceIncidentId,omitempty"`
+	SourceVerdictID  int64           `json:"sourceVerdictId,omitempty"`
+	ActionType       string          `json:"actionType"`
+	ReasonCode       string          `json:"reasonCode,omitempty"`
+	ReasonNote       string          `json:"reasonNote,omitempty"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
+	StartsAt         time.Time       `json:"startsAt"`
+	EndsAt           time.Time       `json:"endsAt,omitempty"`
+	RevokedAt        time.Time       `json:"revokedAt,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
 }
 
 type UserRoleGrant struct {
@@ -782,32 +917,152 @@ type UserRoleGrant struct {
 	Reason      string    `json:"reason,omitempty"`
 }
 
-type ModerationReportCreated struct {
-	CaseID int64  `json:"caseId"`
-	Status string `json:"status"`
+type ModerationSignalCreated struct {
+	SignalID   int64  `json:"signalId"`
+	IncidentID int64  `json:"incidentId,omitempty"`
+	Status     string `json:"status"`
 }
 
-type ModerationCaseNotificationPayload struct {
-	CaseID               int64          `json:"caseId"`
-	TargetUserID         string         `json:"targetUserId"`
-	TargetDisplayName    string         `json:"targetDisplayName"`
-	Priority             string         `json:"priority"`
-	Score                float64        `json:"score"`
-	ReporterScore        float64        `json:"reporterScore,omitempty"`
-	RecentReportPressure float64        `json:"recentReportPressure,omitempty"`
-	GameplayEvidence     float64        `json:"gameplayEvidence,omitempty"`
-	ReportCount          int            `json:"reportCount"`
-	UniqueReporterCount  int            `json:"uniqueReporterCount"`
-	Categories           map[string]int `json:"categories"`
-	LatestActivityAt     time.Time      `json:"latestActivityAt"`
+type ModerationVerdictInput struct {
+	TaskID            int64  `json:"taskId,omitempty"`
+	Verdict           string `json:"verdict"`
+	ReasonCode        string `json:"reasonCode"`
+	Note              string `json:"note,omitempty"`
+	EnforcementAction string `json:"enforcementAction,omitempty"`
+	DurationHours     int    `json:"durationHours,omitempty"`
 }
 
-type MapRevisionSummary struct {
-	MapKey      string `json:"mapKey"`
-	RevisionID  string `json:"revisionId"`
-	RowCount    int    `json:"rowCount"`
-	Inserted    bool   `json:"inserted"`
-	DisplayName string `json:"displayName"`
+type ModerationIncidentNotificationPayload struct {
+	IncidentID       int64     `json:"incidentId"`
+	TaskID           int64     `json:"taskId,omitempty"`
+	SubjectUserID    string    `json:"subjectUserId"`
+	SubjectName      string    `json:"subjectName"`
+	Severity         string    `json:"severity"`
+	EvidenceStrength string    `json:"evidenceStrength"`
+	ReasonCode       string    `json:"reasonCode"`
+	SignalCount      int       `json:"signalCount"`
+	StrongestSignals []string  `json:"strongestSignals,omitempty"`
+	LatestSignalAt   time.Time `json:"latestSignalAt"`
+}
+
+type MapImportSummary struct {
+	MapID         string `json:"mapId"`
+	MapKey        string `json:"mapKey"`
+	LocationCount int    `json:"locationCount"`
+	DisplayName   string `json:"displayName"`
+}
+
+type MapPersonalBest struct {
+	Score      int       `json:"score"`
+	MatchID    string    `json:"matchId"`
+	AchievedAt time.Time `json:"achievedAt"`
+}
+
+type CustomMap struct {
+	ID               string           `json:"id"`
+	MapKey           string           `json:"mapKey"`
+	OwnerUserID      string           `json:"ownerUserId,omitempty"`
+	AuthorName       string           `json:"authorName,omitempty"`
+	DisplayName      string           `json:"displayName"`
+	Description      string           `json:"description,omitempty"`
+	Visibility       string           `json:"visibility"`
+	Status           string           `json:"status"`
+	Difficulty       string           `json:"difficulty"`
+	ThumbnailVariant int              `json:"thumbnailVariant"`
+	ThumbnailKey     string           `json:"thumbnailKey"`
+	LocationCount    int              `json:"locationCount"`
+	PersonalBest     *MapPersonalBest `json:"personalBest,omitempty"`
+	System           bool             `json:"system"`
+	Official         bool             `json:"official,omitempty"`
+	PublishedAt      *time.Time       `json:"publishedAt,omitempty"`
+	PlayCount        int              `json:"playCount"`
+	FavoriteCount    int              `json:"favoriteCount"`
+	CommentCount     int              `json:"commentCount"`
+	TrendingScore    float64          `json:"trendingScore"`
+	Favorited        bool             `json:"favorited,omitempty"`
+	OfficialRegion   string           `json:"officialRegion,omitempty"`
+	RankedMoving     bool             `json:"rankedMoving,omitempty"`
+	RankedNMPZ       bool             `json:"rankedNmpz,omitempty"`
+	DefaultMoving    bool             `json:"defaultMoving,omitempty"`
+	DefaultNMPZ      bool             `json:"defaultNmpz,omitempty"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
+}
+
+type CustomMapUpdate struct {
+	DisplayName      string `json:"displayName"`
+	Description      string `json:"description"`
+	Visibility       string `json:"visibility"`
+	Difficulty       string `json:"difficulty"`
+	ThumbnailVariant int    `json:"thumbnailVariant"`
+	ThumbnailKey     string `json:"thumbnailKey"`
+}
+
+type MapListOptions struct {
+	Scope  string `json:"scope"`
+	Sort   string `json:"sort"`
+	Search string `json:"search"`
+}
+
+type MapUploadQuota struct {
+	Tier                     string `json:"tier"`
+	TierOverride             string `json:"tierOverride,omitempty"`
+	QualifiedFavorites       int    `json:"qualifiedFavorites"`
+	QualifiedMaps            int    `json:"qualifiedMaps"`
+	AccountAgeDays           int    `json:"accountAgeDays"`
+	NextTier                 string `json:"nextTier,omitempty"`
+	FavoritesNeeded          int    `json:"favoritesNeeded,omitempty"`
+	MapsNeeded               int    `json:"mapsNeeded,omitempty"`
+	DaysNeeded               int    `json:"daysNeeded,omitempty"`
+	MaxMaps                  int    `json:"maxMaps"`
+	MaxActiveLocations       int    `json:"maxActiveLocations"`
+	MaxMapLocations          int    `json:"maxMapLocations"`
+	MaxUploadsPerHour        int    `json:"maxUploadsPerHour"`
+	MaxUploadsPerDay         int    `json:"maxUploadsPerDay"`
+	MaxUploadedLocationsHour int    `json:"maxUploadedLocationsPerHour"`
+	CurrentMaps              int    `json:"currentMaps"`
+	CurrentActiveLocations   int    `json:"currentActiveLocations"`
+	RestrictedByModeration   bool   `json:"restrictedByModeration,omitempty"`
+}
+
+type GameplayMapSettings struct {
+	RankedMovingMapID       string `json:"rankedMovingMapId"`
+	RankedNMPZMapID         string `json:"rankedNmpzMapId"`
+	SingleplayerMovingMapID string `json:"singleplayerMovingMapId"`
+	SingleplayerNMPZMapID   string `json:"singleplayerNmpzMapId"`
+}
+
+type MapCountryStat struct {
+	Country       string `json:"country"`
+	LocationCount int    `json:"locationCount"`
+}
+
+type MapComment struct {
+	ID              string       `json:"id"`
+	MapID           string       `json:"mapId"`
+	ParentID        string       `json:"parentId,omitempty"`
+	UserID          string       `json:"userId"`
+	UserDisplayName string       `json:"userDisplayName"`
+	AvatarURL       string       `json:"avatarUrl,omitempty"`
+	Body            string       `json:"body"`
+	Status          string       `json:"status"`
+	CanDelete       bool         `json:"canDelete,omitempty"`
+	LikeCount       int          `json:"likeCount"`
+	Liked           bool         `json:"liked,omitempty"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	UpdatedAt       time.Time    `json:"updatedAt"`
+	Replies         []MapComment `json:"replies,omitempty"`
+}
+
+type MapCommentCreate struct {
+	Body     string `json:"body"`
+	ParentID string `json:"parentId,omitempty"`
+}
+
+type MapDetails struct {
+	Map          CustomMap        `json:"map"`
+	CountryStats []MapCountryStat `json:"countryStats"`
+	Comments     []MapComment     `json:"comments"`
 }
 
 type CommandEnvelope struct {

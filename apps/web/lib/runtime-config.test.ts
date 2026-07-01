@@ -47,11 +47,9 @@ describe('runtime-config', () => {
         expect(config.appVersion).toBe('sha-123');
     });
 
-    it('ignores placeholder runtime values', () => {
-        const config = createRuntimeConfig({
-            NEXT_PUBLIC_API_URL: 'REPLACE_WITH_API_URL',
-            NEXT_PUBLIC_APP_VERSION: 'REPLACE_WITH_SHA'
-        });
+    expect(config.apiURL).toBe('');
+    expect(config.appVersion).toBe('dev');
+  });
 
         expect(config.apiURL).toBe('http://localhost:8080');
         expect(config.appVersion).toBe('dev');

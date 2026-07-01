@@ -119,8 +119,8 @@ func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 	}
 
 	mem := store.(*memoryStore)
-	for i := range mem.queues[QueuePoolRegistered] {
-		mem.queues[QueuePoolRegistered][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS
+	for i := range mem.queues[QueuePoolRegistered][QueueMoving] {
+		mem.queues[QueuePoolRegistered][QueueMoving][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS
 	}
 
 	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
@@ -157,8 +157,8 @@ func TestMemoryStoreCapsExpandedWindowAtFiveHundredMMR(t *testing.T) {
 	}
 
 	mem := store.(*memoryStore)
-	for i := range mem.queues[QueuePoolRegistered] {
-		mem.queues[QueuePoolRegistered][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS*100
+	for i := range mem.queues[QueuePoolRegistered][QueueMoving] {
+		mem.queues[QueuePoolRegistered][QueueMoving][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS*100
 	}
 
 	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
@@ -182,9 +182,9 @@ func TestMemoryStoreCapsExpandedWindowAtFiveHundredMMR(t *testing.T) {
 		t.Fatalf("expected fresh third player to remain queued before matchmaking tick")
 	}
 
-	for i := range mem.queues[QueuePoolRegistered] {
-		if mem.queues[QueuePoolRegistered][i].UserID == "within" {
-			mem.queues[QueuePoolRegistered][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS*100
+	for i := range mem.queues[QueuePoolRegistered][QueueMoving] {
+		if mem.queues[QueuePoolRegistered][QueueMoving][i].UserID == "within" {
+			mem.queues[QueuePoolRegistered][QueueMoving][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS*100
 		}
 	}
 	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
@@ -313,10 +313,58 @@ func TestRedisStoreKeepsRulesetQueuesSeparateAndClearsOtherSelections(t *testing
 	}
 }
 
+func TestQueueVariantConfigDefinesAllSixQueues(t *testing.T) {
+	tests := map[QueueVariant]contracts.MatchConfig{
+		QueueMoving:       {Ruleset: contracts.RulesetMoving, StreetNames: contracts.StreetNamesShown},
+		QueueNoMove:       {Ruleset: contracts.RulesetNoMove, StreetNames: contracts.StreetNamesShown},
+		QueueNMPZ:         {Ruleset: contracts.RulesetNMPZ, StreetNames: contracts.StreetNamesShown},
+		QueueMovingHidden: {Ruleset: contracts.RulesetMoving, StreetNames: contracts.StreetNamesHidden},
+		QueueNoMoveHidden: {Ruleset: contracts.RulesetNoMove, StreetNames: contracts.StreetNamesHidden},
+		QueueNMPZHidden:   {Ruleset: contracts.RulesetNMPZ, StreetNames: contracts.StreetNamesHidden},
+	}
+	for queue, want := range tests {
+		got := QueueVariantConfig(queue)
+		if got.Ruleset != want.Ruleset || got.StreetNames != want.StreetNames {
+			t.Fatalf("%s config = %#v, want %#v", queue, got, want)
+		}
+	}
+}
+
+func TestMemoryStoreMatchesHiddenNoMoveQueueWithExpectedConfig(t *testing.T) {
+	store := newMemory()
+	for _, userID := range []string{"p1", "p2"} {
+		if _, _, err := store.Join(
+			QueuePoolRegistered,
+			QueueNoMoveHidden,
+			contracts.QueueJoinRequest{UserID: userID, DisplayName: userID, MMR: 1500},
+		); err != nil {
+			t.Fatalf("join %s: %v", userID, err)
+		}
+	}
+	ageMemoryQueue(store, QueuePoolRegistered, mutualMatchWaitMS+1)
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, QueueNoMoveHidden, 50); err != nil || matched != 1 {
+		t.Fatalf("RunMatchmaking = %d, %v; want 1, nil", matched, err)
+	}
+	match, err := store.Poll(
+		QueuePoolRegistered,
+		[]QueueVariant{QueueNoMoveHidden},
+		"p1",
+	)
+	if err != nil || match == nil {
+		t.Fatalf("Poll = %#v, %v; want match", match, err)
+	}
+	if match.Config.Ruleset != contracts.RulesetNoMove ||
+		match.Config.StreetNames != contracts.StreetNamesHidden {
+		t.Fatalf("match config = %#v", match.Config)
+	}
+}
+
 func ageMemoryQueue(store Store, pool QueuePool, ageMS int64) {
 	mem := store.(*memoryStore)
-	for i := range mem.queues[pool] {
-		mem.queues[pool][i].JoinedAtUnixMS -= ageMS
+	for _, queue := range AllQueueVariants {
+		for i := range mem.queues[pool][queue] {
+			mem.queues[pool][queue][i].JoinedAtUnixMS -= ageMS
+		}
 	}
 }
 

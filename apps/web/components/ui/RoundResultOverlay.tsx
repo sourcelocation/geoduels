@@ -164,7 +164,7 @@ export default function RoundResultOverlay({
   winner,
   damage,
   damageMultiplier,
-  players,
+  sides,
   hpPct
 }: RoundResultOverlayProps) {
   const animation = RESULT_ANIMATION_CONFIG;
@@ -177,7 +177,7 @@ export default function RoundResultOverlay({
 
   const isSelfWinner = winner === 'self';
   const isOppWinner = winner === 'opp';
-  const showScores = showScoreReveal && players.self.score !== undefined && players.opp.score !== undefined;
+  const showScores = showScoreReveal && sides.self.score !== undefined && sides.opponent.score !== undefined;
   const showCrush =
     phase === 'crush' || phase === 'damage_travel' || phase === 'damage_multiplier' || phase === 'hp_apply';
   const sourceSide: Side = isSelfWinner ? 'self' : 'opp';
@@ -207,7 +207,7 @@ export default function RoundResultOverlay({
 
   const staticScoreVariant = phase === 'base' ? 'base' : 'scores';
 
-  const sourceScoreValue = sourceSide === 'self' ? players.self.score : players.opp.score;
+  const sourceScoreValue = sourceSide === 'self' ? sides.self.score : sides.opponent.score;
   const selfStaticScoreValue = getStaticScoreValue({
     side: 'self',
     phase,
@@ -217,8 +217,8 @@ export default function RoundResultOverlay({
     targetSide,
     impactReached,
     damage: displayedDamage,
-    selfScore: players.self.score,
-    oppScore: players.opp.score
+    selfScore: sides.self.score,
+    oppScore: sides.opponent.score
   });
   const oppStaticScoreValue = getStaticScoreValue({
     side: 'opp',
@@ -229,8 +229,8 @@ export default function RoundResultOverlay({
     targetSide,
     impactReached,
     damage: displayedDamage,
-    selfScore: players.self.score,
-    oppScore: players.opp.score
+    selfScore: sides.self.score,
+    oppScore: sides.opponent.score
   });
 
   // layoutMeasurement
@@ -488,14 +488,14 @@ export default function RoundResultOverlay({
         {/* Distance Bar (Straddling the bottom border) */}
         <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 z-[50]">
           <AnimatePresence>
-            {showScores && players.self.distanceKm !== undefined && players.opp.distanceKm !== undefined && (
+            {showScores && sides.self.distanceKm !== undefined && sides.opponent.distanceKm !== undefined && (
               <motion.div
                 initial={{ y: -30, opacity: 0, scale: 0.95 }}
                 animate={{ y: 0, opacity: 1, scale: 1 }}
                 transition={{ type: 'spring', stiffness: 500, damping: 30, delay: 0.1 }}
                 className="relative"
               >
-                <ResultDistanceBar selfDistanceKm={players.self.distanceKm} oppDistanceKm={players.opp.distanceKm} />
+                <ResultDistanceBar selfDistanceKm={sides.self.distanceKm} oppDistanceKm={sides.opponent.distanceKm} />
               </motion.div>
             )}
           </AnimatePresence>

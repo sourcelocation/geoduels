@@ -28,16 +28,17 @@ func TestSendDiscordReportNotification(t *testing.T) {
 	defer server.Close()
 
 	w := &worker{httpClient: server.Client()}
-	retryAfter, err := w.sendDiscordReportNotification(context.Background(), server.URL, contracts.ModerationCaseNotificationPayload{
-		CaseID:              42,
-		TargetUserID:        "reported-1",
-		TargetDisplayName:   "Reported",
-		Priority:            "high",
-		Score:               3,
-		ReportCount:         4,
-		UniqueReporterCount: 3,
-		Categories:          map[string]int{"cheating": 4},
-		LatestActivityAt:    time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC),
+	retryAfter, err := w.sendDiscordReportNotification(context.Background(), server.URL, contracts.ModerationIncidentNotificationPayload{
+		IncidentID:       42,
+		TaskID:           7,
+		SubjectUserID:    "reported-1",
+		SubjectName:      "Reported",
+		Severity:         "high",
+		EvidenceStrength: "substantial",
+		ReasonCode:       "cheating",
+		SignalCount:      4,
+		StrongestSignals: []string{"unusual_high_score_consistency"},
+		LatestSignalAt:   time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("send notification: %v", err)
@@ -48,7 +49,7 @@ func TestSendDiscordReportNotification(t *testing.T) {
 	if received.Username != "GeoDuels Moderation" || len(received.Embeds) != 1 {
 		t.Fatalf("unexpected webhook message: %+v", received)
 	}
-	if received.Embeds[0].Title != "Moderation case needs review" {
+	if received.Embeds[0].Title != "Moderation incident needs review" {
 		t.Fatalf("embed title = %q", received.Embeds[0].Title)
 	}
 }

@@ -1,11 +1,23 @@
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 import { normalizeHTTPBase, normalizeWSBase } from '../../../lib/runtime-config';
+import { apiFetch, authHeaders, mergeHeaders } from '../../../lib/http';
 import type { Snapshot } from '../../../components/ui/types';
 import type { AuthSessionSnapshot } from '../../auth/session';
 
-export type GameRuleset = 'moving' | 'nmpz';
+export type GameRuleset = 'moving' | 'no_move' | 'nmpz';
+export type StreetNamesVisibility = 'shown' | 'hidden';
+export type QueueVariant =
+  | 'moving'
+  | 'no_move'
+  | 'nmpz'
+  | 'moving_hidden'
+  | 'no_move_hidden'
+  | 'nmpz_hidden';
 export type MatchConfig = {
   ruleset?: GameRuleset;
+  streetNames?: StreetNamesVisibility;
+  mapId?: string;
+  mapName?: string;
   mapKey?: string;
   roundTimerMode?: 'none' | 'pressure' | 'fixed';
   roundTimeLimitMs?: number;
@@ -14,7 +26,7 @@ export type MatchConfig = {
 
 export type QueueEvent =
   | { type: 'queue_status'; status: string; queuedAt?: number }
-  | { type: 'match_assigned'; matchId: string; mode?: string; config?: MatchConfig; node: string; ticket: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+  | { type: 'match_assigned'; matchId: string; mode?: string; config?: MatchConfig; node: string; ticket: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string }
   | { type: 'queue_error'; message: string };
 
 export type MaintenancePhase = 'normal' | 'warning' | 'active';
@@ -94,12 +106,12 @@ export async function streamQueue(
   config: RuntimeConfig,
   session: AuthSessionSnapshot,
   signal: AbortSignal,
-  rulesets: GameRuleset[],
+  queues: QueueVariant[],
   onEvent: (event: QueueEvent) => void
 ) {
   const base = normalizeWSBase(config.queueURL).replace(/\/$/, '');
-  const selectedRulesets = (rulesets.length ? rulesets : ['moving']).join(',');
-  const target = `${base}/queue?accessToken=${encodeURIComponent(session.accessToken)}&rulesets=${encodeURIComponent(selectedRulesets)}`;
+  const selectedQueues = (queues.length ? queues : ['moving']).join(',');
+  const target = `${base}/queue?accessToken=${encodeURIComponent(session.accessToken)}&queues=${encodeURIComponent(selectedQueues)}`;
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -175,8 +187,8 @@ export async function streamQueue(
             node: typeof payload?.node === 'string' ? payload.node : '',
             ticket: typeof payload?.ticket === 'string' ? payload.ticket : '',
             wsPath: typeof payload?.wsPath === 'string' ? payload.wsPath : '',
-            sourceLobbyId: typeof payload?.sourceLobbyId === 'string' ? payload.sourceLobbyId : '',
-            sourceLobbyInviteCode: typeof payload?.sourceLobbyInviteCode === 'string' ? payload.sourceLobbyInviteCode : ''
+            sourcePartyId: typeof payload?.sourcePartyId === 'string' ? payload.sourcePartyId : '',
+            sourcePartyInviteCode: typeof payload?.sourcePartyInviteCode === 'string' ? payload.sourcePartyInviteCode : ''
           });
           return;
         }
@@ -197,8 +209,8 @@ export async function fetchResumableSession(
   accessToken: string,
   signal?: AbortSignal
 ): Promise<ResumableSessionResponse> {
-  const resp = await fetch(new URL('/v1/session/resumable', config.apiURL).toString(), {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const resp = await apiFetch(config, '/v1/session/resumable', {
+    headers: authHeaders(accessToken),
     signal
   });
   if (!resp.ok) {
@@ -217,23 +229,23 @@ export async function fetchResumableSession(
 }
 
 export type MatchSessionResponse =
-  | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+  | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string }
   | { status: 'live_auth_required'; matchId: string }
-  | { status: 'history'; matchId: string; snapshot: Snapshot; replacementMatchId?: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+  | { status: 'history'; matchId: string; snapshot: Snapshot; replacementMatchId?: string; sourcePartyId?: string; sourcePartyInviteCode?: string }
   | {
       status: 'replaced';
       matchId: string;
       replacementMatchId: string;
-      replacement?: { matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string };
-      sourceLobbyId?: string;
-      sourceLobbyInviteCode?: string;
+      replacement?: { matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string };
+      sourcePartyId?: string;
+      sourcePartyInviteCode?: string;
     }
   | { status: 'missing' | 'forbidden'; matchId: string };
 
 export type MatchBootstrapResponse = {
   auth: {
     accessToken?: string;
-    onboardingRequired?: boolean;
+    nicknameRequired?: boolean;
     suggestedNickname?: string;
     user?: {
       id?: string;
@@ -245,11 +257,11 @@ export type MatchBootstrapResponse = {
 
 function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): MatchSessionResponse {
   const status = typeof data?.status === 'string' ? data.status : 'missing';
-  const sourceLobby =
-    typeof data?.sourceLobbyInviteCode === 'string' && data.sourceLobbyInviteCode
+  const sourceParty =
+    typeof data?.sourcePartyInviteCode === 'string' && data.sourcePartyInviteCode
       ? {
-          sourceLobbyId: typeof data?.sourceLobbyId === 'string' ? data.sourceLobbyId : '',
-          sourceLobbyInviteCode: data.sourceLobbyInviteCode
+          sourcePartyId: typeof data?.sourcePartyId === 'string' ? data.sourcePartyId : '',
+          sourcePartyInviteCode: data.sourcePartyInviteCode
         }
       : {};
   if (status === 'live_connectable') {
@@ -261,7 +273,7 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       ticket: typeof data?.ticket === 'string' ? data.ticket : '',
       node: typeof data?.node === 'string' ? data.node : '',
       wsPath: typeof data?.wsPath === 'string' ? data.wsPath : '',
-      ...sourceLobby
+      ...sourceParty
     };
   }
   if (status === 'history') {
@@ -270,7 +282,7 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId,
       snapshot: (data?.snapshot || null) as Snapshot,
       replacementMatchId: typeof data?.replacementMatchId === 'string' ? data.replacementMatchId : '',
-      ...sourceLobby
+      ...sourceParty
     };
   }
   if (status === 'replaced') {
@@ -283,10 +295,10 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
             ticket: typeof data.replacement.ticket === 'string' ? data.replacement.ticket : '',
             node: typeof data.replacement.node === 'string' ? data.replacement.node : '',
             wsPath: typeof data.replacement.wsPath === 'string' ? data.replacement.wsPath : '',
-            ...(typeof data.replacement.sourceLobbyInviteCode === 'string' && data.replacement.sourceLobbyInviteCode
+            ...(typeof data.replacement.sourcePartyInviteCode === 'string' && data.replacement.sourcePartyInviteCode
               ? {
-                  sourceLobbyId: typeof data.replacement.sourceLobbyId === 'string' ? data.replacement.sourceLobbyId : '',
-                  sourceLobbyInviteCode: data.replacement.sourceLobbyInviteCode
+                  sourcePartyId: typeof data.replacement.sourcePartyId === 'string' ? data.replacement.sourcePartyId : '',
+                  sourcePartyInviteCode: data.replacement.sourcePartyInviteCode
                 }
               : {})
           }
@@ -296,7 +308,7 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId,
       replacementMatchId: typeof data?.replacementMatchId === 'string' ? data.replacementMatchId : '',
       replacement: replacementPayload,
-      ...sourceLobby
+      ...sourceParty
     };
   }
   if (status === 'forbidden') {
@@ -314,8 +326,8 @@ export async function resolveMatchRoute(
   signal: AbortSignal,
   accessToken?: string
 ): Promise<MatchSessionResponse> {
-  const resp = await fetch(`${config.apiURL}/v1/matches/${encodeURIComponent(matchId)}/route`, {
-    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+  const resp = await apiFetch(config, `/v1/matches/${encodeURIComponent(matchId)}/route`, {
+    headers: authHeaders(accessToken),
     signal
   });
   if (!resp.ok) {
@@ -330,8 +342,8 @@ export async function fetchMatchSession(
   matchId: string,
   signal: AbortSignal
 ): Promise<MatchSessionResponse> {
-  const resp = await fetch(`${config.apiURL}/v1/matches/${encodeURIComponent(matchId)}/session`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const resp = await apiFetch(config, `/v1/matches/${encodeURIComponent(matchId)}/session`, {
+    headers: authHeaders(accessToken),
     signal
   });
   if (!resp.ok) {
@@ -345,7 +357,7 @@ export async function bootstrapMatchSession(
   matchId: string,
   signal: AbortSignal
 ): Promise<MatchBootstrapResponse | null> {
-  const resp = await fetch(`${config.apiURL}/v1/matches/${encodeURIComponent(matchId)}/bootstrap`, {
+  const resp = await apiFetch(config, `/v1/matches/${encodeURIComponent(matchId)}/bootstrap`, {
     credentials: 'include',
     signal
   });
@@ -356,7 +368,7 @@ export async function bootstrapMatchSession(
   return {
     auth: {
       accessToken: typeof data?.auth?.accessToken === 'string' ? data.auth.accessToken : '',
-      onboardingRequired: !!data?.auth?.onboardingRequired,
+      nicknameRequired: !!data?.auth?.nicknameRequired,
       suggestedNickname: typeof data?.auth?.suggestedNickname === 'string' ? data.auth.suggestedNickname : '',
       user:
         data?.auth?.user && typeof data.auth.user === 'object'
@@ -373,12 +385,14 @@ export async function bootstrapMatchSession(
 export async function startSingleplayerSession(
   config: RuntimeConfig,
   accessToken: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  matchConfig?: MatchConfig,
 ): Promise<{ matchId: string; mode?: string; ticket: string; node: string; wsPath: string }> {
-  const resp = await fetch(`${config.apiURL}/v1/singleplayer/session`, {
+  const resp = await apiFetch(config, '/v1/singleplayer/session', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
-    signal
+    headers: mergeHeaders(authHeaders(accessToken), matchConfig ? { 'Content-Type': 'application/json' } : undefined),
+    body: matchConfig ? JSON.stringify(matchConfig) : undefined,
+    signal,
   });
   if (!resp.ok) {
     throw new Error('Singleplayer unavailable');

@@ -12,9 +12,21 @@ function createProps(overrides: Partial<RoundResultOverlayProps> = {}): RoundRes
     winner: 'self',
     damage: 123,
     damageMultiplier: 1.5,
-    players: {
-      self: { name: 'You', fallback: 'Y', hp: 4000, score: 4321 },
-      opp: { name: 'Opp', fallback: 'O', hp: 3200, score: 1111 }
+    sides: {
+      self: {
+        id: 'self',
+        participant: { kind: 'player', id: 'self', name: 'You', avatarFallback: 'Y' },
+        hp: 4000,
+        score: 4321,
+        connection: 'connected',
+      },
+      opponent: {
+        id: 'opp',
+        participant: { kind: 'player', id: 'opp', name: 'Opp', avatarFallback: 'O' },
+        hp: 3200,
+        score: 1111,
+        connection: 'connected',
+      }
     },
     hpPct: (hp) => `${Math.max(0, Math.min(100, (hp / 6000) * 100))}%`,
     ...overrides
@@ -33,9 +45,10 @@ describe('RoundResultOverlay component', () => {
           phase: 'crush',
           winner: 'tie',
           damage: 0,
-          players: {
-            self: { name: 'You', fallback: 'Y', hp: 4000, score: 2500 },
-            opp: { name: 'Opp', fallback: 'O', hp: 3200, score: 2500 }
+          sides: {
+            ...createProps().sides,
+            self: { ...createProps().sides.self, score: 2500 },
+            opponent: { ...createProps().sides.opponent, score: 2500 },
           }
         })}
       />

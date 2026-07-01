@@ -1,7 +1,7 @@
 export type AuthSessionSnapshot = {
   userId: string;
   accessToken: string;
-  onboardingRequired: boolean;
+  nicknameRequired: boolean;
   authMigrationRequired?: boolean;
   recoveryAvailable?: boolean;
   linkedProviders?: string[];
@@ -11,14 +11,14 @@ export type AuthSessionSnapshot = {
 };
 
 export function hasPlayableSession(session: AuthSessionSnapshot | null): boolean {
-  return !!session && !!session.userId && !!session.accessToken && !session.onboardingRequired && !session.authMigrationRequired && session.canPlay !== false;
+  return !!session && !!session.userId && !!session.accessToken && !session.nicknameRequired && !session.authMigrationRequired && session.canPlay !== false;
 }
 
 export function emptyAuthSession(): AuthSessionSnapshot {
   return {
     userId: '',
     accessToken: '',
-    onboardingRequired: false,
+    nicknameRequired: false,
     authMigrationRequired: false,
     recoveryAvailable: false,
     linkedProviders: [],

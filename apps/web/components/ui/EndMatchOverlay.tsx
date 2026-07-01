@@ -3,12 +3,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Flag, RotateCcw, List, LogOut } from "lucide-react";
 import { useState, useMemo } from "react";
 import {
-  PlayerIdentityCard,
-  PlayerIdentityRow,
-  type ParticipantIdentityView,
-} from "./PlayerIdentity";
+  ParticipantIdentityCard,
+  ParticipantIdentityRow,
+  type MatchSideView,
+  type MatchSidesView,
+  type PlayerIdentityView,
+} from "./ParticipantIdentity";
 import AppModalShell from "./AppModalShell";
-import type { PlayerBadgeInfo } from "./PlayerBadge";
 import type { RoundResult } from "./types";
 
 const GuessMap = dynamic(() => import("../GuessMap"), { ssr: false });
@@ -16,36 +17,18 @@ const GuessMap = dynamic(() => import("../GuessMap"), { ssr: false });
 type Props = {
   onLeaveGame: () => void;
   onPlayAgain?: () => Promise<string> | void;
+  backLabel?: string;
   mode: EndMatchMode;
   outcome?: "win" | "lose" | "draw";
-  selfName: string;
-  opponentName?: string;
-  opponentUserId?: string;
-  selfElo?: number;
-  opponentElo?: number;
-  selfEloDelta?: number;
-  opponentEloDelta?: number;
-  selfHP: number;
-  oppHP?: number;
-  selfAvatarUrl?: string;
-  oppAvatarUrl?: string;
-  selfFallback: string;
-  oppFallback?: string;
-  selfAvatarColor?: string;
-  oppAvatarColor?: string;
-  selfIsAdmin: boolean;
-  opponentIsAdmin?: boolean;
-  selfSelectedBadge?: PlayerBadgeInfo | null;
-  opponentSelectedBadge?: PlayerBadgeInfo | null;
+  sides: MatchSidesView;
+  selfUserId: string;
   totalScore: number;
   roundResults: RoundResult[];
   resultPlayerNames: Record<string, string | undefined>;
   resultPlayerAvatars: Record<string, string | undefined>;
   resultPlayerFallbacks: Record<string, string | undefined>;
   resultPlayerBorderColors?: Record<string, string | undefined>;
-  participantsById?: Record<string, ParticipantIdentityView>;
-  selfParticipant?: ParticipantIdentityView;
-  opponentParticipant?: ParticipantIdentityView;
+  participantsById?: Record<string, PlayerIdentityView>;
   onReportPlayer?: (
     reportedUserId: string,
     category?: string,
@@ -65,25 +48,8 @@ export default function EndMatchOverlay({
   onLeaveGame,
   mode,
   outcome,
-  selfName,
-  opponentName,
-  opponentUserId,
-  selfElo,
-  opponentElo,
-  selfEloDelta,
-  opponentEloDelta,
-  selfHP,
-  oppHP,
-  selfAvatarUrl,
-  oppAvatarUrl,
-  selfFallback,
-  oppFallback,
-  selfAvatarColor,
-  oppAvatarColor,
-  selfIsAdmin,
-  opponentIsAdmin,
-  selfSelectedBadge,
-  opponentSelectedBadge,
+  sides,
+  selfUserId,
   totalScore,
   roundResults,
   resultPlayerNames,
@@ -91,10 +57,9 @@ export default function EndMatchOverlay({
   resultPlayerFallbacks,
   resultPlayerBorderColors,
   participantsById = {},
-  selfParticipant,
-  opponentParticipant,
   onReportPlayer,
   onPlayAgain,
+  backLabel = "Back to lobby",
   asPage = false,
 }: Props) {
   const [reportedUserIds, setReportedUserIds] = useState<Record<string, boolean>>({});
@@ -105,19 +70,13 @@ export default function EndMatchOverlay({
   const [pendingReport, setPendingReport] = useState<{ userId: string; name: string; } | null>(null);
   const [playAgainBusy, setPlayAgainBusy] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [duelBreakdownMode, setDuelBreakdownMode] = useState<"health" | "points">("health");
 
   const totalRounds = roundResults.length;
   const hasRoundResults = totalRounds > 0;
   const playerIds = Object.keys(roundResults[0]?.players || {});
-  const selfPlayerId =
-    playerIds.find((id) => resultPlayerNames[id] === selfName) ||
-    playerIds[0] ||
-    "self";
-  const opponentPlayerId = playerIds.find(
-    (id) => id !== selfPlayerId && resultPlayerNames[id] === opponentName,
-  ) || playerIds.find((id) => id !== selfPlayerId) || "opp";
+  const selfPlayerId = selfUserId || playerIds[0] || "self";
 
-  const backLabel = mode === "singleplayer" ? "Back To Home" : "Back To Lobby";
   const showPlayAgain = mode === "singleplayer" && !!onPlayAgain;
 
   const isDuelsMode = mode === 'duel' || mode === 'team_duel';
@@ -159,18 +118,6 @@ export default function EndMatchOverlay({
   const outcomeLabel =
     outcome === "win" ? "Win" : outcome === "lose" ? "Defeat" : "Draw";
 
-  const oppTotalScore = useMemo(() => {
-    let total = 0;
-    if (opponentPlayerId) {
-      for (const round of roundResults) {
-        if (round.players[opponentPlayerId]) {
-          total += round.players[opponentPlayerId].score;
-        }
-      }
-    }
-    return total;
-  }, [roundResults, opponentPlayerId]);
-
   async function handlePlayAgain() {
     if (!onPlayAgain || playAgainBusy) return;
     setPlayAgainBusy(true);
@@ -185,60 +132,84 @@ export default function EndMatchOverlay({
     if (!playerId) return <span className="text-white/35">-</span>;
     const player = round.players[playerId];
     if (!player) return <span className="text-white/35">-</span>;
+    const guessTime = formatGuessTime(player.guessMs);
     return (
-      <div className={highlight ? "font-black text-white" : "font-bold text-[#dbe7ff]"}>
-        <p>{player.score.toLocaleString()}</p>
-        {formatGuessTime(player.guessMs) ? (
-          <p className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.1em] text-[#8caab0]">
-            {formatGuessTime(player.guessMs)}
-          </p>
+      <div className={`flex items-baseline gap-2 ${highlight ? "font-black text-white" : "font-bold text-[#dbe7ff]"}`}>
+        <span>{player.score.toLocaleString()}</span>
+        {guessTime ? (
+          <span className="text-[11px] font-bold tracking-[0.1em] text-[#8caab0]">
+            {guessTime}
+          </span>
         ) : null}
       </div>
     );
   }
 
-  function renderPlayerCard({
-    name,
-    avatarUrl,
-    fallback,
-    elo,
-    eloDelta,
-    isAdmin,
-    selectedBadge,
-    reportUserId,
-    avatarColor,
-    opponent = false
-  }: {
-    name: string;
-    avatarUrl?: string;
-    fallback: string;
-    elo?: number;
-    eloDelta?: number;
-    isAdmin?: boolean;
-    selectedBadge?: PlayerBadgeInfo | null;
-    reportUserId?: string;
-    avatarColor?: string;
-    opponent?: boolean;
-  }) {
+  function renderHealthCell(
+    round: RoundResult,
+    side: MatchSideView,
+    highlight = false,
+  ) {
+    const hp =
+      side.participant.kind === "team"
+        ? round.teams?.[side.id]?.hpAfterRound
+        : round.players[side.id]?.hpAfterRound;
+    if (hp === undefined) return <span className="text-white/35">-</span>;
+    const guessPlayerId =
+      side.participant.kind === "team"
+        ? round.teams?.[side.id]?.representativeUserId
+        : side.id;
+    const guessTime = formatGuessTime(
+      guessPlayerId ? round.players[guessPlayerId]?.guessMs : undefined,
+    );
+    return (
+      <div className={`flex items-baseline gap-2 ${highlight ? "font-black text-white" : "font-bold text-[#dbe7ff]"}`}>
+        <span>{hp.toLocaleString()} HP</span>
+        {guessTime ? (
+          <span className="text-[11px] font-bold tracking-[0.1em] text-[#8caab0]">
+            {guessTime}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderSideScoreCell(
+    round: RoundResult,
+    side: MatchSideView,
+    highlight = false,
+  ) {
+    const result =
+      side.participant.kind === "team"
+        ? round.teams?.[side.id]
+        : round.players[side.id];
+    if (!result) return <span className="text-white/35">-</span>;
+    const guessPlayerId =
+      side.participant.kind === "team"
+        ? round.teams?.[side.id]?.representativeUserId
+        : side.id;
+    const guessTime = formatGuessTime(
+      guessPlayerId ? round.players[guessPlayerId]?.guessMs : undefined,
+    );
+    return (
+      <div className={`flex items-baseline gap-2 ${highlight ? "font-black text-white" : "font-bold text-[#dbe7ff]"}`}>
+        <span>{result.score.toLocaleString()} pts</span>
+        {guessTime ? (
+          <span className="text-[11px] font-bold tracking-[0.1em] text-[#8caab0]">
+            {guessTime}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderSideCard(side: MatchSideView, opponent = false) {
+    const reportUserId =
+      opponent && side.participant.kind === "player"
+        ? side.participant.id
+        : undefined;
     const canReport = !!reportUserId && !!onReportPlayer && !reportedUserIds[reportUserId];
-    const participant: ParticipantIdentityView = (!opponent ? selfParticipant : opponentParticipant) || (avatarColor
-      ? {
-        kind: "team",
-        id: name,
-        name,
-        avatarFallback: fallback,
-        avatarColor,
-      }
-      : {
-        kind: "player",
-        id: reportUserId || name,
-        name,
-        avatarUrl,
-        avatarFallback: fallback,
-        isAdmin,
-        selectedBadge,
-      });
-    const reportButton = mode === 'duel' && reportUserId && onReportPlayer ? (
+    const reportButton = reportUserId && onReportPlayer ? (
       <button
         type="button"
         title={reportedUserIds[reportUserId] ? "Report sent" : "Report player"}
@@ -247,7 +218,7 @@ export default function EndMatchOverlay({
           setReportError("");
           setReportCategory("cheating");
           setReportReason("");
-          setPendingReport({ userId: reportUserId, name });
+          setPendingReport({ userId: reportUserId, name: side.participant.name });
         }}
         className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300/25 bg-red-500/12 text-red-100 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-55"
       >
@@ -257,11 +228,9 @@ export default function EndMatchOverlay({
     return (
       <div className={`glass-panel flex flex-col items-center gap-3 rounded-[24px] p-6 text-center ${opponent ? 'bg-red-500/5 border-red-500/10' : 'bg-blue-500/5 border-blue-500/10'}`}>
         <div className="flex flex-col items-center">
-          <PlayerIdentityCard
-            participant={participant}
+          <ParticipantIdentityCard
+            participant={side.participant}
             opponent={opponent}
-            rating={mode === "duel" ? elo : undefined}
-            ratingDelta={mode === "duel" ? eloDelta : undefined}
             ratingAction={reportButton}
           />
         </div>
@@ -274,27 +243,56 @@ export default function EndMatchOverlay({
       <div className="glass-panel rounded-[20px] p-1">
         {isDuelsMode ? (
           <div className="w-full overflow-x-auto">
+            <div className="flex items-center justify-end gap-3 px-4 py-3">
+              <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#8caab0]">
+                Preview mode
+              </span>
+              <div
+                role="group"
+                aria-label="Breakdown preview mode"
+                className="inline-flex rounded-full border border-white/10 bg-black/20 p-1"
+              >
+                {(["health", "points"] as const).map((previewMode) => (
+                  <button
+                    key={previewMode}
+                    type="button"
+                    aria-pressed={duelBreakdownMode === previewMode}
+                    onClick={() => setDuelBreakdownMode(previewMode)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-black uppercase tracking-[0.08em] transition ${
+                      duelBreakdownMode === previewMode
+                        ? "bg-white/15 text-white"
+                        : "text-[#8caab0] hover:text-white"
+                    }`}
+                  >
+                    {previewMode}
+                  </button>
+                ))}
+              </div>
+            </div>
             <table className="w-full text-left text-sm text-white">
               <thead>
                 <tr className="border-b border-white/10 text-[#8caab0]">
                   <th className="py-3 px-4 font-bold uppercase tracking-wider">Round</th>
-                  <th className="py-3 px-4 font-bold uppercase tracking-wider">{selfName}</th>
-                  <th className="py-3 px-4 font-bold uppercase tracking-wider">{opponentName || "Opponent"}</th>
+                  <th className="py-3 px-4 font-bold uppercase tracking-wider">{sides.self.participant.name}</th>
+                  <th className="py-3 px-4 font-bold uppercase tracking-wider">{sides.opponent.participant.name}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
                 {roundResults.map((round) => (
                   <tr key={round.roundId} className="hover:bg-white/[0.02]">
                     <td className="py-3 px-4 font-bold text-[#dce6ff]">R{round.roundNumber}</td>
-                    <td className="py-3 px-4">{renderScoreCell(round, selfPlayerId, true)}</td>
-                    <td className="py-3 px-4">{renderScoreCell(round, opponentPlayerId)}</td>
+                    <td className="py-3 px-4">
+                      {duelBreakdownMode === "health"
+                        ? renderHealthCell(round, sides.self, true)
+                        : renderSideScoreCell(round, sides.self, true)}
+                    </td>
+                    <td className="py-3 px-4">
+                      {duelBreakdownMode === "health"
+                        ? renderHealthCell(round, sides.opponent)
+                        : renderSideScoreCell(round, sides.opponent)}
+                    </td>
                   </tr>
                 ))}
-                <tr className="bg-white/5">
-                  <td className="py-3 px-4 font-black">Total</td>
-                  <td className="py-3 px-4 font-black text-[#2ad18f]">{totalScore.toLocaleString()}</td>
-                  <td className="py-3 px-4 font-black text-white">{oppTotalScore.toLocaleString()}</td>
-                </tr>
               </tbody>
             </table>
           </div>
@@ -315,7 +313,7 @@ export default function EndMatchOverlay({
                   <tr key={player.id} className={player.id === selfPlayerId ? 'bg-white/[0.04]' : 'hover:bg-white/[0.02]'}>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
-                        <PlayerIdentityRow
+                        <ParticipantIdentityRow
                           participant={player.participant}
                           nameClassName={player.id === selfPlayerId ? 'font-black text-[#7dc3ff]' : 'font-bold'}
                         />
@@ -384,16 +382,7 @@ export default function EndMatchOverlay({
               {isDuelsMode ? (
                 <div className="flex flex-col md:flex-row items-center justify-center gap-6 md:gap-12">
                   <div className="flex-1 max-w-[320px] w-full">
-                    {renderPlayerCard({
-                      name: selfName,
-                      avatarUrl: selfAvatarUrl,
-                      fallback: selfFallback,
-                      elo: selfElo,
-                      eloDelta: selfEloDelta,
-                      isAdmin: selfIsAdmin,
-                      selectedBadge: selfSelectedBadge,
-                      avatarColor: selfAvatarColor
-                    })}
+                    {renderSideCard(sides.self)}
                   </div>
                   <div className="flex flex-col items-center gap-4">
                     <p className={`text-[12px] font-black uppercase tracking-[0.2em] ${
@@ -420,18 +409,7 @@ export default function EndMatchOverlay({
                     </button>
                   </div>
                   <div className="flex-1 max-w-[320px] w-full">
-                    {renderPlayerCard({
-                      name: opponentName || "Opponent",
-                      avatarUrl: oppAvatarUrl,
-                      fallback: oppFallback || "O",
-                      elo: opponentElo,
-                      eloDelta: opponentEloDelta,
-                      isAdmin: opponentIsAdmin,
-                      selectedBadge: opponentSelectedBadge,
-                      opponent: true,
-                      reportUserId: mode === "team_duel" ? undefined : (opponentUserId || opponentPlayerId),
-                      avatarColor: oppAvatarColor
-                    })}
+                    {renderSideCard(sides.opponent, true)}
                   </div>
                 </div>
               ) : (

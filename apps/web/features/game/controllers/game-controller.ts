@@ -418,22 +418,38 @@ export class GameController extends ObservableStore<GameState> {
       this.resultAnimation.clear();
       return;
     }
-    const playerIds = Object.keys(snapshot.players || {});
     const selfTeamId = snapshot.players[userId]?.teamId || 'a';
-    const oppId =
-      snapshot.mode === 'team_duel'
-        ? playerIds.find((id) => (snapshot.players[id]?.teamId || 'a') !== selfTeamId) || ''
-        : playerIds.find((id) => id !== userId) || '';
+    const playerIds = Object.keys(snapshot.players || {});
+    const oppId = playerIds.find((id) => id !== userId) || '';
     const rr = snapshot.lastRoundResult;
     if (this.resultAnimRound === rr.roundId) return;
-    const oppTeamId = snapshot.mode === 'team_duel' ? snapshot.players[oppId]?.teamId || 'b' : '';
+    const oppTeamId =
+      snapshot.mode === 'team_duel'
+        ? Object.keys(snapshot.teams || {}).find((teamId) => teamId !== selfTeamId) || 'b'
+        : '';
     const selfResult = snapshot.mode === 'team_duel' ? rr.teams?.[selfTeamId] : rr.players[userId];
     const oppResult = snapshot.mode === 'team_duel' ? rr.teams?.[oppTeamId] : rr.players[oppId];
     if (!selfResult || !oppResult) return;
 
     this.resultAnimation.clear();
-    const oldSelf = this.getAnimatedStartHP(snapshot, userId, selfResult.hpAfterRound || 0, snapshot.players[userId]?.hp || 0);
-    const oldOpp = this.getAnimatedStartHP(snapshot, oppId, oppResult.hpAfterRound || 0, snapshot.players[oppId]?.hp || 0);
+    const oldSelf =
+      snapshot.mode === 'team_duel'
+        ? this.getAnimatedStartTeamHP(
+            snapshot,
+            selfTeamId,
+            selfResult.hpAfterRound || 0,
+            snapshot.teams?.[selfTeamId]?.hp || 0,
+          )
+        : this.getAnimatedStartHP(snapshot, userId, selfResult.hpAfterRound || 0, snapshot.players[userId]?.hp || 0);
+    const oldOpp =
+      snapshot.mode === 'team_duel'
+        ? this.getAnimatedStartTeamHP(
+            snapshot,
+            oppTeamId,
+            oppResult.hpAfterRound || 0,
+            snapshot.teams?.[oppTeamId]?.hp || 0,
+          )
+        : this.getAnimatedStartHP(snapshot, oppId, oppResult.hpAfterRound || 0, snapshot.players[oppId]?.hp || 0);
     this.resultAnimRound = rr.roundId;
     this.patchState({
       showMatchEndPage: false,
@@ -485,14 +501,25 @@ export class GameController extends ObservableStore<GameState> {
       });
       return;
     }
+    const selfTeamId = snapshot.players[userId]?.teamId || '';
+    const opponentTeamId =
+      snapshot.mode === 'team_duel'
+        ? Object.keys(snapshot.teams || {}).find((teamId) => teamId !== selfTeamId) || ''
+        : '';
     const playerIds = Object.keys(snapshot.players || {});
     const oppId = playerIds.find((id) => id !== userId) || '';
     this.patchState({
       resultPhase: 'hp_apply',
       showMatchEndPage: true,
       resultShownHP: {
-        self: snapshot.players[userId]?.hp || 0,
-        opp: snapshot.players[oppId]?.hp || 0
+        self:
+          snapshot.mode === 'team_duel'
+            ? snapshot.teams?.[selfTeamId]?.hp || 0
+            : snapshot.players[userId]?.hp || 0,
+        opp:
+          snapshot.mode === 'team_duel'
+            ? snapshot.teams?.[opponentTeamId]?.hp || 0
+            : snapshot.players[oppId]?.hp || 0
       }
     });
   }
@@ -532,6 +559,30 @@ export class GameController extends ObservableStore<GameState> {
     }
 
     const displayedHP = this.state.displayHP[playerId];
+    if (typeof displayedHP === 'number') {
+      return Math.max(hpAfterRound, Math.min(this.config.maxHP, displayedHP));
+    }
+
+    return Math.max(hpAfterRound, Math.min(this.config.maxHP, hpNow));
+  }
+
+  private getAnimatedStartTeamHP(
+    snapshot: Snapshot,
+    teamId: string,
+    hpAfterRound: number,
+    hpNow: number,
+  ) {
+    const prevHP =
+      this.prevSnapshot?.matchId === snapshot.matchId
+        ? this.prevSnapshot.teams?.[teamId]?.hp
+        : undefined;
+    if (typeof prevHP === 'number') {
+      return Math.max(hpAfterRound, Math.min(this.config.maxHP, prevHP));
+    }
+
+    const displayedHP = (snapshot.teams?.[teamId]?.players || [])
+      .map((playerId) => this.state.displayHP[playerId])
+      .find((hp) => typeof hp === 'number');
     if (typeof displayedHP === 'number') {
       return Math.max(hpAfterRound, Math.min(this.config.maxHP, displayedHP));
     }
@@ -612,7 +663,7 @@ export class GameController extends ObservableStore<GameState> {
     this.patchState(initialState);
     this.roundClock.reset();
     this.resultAnimRound = '';
-    this.matchController.setStatus(session.onboardingRequired ? 'idle' : 'ready');
+    this.matchController.setStatus(session.nicknameRequired ? 'idle' : 'ready');
   };
 
   forfeitMatch = () => {

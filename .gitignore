@@ -11,6 +11,7 @@ node_modules/
 **/node_modules/
 .next/
 apps/web/.next/
+apps/web/.next-dev/
 apps/web/out/
 apps/web/.turbo/
 *.tsbuildinfo
@@ -51,3 +52,9 @@ datasets/*.json
 !datasets/a-source-world.sample.json
 datasets/vali
 vali-fun-balanced-world-1k.json
+
+# Local map thumbnail source images
+apps/web/assets/source-map-thumbnails/continents/*
+!apps/web/assets/source-map-thumbnails/continents/.gitkeep
+apps/web/assets/source-map-thumbnails/countries/*
+!apps/web/assets/source-map-thumbnails/countries/.gitkeep

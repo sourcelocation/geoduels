@@ -1,73 +1,42 @@
 import { motion } from "framer-motion";
 import { formatDamageMultiplierLabel } from "./damage-multiplier";
-import { PlayerIdentityCard, type ParticipantIdentityView } from "./PlayerIdentity";
+import {
+  ParticipantIdentityCard,
+  type MatchSideView,
+  type MatchSidesView,
+} from "./ParticipantIdentity";
 
 type PlayerCardProps = {
-  side: "left" | "right";
-  name: string;
-  elo: number;
-  avatarUrl?: string;
-  fallback: string;
-  isAdmin?: boolean;
+  position: "left" | "right";
+  side: MatchSideView;
   opponent?: boolean;
 };
 
 function PlayerCard({
+  position,
   side,
-  name,
-  elo,
-  avatarUrl,
-  fallback,
-  isAdmin = false,
   opponent,
 }: PlayerCardProps) {
-  const participant: ParticipantIdentityView = {
-    kind: "player",
-    id: name,
-    name,
-    avatarUrl,
-    avatarFallback: fallback,
-    isAdmin,
-    rating: elo,
-  };
   return (
     <motion.div
-      initial={{ opacity: 0, x: side === "left" ? -20 : 20 }}
+      initial={{ opacity: 0, x: position === "left" ? -20 : 20 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ type: "spring", stiffness: 300, damping: 25, delay: 0.1 }}
-      className={`w-full rounded-[24px] border border-white/10 bg-white/5 p-6 text-center shadow-2xl backdrop-blur-md md:w-72 ${side === "right" ? "md:text-right" : "md:text-left"}`}
+      className={`w-full rounded-[24px] border border-white/10 bg-white/5 p-6 text-center shadow-2xl backdrop-blur-md md:w-72 ${position === "right" ? "md:text-right" : "md:text-left"}`}
     >
-      <PlayerIdentityCard participant={participant} opponent={opponent} />
+      <ParticipantIdentityCard participant={side.participant} opponent={opponent} />
     </motion.div>
   );
 }
 
 type Props = {
-  selfName: string;
-  selfElo: number;
-  selfAvatarUrl?: string;
-  selfFallback: string;
-  selfIsAdmin?: boolean;
-  opponentName: string;
-  opponentElo: number;
-  opponentAvatarUrl?: string;
-  opponentFallback: string;
-  opponentIsAdmin?: boolean;
+  sides: MatchSidesView;
   countdownLeft: number;
   damageMultiplier: number;
 };
 
 export default function PrematchVersusOverlay({
-  selfName,
-  selfElo,
-  selfAvatarUrl,
-  selfFallback,
-  selfIsAdmin = false,
-  opponentName,
-  opponentElo,
-  opponentAvatarUrl,
-  opponentFallback,
-  opponentIsAdmin = false,
+  sides,
   countdownLeft,
   damageMultiplier,
 }: Props) {
@@ -83,12 +52,8 @@ export default function PrematchVersusOverlay({
     >
       <div className="flex w-full max-w-5xl flex-col items-center gap-6 md:flex-row md:justify-center md:gap-12">
         <PlayerCard
-          side="left"
-          name={selfName}
-          elo={selfElo}
-          avatarUrl={selfAvatarUrl}
-          fallback={selfFallback}
-          isAdmin={selfIsAdmin}
+          position="left"
+          side={sides.self}
         />
 
         <motion.div
@@ -113,12 +78,8 @@ export default function PrematchVersusOverlay({
         </motion.div>
 
         <PlayerCard
-          side="right"
-          name={opponentName}
-          elo={opponentElo}
-          avatarUrl={opponentAvatarUrl}
-          fallback={opponentFallback}
-          isAdmin={opponentIsAdmin}
+          position="right"
+          side={sides.opponent}
           opponent
         />
       </div>

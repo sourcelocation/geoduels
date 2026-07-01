@@ -2,15 +2,15 @@ import type {
   RoundResultOverlayProps,
   Snapshot,
 } from "../../../components/ui/types";
-import type {
-  ParticipantIdentityView,
-  PlayerIdentityView,
-} from "../../../components/ui/PlayerIdentity";
-import { INITIAL_MMR } from "../../../lib/elo";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
+import { getTeamPresentation } from "../../../lib/team-presentation";
 import { deriveUIPhase } from "../../../lib/uiPhase";
 import type { SessionState } from "../../auth/controllers/session-controller";
 import type { GameState } from "../../game/controllers/game-controller";
+import {
+  deriveMatchSides,
+  withRoundSideResults,
+} from "../../game/model/match-sides";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 import type { MatchState } from "../../matchmaking/controllers/match-controller";
 import type { HomeViewModel } from "./types";
@@ -33,18 +33,6 @@ type Params = {
 
 const SINGLEPLAYER_TOTAL_ROUNDS = 5;
 const DEFAULT_PRESSURE_TIME_MS = 15_000;
-
-function teamName(teamId: string) {
-  return teamId === "b" ? "Team Blue" : "Team Red";
-}
-
-function teamFallback(teamId: string) {
-  return teamId === "b" ? "B" : "R";
-}
-
-function teamColor(teamId: string) {
-  return teamId === "b" ? "#2563eb" : "#dc2626";
-}
 
 export function formatHpPct(maxHP: number, hp: number) {
   return `${Math.max(0, Math.min(100, (hp / maxHP) * 100))}%`;
@@ -91,29 +79,6 @@ function avatarFallback(
 ) {
   if (noLinkedAccount) return "?";
   return (value || fallback).slice(0, 1).toUpperCase();
-}
-
-function fallbackPlayerIdentity(params: {
-  id: string;
-  name: string;
-  avatarUrl?: string;
-  fallback: string;
-  isAdmin?: boolean;
-  selectedBadge?: PlayerIdentityView["selectedBadge"];
-  isGuest?: boolean;
-  rating?: number;
-}): PlayerIdentityView {
-  return {
-    kind: "player",
-    id: params.id,
-    name: params.name,
-    avatarUrl: params.avatarUrl,
-    avatarFallback: params.fallback,
-    isAdmin: params.isAdmin,
-    selectedBadge: params.selectedBadge,
-    isGuest: params.isGuest,
-    rating: params.rating,
-  };
 }
 
 export function deriveHomeModel({
@@ -229,7 +194,12 @@ export function deriveHomeModel({
   const selfPlayer = snapshot?.players?.[selfId];
   const oppPlayer = oppId ? snapshot?.players?.[oppId] : undefined;
   const matchConfig = snapshot?.config || {};
-  const ruleset = matchConfig.ruleset === "nmpz" ? "nmpz" : "moving";
+  const ruleset =
+    matchConfig.ruleset === "nmpz" || matchConfig.ruleset === "no_move"
+      ? matchConfig.ruleset
+      : "moving";
+  const streetNames =
+    matchConfig.streetNames === "hidden" ? "hidden" : "shown";
   const pressureTimeLimitMs =
     typeof matchConfig.pressureTimeLimitMs === "number" &&
     matchConfig.pressureTimeLimitMs > 0
@@ -263,31 +233,18 @@ export function deriveHomeModel({
       : "") ||
     selfQueueName ||
     "You";
-  const opponentName = isTeamDuel ? teamName(oppTeamId) : isFreeForAll ? "Players" : oppPlayer?.displayName || "Opponent";
-  const displaySelfName = isTeamDuel ? teamName(selfTeamId) : selfName;
   const selfElo = selfPlayer?.mmr || auth.mmr;
-  const opponentElo = oppPlayer?.mmr || INITIAL_MMR;
   const selfIsAdmin = !!(selfPlayer?.isAdmin ?? auth.isAdmin);
-  const opponentIsAdmin = !!oppPlayer?.isAdmin;
   const selfSelectedBadge = selfPlayer?.selectedBadge || auth.selectedBadge || null;
-  const opponentSelectedBadge = oppPlayer?.selectedBadge || null;
-  const opponentDisconnected = !!oppPlayer?.disconnected;
-  const selfAvatarUrl = isTeamDuel ? "" : selfPlayer?.avatarUrl || auth.userAvatar;
-  const oppAvatarUrl = isTeamDuel ? "" : oppPlayer?.avatarUrl || "";
   const selfHasNoLinkedAccount =
     !auth.userEmail || !!(selfPlayer?.isGuest ?? auth.isGuest);
   const selfFallback = isTeamDuel
-    ? teamFallback(selfTeamId)
+    ? getTeamPresentation(selfTeamId).fallback
     : avatarFallback(
         selfName || auth.userEmail,
         "Y",
         selfHasNoLinkedAccount,
       );
-  const oppFallback = avatarFallback(
-    isTeamDuel ? teamFallback(oppTeamId) : oppId || opponentName,
-    isTeamDuel ? teamFallback(oppTeamId) : "O",
-    !!oppPlayer?.isGuest,
-  );
   const resultPlayerAvatars: Record<string, string | undefined> = {};
   const resultPlayerFallbacks: Record<string, string | undefined> = {};
   const resultPlayerBorderColors: Record<string, string | undefined> = {};
@@ -295,81 +252,15 @@ export function deriveHomeModel({
   Object.entries(snapshot?.players || {}).forEach(([id, player]) => {
     resultPlayerNames[id] = player.displayName || player.userId;
     resultPlayerAvatars[id] = player.avatarUrl;
-    resultPlayerBorderColors[id] = isTeamDuel ? teamColor(player.teamId || "a") : undefined;
+    resultPlayerBorderColors[id] = isTeamDuel
+      ? getTeamPresentation(player.teamId).color
+      : undefined;
     resultPlayerFallbacks[id] = avatarFallback(
       player.displayName || player.userId,
       "P",
       id === selfId ? selfHasNoLinkedAccount : !!player.isGuest,
     );
   });
-
-  const participantsById: Record<string, ParticipantIdentityView> = {};
-  Object.entries(snapshot?.players || {}).forEach(([id, player]) => {
-    participantsById[id] = fallbackPlayerIdentity({
-      id,
-      name: resultPlayerNames[id] || player.userId,
-      avatarUrl: player.avatarUrl,
-      fallback: resultPlayerFallbacks[id] || "P",
-      isAdmin: player.isAdmin,
-      selectedBadge: player.selectedBadge,
-      isGuest: player.isGuest,
-      rating: player.mmr,
-    });
-  });
-  const selfPlayerIdentity =
-    (participantsById[selfId] as PlayerIdentityView | undefined) ||
-    fallbackPlayerIdentity({
-      id: selfId || "self",
-      name: selfName,
-      avatarUrl: auth.userAvatar,
-      fallback: selfFallback,
-      isAdmin: selfIsAdmin,
-      selectedBadge: selfSelectedBadge,
-      isGuest: selfHasNoLinkedAccount,
-      rating: selfElo,
-    });
-  const opponentPlayerIdentity =
-    (oppId ? (participantsById[oppId] as PlayerIdentityView | undefined) : undefined) ||
-    fallbackPlayerIdentity({
-      id: oppId || "opponent",
-      name: opponentName,
-      avatarUrl: oppAvatarUrl,
-      fallback: oppFallback,
-      isAdmin: opponentIsAdmin,
-      selectedBadge: opponentSelectedBadge,
-      isGuest: !!oppPlayer?.isGuest,
-      rating: opponentElo,
-    });
-  const selfParticipant: ParticipantIdentityView = isTeamDuel
-    ? {
-        kind: "team",
-        id: selfTeamId,
-        name: displaySelfName,
-        avatarFallback: teamFallback(selfTeamId),
-        avatarColor: teamColor(selfTeamId),
-        members: Object.values(participantsById).filter(
-          (participant): participant is PlayerIdentityView =>
-            participant.kind === "player" &&
-            snapshot?.players?.[participant.id]?.teamId === selfTeamId,
-        ),
-        hp: selfTeamHP,
-      }
-    : selfPlayerIdentity;
-  const opponentParticipant: ParticipantIdentityView = isTeamDuel
-    ? {
-        kind: "team",
-        id: oppTeamId || "opponent",
-        name: opponentName,
-        avatarFallback: teamFallback(oppTeamId),
-        avatarColor: teamColor(oppTeamId),
-        members: Object.values(participantsById).filter(
-          (participant): participant is PlayerIdentityView =>
-            participant.kind === "player" &&
-            snapshot?.players?.[participant.id]?.teamId === oppTeamId,
-        ),
-        hp: oppTeamHP,
-      }
-    : opponentPlayerIdentity;
 
   const resultSelf =
     roundResult && selfId ? roundResult.players[selfId] : undefined;
@@ -444,6 +335,32 @@ export function deriveHomeModel({
         ? opponentRatingPreview?.win
         : opponentRatingPreview?.draw;
 
+  const derivedSides = deriveMatchSides({
+    snapshot,
+    selfUserId: selfId,
+    fallbackSelf: {
+      id: selfId || "self",
+      name: selfName,
+      avatarUrl: auth.userAvatar,
+      avatarFallback: selfFallback,
+      isAdmin: selfIsAdmin,
+      isGuest: selfHasNoLinkedAccount,
+      selectedBadge: selfSelectedBadge,
+      rating: selfElo,
+    },
+    competitive: {
+      selfRatingDelta: selfReceivesEloDelta ? selfEloDelta : undefined,
+      opponentRatingDelta: opponentReceivesEloDelta
+        ? opponentEloDelta
+        : undefined,
+      selfRatingPreview,
+      opponentRatingPreview,
+    },
+  });
+  const participantsById = derivedSides.playersById;
+  const sides = derivedSides.sides;
+  const resultSides = withRoundSideResults(sides, roundResult);
+
   let resultOverlay: Omit<RoundResultOverlayProps, "mapNode"> | undefined;
   if (roundResult && !isPointsMode) {
     resultOverlay = {
@@ -453,22 +370,14 @@ export function deriveHomeModel({
       winner: resultWinner,
       damage: resultDamage,
       damageMultiplier,
-      players: {
+      sides: {
         self: {
-          name: displaySelfName,
-          avatarUrl: selfAvatarUrl,
-          fallback: selfFallback,
+          ...resultSides.self,
           hp: game.resultShownHP.self,
-          score: overlaySelfScore,
-          distanceKm: overlaySelfDistanceKm,
         },
-        opp: {
-          name: opponentName,
-          avatarUrl: oppAvatarUrl,
-          fallback: oppFallback,
+        opponent: {
+          ...resultSides.opponent,
           hp: game.resultShownHP.opp,
-          score: overlayOppScore,
-          distanceKm: overlayOppDistanceKm,
         },
       },
       hpPct: (hp) => formatHpPct(config.maxHP, hp),
@@ -482,7 +391,7 @@ export function deriveHomeModel({
       userEmail: auth.userEmail,
       displayName: auth.displayName,
       userAvatar: auth.userAvatar,
-      onboardingRequired: auth.onboardingRequired,
+      nicknameRequired: auth.nicknameRequired,
       authMigrationRequired: auth.authMigrationRequired,
       recoveryAvailable: auth.recoveryAvailable,
       linkedProviders: auth.linkedProviders,
@@ -521,7 +430,7 @@ export function deriveHomeModel({
       changelogMarkdown,
       changelogSlug,
       changelogUpdatedAt,
-      privateLobby: {
+      party: {
         status: "idle",
         snapshot: null,
         inviteCode: "",
@@ -547,22 +456,8 @@ export function deriveHomeModel({
       resultPlayerFallbacks,
       resultPlayerNames,
       participantsById,
-      selfParticipant,
-      opponentParticipant,
+      sides,
       resultPlayerBorderColors,
-      selfName: displaySelfName,
-      selfAvatarUrl,
-      selfFallback,
-      selfAvatarColor: isTeamDuel ? teamColor(selfTeamId) : undefined,
-      selfIsAdmin,
-      selfSelectedBadge,
-      opponentName,
-      opponentIsAdmin,
-      opponentSelectedBadge,
-      opponentDisconnected,
-      oppAvatarUrl,
-      oppFallback,
-      oppAvatarColor: isTeamDuel ? teamColor(oppTeamId) : undefined,
       mm,
       ss,
       isRoundTimerRunning,
@@ -582,10 +477,6 @@ export function deriveHomeModel({
       currentRoundNumber,
       totalRounds: isSingleplayer || isFreeForAll ? SINGLEPLAYER_TOTAL_ROUNDS : undefined,
       userAvatar: auth.userAvatar,
-      selfElo,
-      opponentElo,
-      selfRatingPreview,
-      opponentRatingPreview,
       damageMultiplier,
       guessSubmitted: game.guessSubmitted,
       opponentGuessAlert: isPointsMode ? false : game.opponentGuessAlert,
@@ -598,9 +489,16 @@ export function deriveHomeModel({
             ? "Free for All"
         : ruleset === "nmpz"
           ? "NMPZ"
-          : "Moving",
-      mapName: ruleset === "nmpz" ? "A Location World" : "A Source World",
+          : ruleset === "no_move"
+            ? "No Move"
+            : "Moving",
+      mapName: match.snapshot?.config?.mapName || (ruleset === "nmpz" ? "A Location World" : "A Source World"),
+      backLabel: match.sourcePartyInviteCode
+        ? "Back to party"
+        : "Back to lobby",
       streetViewInteractive: ruleset !== "nmpz",
+      ruleset,
+      streetNames,
       selfUserId: selfId,
     },
     chat: {
@@ -610,7 +508,7 @@ export function deriveHomeModel({
       error: "",
     },
     overlays: {
-      onboardingOpen: auth.onboardingRequired && !!auth.userId,
+      nicknameRequiredOpen: auth.nicknameRequired && !!auth.userId,
       notifications: [],
       guestVerification: {
         open: false,
@@ -625,27 +523,11 @@ export function deriveHomeModel({
               open: true,
               mode,
               outcome: isPointsMode ? undefined : matchOutcome,
-              selfName,
-              opponentName: isPointsMode ? undefined : opponentName,
-              opponentUserId: isPointsMode ? undefined : oppId,
-              selfElo: isPointsMode ? undefined : selfElo,
-              opponentElo: isPointsMode ? undefined : opponentElo,
-              selfEloDelta: selfReceivesEloDelta ? selfEloDelta : undefined,
-              opponentEloDelta: opponentReceivesEloDelta
-                ? opponentEloDelta
-                : undefined,
-              selfHP,
-              oppHP: isPointsMode ? undefined : oppHP,
-              selfAvatarUrl,
-              oppAvatarUrl: isPointsMode ? undefined : oppAvatarUrl,
-              selfFallback,
-              oppFallback: isPointsMode ? undefined : oppFallback,
-              selfAvatarColor: isTeamDuel ? teamColor(selfTeamId) : undefined,
-              oppAvatarColor: isTeamDuel && oppTeamId ? teamColor(oppTeamId) : undefined,
-              selfIsAdmin,
-              opponentIsAdmin: isPointsMode ? undefined : opponentIsAdmin,
-              selfSelectedBadge,
-              opponentSelectedBadge: isPointsMode ? undefined : opponentSelectedBadge,
+              sides: {
+                self: { ...sides.self, hp: selfHP },
+                opponent: { ...sides.opponent, hp: oppHP },
+              },
+              selfUserId: selfId,
               totalScore,
               roundResults,
               resultPlayerNames,
@@ -653,14 +535,16 @@ export function deriveHomeModel({
               resultPlayerFallbacks,
               resultPlayerBorderColors,
               participantsById,
-              selfParticipant,
-              opponentParticipant,
+              matchConfig: snapshot?.config,
+              backLabel: match.sourcePartyInviteCode
+                ? "Back to party"
+                : "Back to lobby",
             }
           : { open: false },
     },
     meta: {
       activeMatchId,
-      sourceLobbyInviteCode: match.sourceLobbyInviteCode,
+      sourcePartyInviteCode: match.sourcePartyInviteCode,
       appVersion: config.appVersion,
       maxHP: config.maxHP,
     },

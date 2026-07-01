@@ -6,7 +6,7 @@ import { initialMatchmakingState, matchmakingReducer, type MatchmakingAction, ty
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
 import { GameplaySocketClient } from '../lib/gameplay-socket-client';
-import { fetchMatchSession, startSingleplayerSession, streamQueue, type GameRuleset } from '../lib/queue-client';
+import { fetchMatchSession, startSingleplayerSession, streamQueue, type MatchConfig, type QueueVariant } from '../lib/queue-client';
 
 type SendGameCommandOptions = {
   errorMessage?: string;
@@ -18,9 +18,10 @@ export type MatchState = {
   matchmaking: MatchmakingState;
   connected: boolean;
   snapshot: Snapshot | null;
+  lastFinalizedMatchId?: string;
   activeMatchId: string;
-  sourceLobbyId: string;
-  sourceLobbyInviteCode: string;
+  sourcePartyId: string;
+  sourcePartyInviteCode: string;
   queueError: string;
   connectionIssue: string;
   onlinePlayers: number;
@@ -30,9 +31,10 @@ const initialState: MatchState = {
   matchmaking: initialMatchmakingState,
   connected: false,
   snapshot: null,
+  lastFinalizedMatchId: '',
   activeMatchId: '',
-  sourceLobbyId: '',
-  sourceLobbyInviteCode: '',
+  sourcePartyId: '',
+  sourcePartyInviteCode: '',
   queueError: '',
   connectionIssue: '',
   onlinePlayers: 0
@@ -102,9 +104,25 @@ export class MatchController extends ObservableStore<MatchState> {
           this.firstSnapshotRecoverAttempts = 0;
         }
         this.noteServerActivity();
+        if (snapshot.state === 'ended') {
+          const selfUserId =
+            this.activeSession?.userId ||
+            this.sessionController.getState().userId;
+          const selfPlayer = snapshot.players?.[selfUserId];
+          if (selfPlayer && !selfPlayer.isGuest) {
+            this.sessionController.applyCommittedRating(
+              selfPlayer.mmr,
+              selfPlayer.ratingRd,
+            );
+          }
+        }
         this.patchState({
           activeMatchId: snapshot.matchId || this.state.activeMatchId,
-          snapshot
+          snapshot,
+          lastFinalizedMatchId:
+            snapshot.state === 'ended'
+              ? snapshot.matchId
+              : this.state.lastFinalizedMatchId,
         });
       },
       onAckError: (message) => {
@@ -227,9 +245,10 @@ export class MatchController extends ObservableStore<MatchState> {
       ...this.state,
       connected: false,
       snapshot: null,
+      lastFinalizedMatchId: '',
       activeMatchId: '',
-      sourceLobbyId: '',
-      sourceLobbyInviteCode: '',
+      sourcePartyId: '',
+      sourcePartyInviteCode: '',
       queueError: '',
       connectionIssue: '',
     });
@@ -240,7 +259,7 @@ export class MatchController extends ObservableStore<MatchState> {
   };
 
   private async startRecover(session: AuthSessionSnapshot) {
-    if (!session.userId || !session.accessToken || session.onboardingRequired) return;
+    if (!session.userId || !session.accessToken || session.nicknameRequired) return;
     if (this.recoverInFlight || this.state.matchmaking.activeRecoverRequestID !== null) return;
 
     const requestID = ++this.recoverRequestId;
@@ -278,8 +297,8 @@ export class MatchController extends ObservableStore<MatchState> {
           hasSnapshot: !!this.state.snapshot
         });
         this.connectToAssignedGame(recoveredSession, resolved.node, resolved.wsPath, resolved.ticket, resolved.matchId, {
-          sourceLobbyId: resolved.sourceLobbyId,
-          sourceLobbyInviteCode: resolved.sourceLobbyInviteCode
+          sourcePartyId: resolved.sourcePartyId,
+          sourcePartyInviteCode: resolved.sourcePartyInviteCode
         });
         return;
       }
@@ -333,14 +352,15 @@ export class MatchController extends ObservableStore<MatchState> {
     wsPath: string,
     ticket: string,
     matchId?: string,
-    source?: { sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+    source?: { sourcePartyId?: string; sourcePartyInviteCode?: string }
   ) {
     if (!session.userId || !session.accessToken) return;
     this.activeSession = session;
     this.patchState({
       activeMatchId: matchId || this.state.activeMatchId,
-      sourceLobbyId: source?.sourceLobbyId || '',
-      sourceLobbyInviteCode: source?.sourceLobbyInviteCode || ''
+      lastFinalizedMatchId: '',
+      sourcePartyId: source?.sourcePartyId || '',
+      sourcePartyInviteCode: source?.sourcePartyInviteCode || ''
     });
     this.socketClient.connect(session, node, wsPath, ticket);
     this.startFirstSnapshotTimeout(matchId || this.state.activeMatchId);
@@ -376,7 +396,7 @@ export class MatchController extends ObservableStore<MatchState> {
   }
 
   resumeResolvedMatch = async (
-    assignment: { matchId: string; node: string; wsPath: string; ticket: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string },
+    assignment: { matchId: string; node: string; wsPath: string; ticket: string; sourcePartyId?: string; sourcePartyInviteCode?: string },
     options?: { playMatchFoundSfx?: boolean }
   ) => {
     const session = this.sessionController.getSessionSnapshot() || (await this.sessionController.ensureFreshSession());
@@ -389,13 +409,13 @@ export class MatchController extends ObservableStore<MatchState> {
       this.playMatchFoundSfx();
     }
     this.connectToAssignedGame(session, assignment.node, assignment.wsPath, assignment.ticket, assignment.matchId, {
-      sourceLobbyId: assignment.sourceLobbyId,
-      sourceLobbyInviteCode: assignment.sourceLobbyInviteCode
+      sourcePartyId: assignment.sourcePartyId,
+      sourcePartyInviteCode: assignment.sourcePartyInviteCode
     });
     return true;
   };
 
-  joinQueue = (rulesets: GameRuleset[] = ['moving']) => {
+  joinQueue = (queues: QueueVariant[] = ['moving']) => {
     this.recoverAbort?.abort();
     this.queueAbort?.abort();
     this.patchState({ queueError: '' });
@@ -411,7 +431,7 @@ export class MatchController extends ObservableStore<MatchState> {
           return;
         }
         this.dispatchMatchmaking({ type: 'join_requested', startedAt: Date.now() });
-        await streamQueue(this.config, session, controller.signal, rulesets, (event) => {
+        await streamQueue(this.config, session, controller.signal, queues, (event) => {
           if (event.type === 'queue_status') {
             this.dispatchMatchmaking({ type: 'queue_status', status: event.status, queuedAt: event.queuedAt });
             return;
@@ -423,8 +443,8 @@ export class MatchController extends ObservableStore<MatchState> {
             this.playMatchFoundSfx();
             if (event.node && event.ticket) {
               this.connectToAssignedGame(session, event.node, event.wsPath, event.ticket, event.matchId, {
-                sourceLobbyId: event.sourceLobbyId,
-                sourceLobbyInviteCode: event.sourceLobbyInviteCode
+                sourcePartyId: event.sourcePartyId,
+                sourcePartyInviteCode: event.sourcePartyInviteCode
               });
             }
             return;
@@ -445,7 +465,7 @@ export class MatchController extends ObservableStore<MatchState> {
     })();
   };
 
-  startSingleplayer = async () => {
+  startSingleplayer = async (matchConfig?: MatchConfig) => {
     if (this.singleplayerStartInFlight) {
       return '';
     }
@@ -464,7 +484,7 @@ export class MatchController extends ObservableStore<MatchState> {
         this.dispatchMatchmaking({ type: 'set_status', status: 'ready' });
         return '';
       }
-      const assignment = await startSingleplayerSession(this.config, session.accessToken, controller.signal);
+      const assignment = await startSingleplayerSession(this.config, session.accessToken, controller.signal, matchConfig);
       if (!assignment.node || !assignment.ticket) {
         throw new Error('Singleplayer unavailable');
       }

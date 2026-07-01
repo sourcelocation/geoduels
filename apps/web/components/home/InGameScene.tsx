@@ -1,42 +1,34 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, LogOut, RotateCcw, X } from 'lucide-react';
+import { AlertTriangle, Flag, LogOut, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from 'react';
 import GameHUD from '../ui/GameHUD';
 import MinimapPanel from '../ui/MinimapPanel';
-import PlayerHPCard from '../ui/PlayerHPCard';
+import MatchSideHPCard from '../ui/MatchSideHPCard';
 import RoundResultOverlay from '../ui/RoundResultOverlay';
 import GameStartOverlay from '../ui/GameStartOverlay';
 import DuelOverlayBackground from '../ui/DuelOverlayBackground';
 import IntroCountdownText from '../ui/IntroCountdownText';
-import { PlayerIdentityRow } from '../ui/PlayerIdentity';
+import { ParticipantIdentityRow } from '../ui/ParticipantIdentity';
 import { motionPresetClass } from '../ui/motion';
 import { ResultDistanceBar } from '../ui/RoundResultOverlay';
-import type { RatingDeltaPreview, RoundResultOverlayProps, UIPhase } from '../ui/types';
-import type { PlayerBadgeInfo } from '../ui/PlayerBadge';
-import type { ParticipantIdentityView } from '../ui/PlayerIdentity';
+import type { RoundResultOverlayProps, UIPhase } from '../ui/types';
+import type { MatchSidesView, PlayerIdentityView } from '../ui/ParticipantIdentity';
+import { StreetViewEnhancements } from '../../features/browser-extension/components/StreetViewEnhancements';
+import { useGeoDuelsExtension } from '../../features/browser-extension/hooks/use-geoduels-extension';
 
 export type InGameSceneProps = {
   uiPhase: UIPhase;
   streetViewSrc: string;
   streetViewInteractive: boolean;
+  ruleset: "moving" | "no_move" | "nmpz";
+  streetNames: "shown" | "hidden";
   showResultStage: boolean;
   isSingleplayer: boolean;
   isPointsMode: boolean;
   partyMode?: "duel" | "team_duel" | "free_for_all";
+  backLabel?: string;
   resultOverlay?: RoundResultOverlayProps;
-  selfName: string;
-  selfAvatarUrl?: string;
-  selfFallback: string;
-  selfAvatarColor?: string;
-  selfIsAdmin: boolean;
-  selfSelectedBadge?: PlayerBadgeInfo | null;
-  opponentName: string;
-  opponentIsAdmin: boolean;
-  opponentSelectedBadge?: PlayerBadgeInfo | null;
-  opponentDisconnected: boolean;
-  oppAvatarUrl?: string;
-  oppFallback: string;
-  oppAvatarColor?: string;
+  sides: MatchSidesView;
   hpPct: (hp: number) => string;
   mm: string;
   ss: string;
@@ -62,10 +54,7 @@ export type InGameSceneProps = {
   resultPlayerNames?: Record<string, string | undefined>;
   resultPlayerAvatars?: Record<string, string | undefined>;
   resultPlayerFallbacks?: Record<string, string | undefined>;
-  participantsById?: Record<string, ParticipantIdentityView>;
-  selfElo: number;
-  opponentElo: number;
-  selfRatingPreview?: RatingDeltaPreview;
+  participantsById?: Record<string, PlayerIdentityView>;
   damageMultiplier: number;
   guessSubmitted: boolean;
   opponentGuessAlert: boolean;
@@ -77,28 +66,43 @@ export type InGameSceneProps = {
   selfUserId: string;
 };
 
+function buildExtensionStreetViewSrc(
+  streetViewSrc: string,
+  ruleset: InGameSceneProps["ruleset"],
+  streetNames: InGameSceneProps["streetNames"],
+) {
+  if (!streetViewSrc) return streetViewSrc;
+  try {
+    const url = new URL(streetViewSrc);
+    const hashParams = new URLSearchParams(url.hash.slice(1));
+    hashParams.set(
+      "geoduels",
+      JSON.stringify({
+        version: 1,
+        ruleset,
+        streetNames,
+      }),
+    );
+    url.hash = hashParams.toString();
+    return url.toString();
+  } catch {
+    return streetViewSrc;
+  }
+}
+
 export default function InGameScene({
   uiPhase,
   streetViewSrc,
   streetViewInteractive,
+  ruleset,
+  streetNames,
   showResultStage,
   isSingleplayer,
   isPointsMode,
   partyMode = "duel",
+  backLabel = "Back to lobby",
   resultOverlay,
-  selfName,
-  selfAvatarUrl,
-  selfFallback,
-  selfAvatarColor,
-  selfIsAdmin,
-  selfSelectedBadge,
-  opponentName,
-  opponentIsAdmin,
-  opponentSelectedBadge,
-  opponentDisconnected,
-  oppAvatarUrl,
-  oppFallback,
-  oppAvatarColor,
+  sides,
   hpPct,
   mm,
   ss,
@@ -125,9 +129,6 @@ export default function InGameScene({
   resultPlayerAvatars = {},
   resultPlayerFallbacks = {},
   participantsById = {},
-  selfElo,
-  opponentElo,
-  selfRatingPreview,
   damageMultiplier,
   guessSubmitted,
   opponentGuessAlert,
@@ -144,6 +145,18 @@ export default function InGameScene({
   const [streetViewResetCount, setStreetViewResetCount] = useState(0);
   const sceneRef = useRef<HTMLElement | null>(null);
   const streetViewFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const streetViewFrameSrc = useMemo(
+    () => buildExtensionStreetViewSrc(streetViewSrc, ruleset, streetNames),
+    [streetNames, streetViewSrc, ruleset],
+  );
+  const extension = useGeoDuelsExtension(
+    streetViewFrameRef,
+    streetViewFrameSrc,
+    ruleset,
+    streetNames,
+  );
+  const extensionRequired = ruleset === "no_move" || streetNames === "hidden";
+  const streetViewReady = !extensionRequired || extension.configured;
   const canShowForfeit = uiPhase !== 'match_end';
   const disableStreetViewTabbing = !streetViewInteractive;
   const utilityControlPosition = 'absolute left-3 top-3 z-40 pointer-events-auto md:bottom-4 md:left-4 md:top-auto';
@@ -178,7 +191,7 @@ export default function InGameScene({
         name: resultPlayerNames[id] || 'Unknown',
         avatarUrl: resultPlayerAvatars[id],
         avatarFallback: resultPlayerFallbacks[id] || '?',
-      } as ParticipantIdentityView,
+      } as PlayerIdentityView,
       ...stats
     }));
     arr.sort((a, b) => b.score - a.score);
@@ -248,10 +261,10 @@ export default function InGameScene({
       {(uiPhase === 'live_round' || uiPhase === 'prematch_countdown') && (
         <div className="absolute inset-0 overflow-hidden">
           <iframe
-            key={`${streetViewSrc}-${streetViewResetCount}`}
+            key={`${streetViewFrameSrc}-${streetViewResetCount}`}
             ref={streetViewFrameRef}
             title="Street View"
-            src={streetViewSrc}
+            src={streetViewFrameSrc}
             tabIndex={disableStreetViewTabbing ? -1 : undefined}
             onFocus={disableStreetViewTabbing ? releaseStreetViewFocus : undefined}
             className={`absolute left-0 top-[-75px] h-[calc(100%+75px)] w-full border-0 ${streetViewInteractive ? '' : 'pointer-events-none'}`}
@@ -259,8 +272,38 @@ export default function InGameScene({
             loading="eager"
           />
           {!streetViewInteractive ? <div className="absolute inset-0 z-[1]" aria-hidden="true" /> : null}
+          {!streetViewReady ? (
+            <div className="absolute inset-0 z-[2] grid place-items-center bg-[#071018] px-6 text-center text-sm font-bold text-white/75">
+              {extension.unsupportedVersion ? (
+                "Update the official extension to keep playing this mode."
+              ) : extension.timedOut ? (
+                <div className="flex flex-col items-center gap-3">
+                  <span>Couldn&apos;t reach the official extension.</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      extension.retry();
+                      setStreetViewResetCount((count) => count + 1);
+                    }}
+                    className="rounded-full bg-white/10 px-4 py-2 text-white transition hover:bg-white/20"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                "Preparing official extension…"
+              )}
+            </div>
+          ) : null}
         </div>
       )}
+
+      {extension.available && extension.capabilities ? (
+        <StreetViewEnhancements
+          capabilities={extension.capabilities}
+          heading={extension.heading}
+        />
+      ) : null}
 
       <AnimatePresence>
         {showResultStage && resultOverlay && <RoundResultOverlay {...resultOverlay} />}
@@ -288,19 +331,7 @@ export default function InGameScene({
             modeName={modeName}
             mapName={mapName}
             countdownSec={countdownSec}
-            selfName={selfName}
-            selfElo={selfElo}
-            selfRatingPreview={selfRatingPreview}
-            selfAvatarUrl={selfAvatarUrl}
-            selfFallback={selfFallback}
-            selfIsAdmin={selfIsAdmin}
-            selfSelectedBadge={selfSelectedBadge}
-            oppName={opponentName}
-            oppElo={opponentElo}
-            oppAvatarUrl={oppAvatarUrl}
-            oppFallback={oppFallback}
-            oppIsAdmin={opponentIsAdmin}
-            oppSelectedBadge={opponentSelectedBadge}
+            sides={sides}
             isFreeForAll={partyMode === 'free_for_all'}
           />
         )}
@@ -329,6 +360,10 @@ export default function InGameScene({
               isTimerCritical={isTimerCritical}
               isTimerPulseActive={isTimerPulseActive}
               hideMultiplier={partyMode === "free_for_all"}
+              hasTopCompass={
+                extension.available &&
+                extension.capabilities?.heading === true
+              }
             />
           </motion.div>
         )}
@@ -350,33 +385,16 @@ export default function InGameScene({
         </div>
       ) : (
         <>
-          <PlayerHPCard
-            side="left"
-            name={selfName}
-            elo={selfElo}
-            hideElo={partyMode === "team_duel"}
-            hp={selfHP}
+          <MatchSideHPCard
+            position="left"
+            side={{ ...sides.self, hp: selfHP }}
             hpPct={hpPct(selfHP)}
-            avatarUrl={selfAvatarUrl}
-            fallback={selfFallback}
-            avatarColor={selfAvatarColor}
-            isAdmin={selfIsAdmin}
-            selectedBadge={selfSelectedBadge}
           />
-          <PlayerHPCard
-            side="right"
-            name={opponentName}
-            elo={opponentElo}
-            hideElo={partyMode === "team_duel"}
-            hp={oppHP}
+          <MatchSideHPCard
+            position="right"
+            side={{ ...sides.opponent, hp: oppHP }}
             hpPct={hpPct(oppHP)}
-            avatarUrl={oppAvatarUrl}
-            fallback={oppFallback}
-            avatarColor={oppAvatarColor}
-            isAdmin={opponentIsAdmin}
-            selectedBadge={opponentSelectedBadge}
             opponent
-            disconnected={opponentDisconnected}
           />
         </>
       )}
@@ -445,7 +463,7 @@ export default function InGameScene({
                     aria-label="Return to spawn location"
                     className="flex h-11 w-11 items-center justify-center rounded-full bg-hudBg text-white/80 shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10 hover:text-white"
                   >
-                    <RotateCcw size={16} strokeWidth={2.4} />
+                    <Flag size={16} strokeWidth={2.4} />
                   </button>
                 ) : null}
                 <button
@@ -528,7 +546,7 @@ export default function InGameScene({
                           <td className="py-2 px-3 text-center font-bold text-[#8caab0]">{idx + 1}</td>
                           <td className="py-2 px-3">
                             <div className="flex items-center gap-2">
-                              <PlayerIdentityRow
+                              <ParticipantIdentityRow
                                 participant={player.participant}
                                 nameClassName={player.id === selfUserId ? 'font-black text-[#7dc3ff]' : 'font-bold'}
                               />
@@ -548,9 +566,9 @@ export default function InGameScene({
                 animate={{ y: 0, opacity: 1, scale: 1 }}
                 transition={{ duration: 0.22, ease: 'easeOut', delay: 0.12 }}
                 onClick={canAdvanceRound ? onAdvanceRound : onLeaveGame}
-                className="mx-auto inline-flex items-center justify-center rounded-[16px] bg-[#22d385] px-8 py-[16px] text-[16px] font-extrabold uppercase tracking-[0.08em] text-white shadow-[0_4px_16px_rgba(34,211,133,0.3)] transition-all duration-200 hover:scale-[1.01] hover:bg-[#2ae091] hover:shadow-[0_6px_24px_rgba(34,211,133,0.4)] active:scale-[0.98]"
+                className="mx-auto inline-flex items-center justify-center rounded-[16px] bg-accentPrimary px-8 py-[16px] text-[16px] font-extrabold uppercase tracking-[0.08em] text-white shadow-[0_4px_16px_rgba(42,209,143,0.3)] transition-all duration-200 hover:scale-[1.01] hover:bg-accentPrimaryDeep hover:shadow-[0_6px_24px_rgba(42,209,143,0.4)] active:scale-[0.98]"
               >
-                {canAdvanceRound ? 'Next Round' : 'Back To Lobby'}
+                {canAdvanceRound ? 'Next Round' : backLabel}
               </motion.button>
             )}
           </div>

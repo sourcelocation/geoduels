@@ -126,21 +126,21 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
 
   private buildSessionSnapshot(auth: {
     accessToken?: string;
-    onboardingRequired?: boolean;
+    nicknameRequired?: boolean;
     suggestedNickname?: string;
     user?: { id?: string };
   }): AuthSessionSnapshot {
     return {
       userId: typeof auth.user?.id === 'string' ? auth.user.id : '',
       accessToken: auth.accessToken || '',
-      onboardingRequired: !!auth.onboardingRequired,
+      nicknameRequired: !!auth.nicknameRequired,
       nicknameInput: auth.suggestedNickname || ''
     };
   }
 
   private applyBootstrappedAuth(auth: {
     accessToken?: string;
-    onboardingRequired?: boolean;
+    nicknameRequired?: boolean;
     suggestedNickname?: string;
     user?: {
       id?: string;
@@ -165,10 +165,10 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
           node: resolved.node,
           wsPath: resolved.wsPath,
           ticket: resolved.ticket,
-          ...(resolved.sourceLobbyInviteCode
+          ...(resolved.sourcePartyInviteCode
             ? {
-                sourceLobbyId: resolved.sourceLobbyId,
-                sourceLobbyInviteCode: resolved.sourceLobbyInviteCode
+                sourcePartyId: resolved.sourcePartyId,
+                sourcePartyInviteCode: resolved.sourcePartyInviteCode
               }
             : {})
         });
@@ -221,7 +221,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
         return;
       }
 
-      const session = await this.sessionController.ensureFreshSession(60_000, { allowOnboarding: false });
+      const session = await this.sessionController.ensureFreshSession(60_000, { allowNicknameRequired: false });
       if (!session) {
         if (seq === this.resolveSeq && this.state.targetMatchId === matchId) {
           this.patchState({ status: 'forbidden' });

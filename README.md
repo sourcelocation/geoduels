@@ -11,17 +11,18 @@ https://geoduels.io/
 ### Runtime topology
 
 - `apps/web` (Next.js): browser UI and gameplay shell.
-- `services/api` (Go): auth/session/profile endpoints and backend API surface (`/v1`).
-- `services/match-coordinator` (Go): matchmaking over websocket (`/queue`), assignment, maintenance status, and recovery (`/v1/session/recover`).
+- `services/api` (Go): auth/session/profile, public player profiles, maps, parties, match history, moderation/admin, content, and support APIs (`/v1`).
+- `services/match-coordinator` (Go): matchmaking over websocket (`/queue`), party coordination/chat, assignment, presence, and maintenance status. Resumable-session lookup is exposed by the API at `/v1/session/resumable`.
 - `services/realtime-gateway` (Go): websocket gatewaying (`/ws/{node}`) to the assigned gameplay node.
 - `services/gameplay-node` (Go): round engine and authoritative match state broadcast for assigned matches.
-- `workers/location-ingest` (Go): one-off/cron worker that validates and ingests location datasets into PostgreSQL.
+- `services/moderation-worker` (Go): background moderation projection and enforcement processing.
+- `services/discord-worker` (Go): Discord role synchronization and membership badge processing.
+- `workers/storage-maintenance` (Go): replay compression, retention cleanup, and other bounded storage maintenance.
 
 ### Data and state
 
-- PostgreSQL: source of truth for persistent data (profiles, stats, location catalog, match persistence).
+- PostgreSQL: source of truth for profiles, stats, user maps and their current location datasets, round plans, and match persistence.
 - Redis: queue and distributed coordination state for matchmaking and gameplay node ownership.
-- Dataset JSON files (`datasets/*.json`): seed source for location ingest.
 
 ### Network flow
 
@@ -31,6 +32,19 @@ https://geoduels.io/
 4. `match-coordinator` assigns a match + gameplay route and issues ticket.
 5. Browser upgrades to websocket through `realtime-gateway` (`/ws/{node}`), which proxies to the assigned `gameplay-node`.
 6. `gameplay-node` runs duel engine and broadcasts authoritative snapshots.
+
+Before step 4, the launching service locks the selected map while reading its current locations and persists the match's complete round plan. Gameplay pods receive that bounded plan and never preload map catalogs.
+
+## Custom maps
+
+- Signed-in non-guest accounts upload JSON through `/v1/maps`; uploads are validated and normalized directly into PostgreSQL, and the source file is discarded.
+- Creator trust tiers enforce transactional quotas:
+  - base: 10 maps, 200,000 active locations, 10 uploads/hour, and 30 uploads/day
+  - trusted: 25 maps, 500,000 active locations, 10 uploads/hour, and 30 uploads/day
+  - established: 100 maps, 1,000,000 active locations, 10 uploads/hour, and 30 uploads/day
+- Trust advances from account age and qualified favorites/maps. Moderation restrictions force the base tier, and administrators can apply a tier override.
+- A replacement upload atomically swaps the map's current locations. The current tier's active-location allowance is also the per-map location ceiling.
+- Ranked duels always use the official server-selected map. Private lobbies may select an accessible ready map independently from movement rules.
 
 ### Match route flow
 
@@ -66,8 +80,9 @@ Production images are built from service Dockerfiles and pushed to registry:
 - `geoduels-match-coordinator`
 - `geoduels-realtime-gateway`
 - `geoduels-gameplay-node`
+- `geoduels-moderation-worker`
+- `geoduels-discord-worker`
 - `geoduels-web`
-- `geoduels-location-ingest`
 
 ## Maintenance and draining
 
@@ -95,15 +110,28 @@ cp .env.example .env
 cp apps/web/.env.local.example apps/web/.env.local
 docker compose up -d postgres redis
 ./scripts/migrate.sh up
-POSTGRES_URL='postgres://geoduels:geoduels@127.0.0.1:5432/geoduels?sslmode=disable' \
-  go run ./workers/location-ingest \
-  -dataset datasets/a-source-world.sample.json \
-  -map-key a-source-world
 docker compose up -d gameplay-node match-coordinator realtime-gateway api
-cd apps/web && npm ci && npm run dev
+cd apps/web
+npm ci
+npm run dev
 ```
 
-The tracked sample map at `datasets/a-source-world.sample.json` contains 10 public landmark locations so contributors can launch a playable local stack without private location data. To use a larger local dataset, keep it in ignored `datasets/*.json` and pass that path to `workers/location-ingest`.
+Create and manage maps through the web map administration UI.
+
+For bulk official country maps generated from a local Vali install, use the
+dry-run-first pipeline in [`docs/map-imports.md`](docs/map-imports.md).
+
+To remove stale or unavailable Street View panoramas from a Vali export, validate it before uploading through the web UI:
+
+```bash
+cd apps/web
+npm ci
+GOOGLE_MAPS_API_KEY='server-key' npm run validate:streetview -- \
+  --input ../../datasets/world.json \
+  --output ../../datasets/world.clean.json
+```
+
+The key must have Street View Static API enabled and should be restricted to that API and, where practical, the machine's IP address. The validator calls only Google's no-charge Street View metadata endpoint and never requests imagery. Deleted panorama IDs are refreshed from their saved coordinates against the nearest outdoor panorama within 50 meters. The run is resumable through an append-only checkpoint and writes refreshed IDs and rejected locations beside the clean output.
 
 Endpoints:
 
@@ -111,6 +139,17 @@ Endpoints:
 - API health: `http://localhost:8080/health`
 - Queue health: `http://localhost:8090/health`
 - Gameplay health: `http://localhost:8091/health`
+- Realtime health: `http://localhost:8092/health`
+- Moderation worker health, when started: `http://localhost:8093/health`
+- Discord worker health, when started: `http://localhost:8094/health`
+
+The core playable stack is `gameplay-node`, `match-coordinator`, `realtime-gateway`, and `api`. Start the background workers when exercising their features:
+
+```bash
+docker compose up -d moderation-worker discord-worker
+```
+
+`discord-worker` requires the Discord bot and guild environment variables from `.env`.
 
 Stop:
 
@@ -140,11 +179,46 @@ Triggered by git tag push.
 6. Merge the generated release PR to trigger production rollout through Flux.
 7. Run post-deploy health checks for `/health`, queue flow, and websocket gameplay.
 
+### Storage optimization migration
+
+Migration 42 removes redundant match guesses/indexes, converts map locations to compact fixed-width values, and stores new replays as Zstandard-compressed PostgreSQL blobs with 30-day retention. Apply it during a write maintenance window.
+
+The compaction helper intentionally requires the database to be exactly at schema version 42. During an upgrade from an older schema, apply migration 42 by itself, start the migration-42-compatible application, run smoke tests, stop writes, compact, and only then apply migrations 43 and later:
+
+```bash
+CONFIRM_STORAGE_COMPACTION=yes \
+MIGRATIONS_DB_URL='postgres://user:pass@host:5432/geoduels?sslmode=disable' \
+./scripts/compact-storage.sh
+```
+
+Do not run the helper after migrations 43 or later have been applied; it will refuse to proceed. For a database already beyond version 42, plan any `VACUUM FULL` work separately with a PostgreSQL administrator instead of changing the script's version guard.
+
+To accelerate legacy replay compression and retention cleanup before compaction:
+
+```bash
+POSTGRES_URL='postgres://user:pass@host:5432/geoduels?sslmode=disable' \
+go run ./workers/storage-maintenance -batch-size 1000 -max-batches 0
+```
+
+For production PostgreSQL, enable `wal_compression=on` and `track_io_timing=on` in server configuration. Keep at least 15 GiB free before running the rewrite.
+
+## Documentation
+
+- [`AGENTS.md`](AGENTS.md) - repository boundaries and essential context for coding agents.
+- [`docs/architecture.md`](docs/architecture.md) - service ownership, data flow, routing, reconnects, maintenance, and persistence.
+- [`docs/development.md`](docs/development.md) - local macOS setup, service startup, tests, and the k3d development environment.
+- [`docs/deployment.md`](docs/deployment.md) - production release flow, database migration policy, and post-deploy checks.
+- [`docs/map-imports.md`](docs/map-imports.md) - Vali country-map generation, dry-run validation, and admin production import.
+- [`docs/moderator-guide.md`](docs/moderator-guide.md) - moderator workbench workflow, verdict guidance, enforcement rules, and safety practices.
+- [`apps/web/docs/frontend-architecture.md`](apps/web/docs/frontend-architecture.md) - frontend ownership, shared UI and styling rules, and file-size budgets.
+- [`infra/k3s/README.md`](infra/k3s/README.md) - reusable Kubernetes manifests and local k3d scaling tests.
+- [`apps/web/assets/source-map-thumbnails/README.md`](apps/web/assets/source-map-thumbnails/README.md) - source requirements and attribution for generated map thumbnails.
+- [`CONTRIBUTOR_LICENSE_AGREEMENT.md`](CONTRIBUTOR_LICENSE_AGREEMENT.md) - contributor licensing terms.
+
 ## Repo pointers
 
 - `docker-compose.yml` - local stack
 - `infra/k3s/base` - base k8s manifests
 - `infra/k3s/overlays/k3d` - local 3-node k3d overlay for routing/scaling tests
 - production overlays and Flux cluster state live in the private ops repository
-- `services/*/Dockerfile`, `apps/web/Dockerfile`, `workers/location-ingest/Dockerfile` - production image definitions
-- `docs/architecture.md` - current runtime architecture
+- `services/*/Dockerfile`, `apps/web/Dockerfile` - production image definitions

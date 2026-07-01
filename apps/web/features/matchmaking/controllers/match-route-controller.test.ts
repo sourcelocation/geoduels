@@ -30,7 +30,7 @@ describe('MatchRouteController', () => {
         json: async () => ({
           auth: {
             accessToken: 'access-token',
-            onboardingRequired: false,
+            nicknameRequired: false,
             suggestedNickname: 'Player',
             user: {
               id: 'u_1',

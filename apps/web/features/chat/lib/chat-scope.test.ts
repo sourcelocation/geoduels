@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Snapshot } from "../../../components/ui/types";
-import type { LobbyRuntimeState } from "../../lobby/controllers/lobby-controller";
+import type { PartyRuntimeState } from "../../lobby/controllers/party-controller";
 import type { MatchState } from "../../matchmaking/controllers/match-controller";
 import { selectActiveChatConversationId } from "./chat-scope";
 
-function lobbyState(patch: Partial<LobbyRuntimeState> = {}): LobbyRuntimeState {
+function partyState(patch: Partial<PartyRuntimeState> = {}): PartyRuntimeState {
   return {
     status: "idle",
-    lobbyId: "",
+    partyId: "",
     inviteCode: "",
     snapshot: null,
     error: "",
@@ -26,8 +26,8 @@ function matchState(patch: Partial<MatchState> = {}): MatchState {
     connected: false,
     snapshot: null,
     activeMatchId: "",
-    sourceLobbyId: "",
-    sourceLobbyInviteCode: "",
+    sourcePartyId: "",
+    sourcePartyInviteCode: "",
     queueError: "",
     connectionIssue: "",
     onlinePlayers: 0,
@@ -51,13 +51,13 @@ function snapshot(matchId: string, mode: Snapshot["mode"] = "duel"): Snapshot {
 }
 
 describe("selectActiveChatConversationId", () => {
-  it("prefers the joined lobby conversation before a match starts", () => {
+  it("prefers the joined party conversation before a match starts", () => {
     expect(
       selectActiveChatConversationId({
         userId: "u1",
-        lobby: lobbyState({
+        party: partyState({
           snapshot: {
-            id: "lobby-1",
+            id: "party-1",
             inviteCode: "ABCD",
             ownerUserId: "u1",
             state: "open",
@@ -78,27 +78,27 @@ describe("selectActiveChatConversationId", () => {
         }),
         match: matchState(),
       }),
-    ).toBe("lobby:lobby-1");
+    ).toBe("party:party-1");
   });
 
-  it("keeps private lobby chat during the sourced match", () => {
+  it("keeps party chat during the sourced match", () => {
     expect(
       selectActiveChatConversationId({
         userId: "u1",
-        lobby: lobbyState(),
+        party: partyState(),
         match: matchState({
-          sourceLobbyId: "lobby-1",
+          sourcePartyId: "party-1",
           snapshot: snapshot("match-1"),
         }),
       }),
-    ).toBe("lobby:lobby-1");
+    ).toBe("party:party-1");
   });
 
   it("uses match chat for regular multiplayer and disables singleplayer", () => {
     expect(
       selectActiveChatConversationId({
         userId: "u1",
-        lobby: lobbyState(),
+        party: partyState(),
         match: matchState({ snapshot: snapshot("ranked-1") }),
       }),
     ).toBe("match:ranked-1");
@@ -106,7 +106,7 @@ describe("selectActiveChatConversationId", () => {
     expect(
       selectActiveChatConversationId({
         userId: "u1",
-        lobby: lobbyState(),
+        party: partyState(),
         match: matchState({ snapshot: snapshot("solo-1", "singleplayer") }),
       }),
     ).toBe("");

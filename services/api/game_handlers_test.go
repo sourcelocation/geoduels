@@ -22,6 +22,27 @@ type matchAccessTestStore struct {
 	snapshot []byte
 }
 
+type leaderboardTestStore struct {
+	persistence.Store
+	settings persistence.RankedSeasonSettings
+}
+
+func (s *leaderboardTestStore) GetRankedSeasonSettings() (persistence.RankedSeasonSettings, error) {
+	return s.settings, nil
+}
+
+func (s *leaderboardTestStore) ListLeaderboard(mode, seasonID string, limit, offset int) ([]persistence.LeaderboardEntry, error) {
+	return []persistence.LeaderboardEntry{}, nil
+}
+
+func (s *leaderboardTestStore) GetLeaderboardOverview(userID, mode, seasonID string, limit int) (persistence.LeaderboardOverview, error) {
+	return persistence.LeaderboardOverview{
+		Mode:         mode,
+		SeasonID:     seasonID,
+		TotalPlayers: 12,
+	}, nil
+}
+
 func (s *matchAccessTestStore) GetFinalMatchSnapshot(matchID string) ([]byte, bool, error) {
 	if matchID != "match-1" || len(s.snapshot) == 0 {
 		return nil, false, nil
@@ -37,8 +58,40 @@ func (s *matchAccessTestStore) GetRuntimeMatch(matchID string) (persistence.Runt
 	return persistence.RuntimeMatch{}, false, nil
 }
 
-func (s *matchAccessTestStore) GetLobbyByMatchID(matchID string) (contracts.LobbySnapshot, bool, error) {
-	return contracts.LobbySnapshot{}, false, nil
+func (s *matchAccessTestStore) MatchSessionSourceParty(matchID string) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
+func TestLeaderboardIncludesActiveSeasonResetTime(t *testing.T) {
+	nextResetAt := time.Date(2026, time.July, 1, 21, 0, 0, 0, time.UTC)
+	a := &api{store: &leaderboardTestStore{
+		settings: persistence.RankedSeasonSettings{
+			ActiveSeasonID: "s3",
+			NextResetAt:    &nextResetAt,
+		},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/leaderboard", nil)
+	rec := httptest.NewRecorder()
+
+	a.leaderboard(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Season       string     `json:"season"`
+		NextResetAt  *time.Time `json:"nextResetAt"`
+		TotalPlayers int        `json:"totalPlayers"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Season != "s3" || response.TotalPlayers != 12 {
+		t.Fatalf("unexpected leaderboard metadata: %+v", response)
+	}
+	if response.NextResetAt == nil || !response.NextResetAt.Equal(nextResetAt) {
+		t.Fatalf("next reset = %v, want %s", response.NextResetAt, nextResetAt)
+	}
 }
 
 func TestPublicFinalMatchSnapshotIsAvailableToAnyViewer(t *testing.T) {

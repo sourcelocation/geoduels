@@ -11,25 +11,33 @@ import (
 
 type memoryStore struct {
 	mu      sync.Mutex
-	queues  map[QueuePool][]ticket
-	matches map[QueuePool]map[string]contracts.MatchFound
+	queues  map[QueuePool]map[QueueVariant][]ticket
+	matches map[QueuePool]map[QueueVariant]map[string]contracts.MatchFound
 }
 
 func newMemory() Store {
+	queues := map[QueueVariant][]ticket{}
+	matches := map[QueueVariant]map[string]contracts.MatchFound{}
+	for _, queue := range AllQueueVariants {
+		queues[queue] = []ticket{}
+		matches[queue] = map[string]contracts.MatchFound{}
+	}
 	return &memoryStore{
-		queues: map[QueuePool][]ticket{
-			QueuePoolRegistered: {},
+		queues: map[QueuePool]map[QueueVariant][]ticket{
+			QueuePoolRegistered: queues,
 		},
-		matches: map[QueuePool]map[string]contracts.MatchFound{
-			QueuePoolRegistered: {},
+		matches: map[QueuePool]map[QueueVariant]map[string]contracts.MatchFound{
+			QueuePoolRegistered: matches,
 		},
 	}
 }
 
-func (m *memoryStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (m *memoryStore) Join(pool QueuePool, variant QueueVariant, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	queue := m.queues[pool]
+	variant = NormalizeQueueVariant(variant)
+	config := QueueVariantConfig(variant)
+	queue := m.queues[pool][variant]
 	for _, t := range queue {
 		if t.UserID == req.UserID {
 			return contracts.QueueJoinResponse{TicketID: t.ID, Status: "queued"}, nil, nil
@@ -39,7 +47,7 @@ func (m *memoryStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req co
 		if other == pool {
 			continue
 		}
-		m.leaveLocked(other, req.UserID)
+		m.leaveLocked(other, AllQueueVariants, req.UserID)
 	}
 	name := req.DisplayName
 	if name == "" {
@@ -55,77 +63,89 @@ func (m *memoryStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req co
 		SeasonID:          req.SeasonID,
 		RankedGamesPlayed: req.RankedGamesPlayed,
 		IsGuest:           req.IsGuest,
-		Ruleset:           contracts.NormalizeRuleset(ruleset),
+		Ruleset:           config.Ruleset,
+		StreetNames:       config.StreetNames,
+		Queue:             variant,
 		JoinedAtUnixMS:    time.Now().UnixMilli(),
 	}
 	queue = append(queue, t)
 	sort.Slice(queue, func(i, j int) bool { return queue[i].JoinedAtUnixMS < queue[j].JoinedAtUnixMS })
-	m.queues[pool] = queue
+	m.queues[pool][variant] = queue
 	return contracts.QueueJoinResponse{TicketID: t.ID, Status: "queued"}, nil, nil
 }
 
-func (m *memoryStore) Leave(pool QueuePool, rulesets []contracts.GameRuleset, userID string) error {
+func (m *memoryStore) Leave(pool QueuePool, queues []QueueVariant, userID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.leaveLocked(pool, userID)
+	m.leaveLocked(pool, normalizedQueues(queues), userID)
 	return nil
 }
 
 func (m *memoryStore) LeaveAllRulesets(pool QueuePool, userID string) error {
-	return m.Leave(pool, nil, userID)
+	return m.Leave(pool, AllQueueVariants, userID)
 }
 
-func (m *memoryStore) leaveLocked(pool QueuePool, userID string) {
-	queue := m.queues[pool]
-	out := queue[:0]
-	for _, t := range queue {
-		if t.UserID != userID {
-			out = append(out, t)
+func (m *memoryStore) leaveLocked(pool QueuePool, variants []QueueVariant, userID string) {
+	for _, variant := range variants {
+		queue := m.queues[pool][variant]
+		out := queue[:0]
+		for _, t := range queue {
+			if t.UserID != userID {
+				out = append(out, t)
+			}
 		}
+		m.queues[pool][variant] = out
+		delete(m.matches[pool][variant], userID)
 	}
-	m.queues[pool] = out
-	delete(m.matches[pool], userID)
 }
 
-func (m *memoryStore) Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
+func (m *memoryStore) Heartbeat(pool QueuePool, queues []QueueVariant, userID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.matches[pool][userID]; ok {
-		return QueuePresenceMatched, nil
-	}
-	for _, t := range m.queues[pool] {
-		if t.UserID == userID {
-			return QueuePresenceQueueing, nil
+	for _, queue := range normalizedQueues(queues) {
+		if _, ok := m.matches[pool][queue][userID]; ok {
+			return QueuePresenceMatched, nil
+		}
+		for _, t := range m.queues[pool][queue] {
+			if t.UserID == userID {
+				return QueuePresenceQueueing, nil
+			}
 		}
 	}
 	return QueuePresenceMissing, nil
 }
 
-func (m *memoryStore) Poll(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
+func (m *memoryStore) Poll(pool QueuePool, queues []QueueVariant, userID string) (*contracts.MatchFound, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	mf, ok := m.matches[pool][userID]
-	if !ok {
-		return nil, nil
+	for _, queue := range normalizedQueues(queues) {
+		mf, ok := m.matches[pool][queue][userID]
+		if !ok {
+			continue
+		}
+		delete(m.matches[pool][queue], userID)
+		return &mf, nil
 	}
-	delete(m.matches[pool], userID)
-	return &mf, nil
+	return nil, nil
 }
 
-func (m *memoryStore) IsQueued(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
+func (m *memoryStore) IsQueued(pool QueuePool, queues []QueueVariant, userID string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, t := range m.queues[pool] {
-		if t.UserID == userID {
-			return true, nil
+	for _, queue := range normalizedQueues(queues) {
+		for _, t := range m.queues[pool][queue] {
+			if t.UserID == userID {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
 }
 
-func (m *memoryStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
+func (m *memoryStore) RunMatchmaking(pool QueuePool, variant QueueVariant, limit int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	variant = NormalizeQueueVariant(variant)
 	if limit <= 0 {
 		limit = 50
 	}
@@ -135,7 +155,7 @@ func (m *memoryStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRules
 			break
 		}
 		matchedThisPass := false
-		queue := append([]ticket(nil), m.queues[pool]...)
+		queue := append([]ticket(nil), m.queues[pool][variant]...)
 		nowMS := time.Now().UnixMilli()
 		for _, t := range queue {
 			if matched >= limit {
@@ -144,7 +164,7 @@ func (m *memoryStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRules
 			if nowMS-t.JoinedAtUnixMS < mutualMatchWaitMS {
 				continue
 			}
-			if m.tryMatchLocked(pool, t.UserID, nowMS) {
+			if m.tryMatchLocked(pool, variant, t.UserID, nowMS) {
 				matched++
 				matchedThisPass = true
 			}
@@ -156,8 +176,8 @@ func (m *memoryStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRules
 	return matched, nil
 }
 
-func (m *memoryStore) tryMatchLocked(pool QueuePool, userID string, nowMS int64) bool {
-	queue := m.queues[pool]
+func (m *memoryStore) tryMatchLocked(pool QueuePool, variant QueueVariant, userID string, nowMS int64) bool {
+	queue := m.queues[pool][variant]
 	selfIdx := -1
 	for i, t := range queue {
 		if t.UserID == userID {
@@ -177,10 +197,10 @@ func (m *memoryStore) tryMatchLocked(pool QueuePool, userID string, nowMS int64)
 	}
 	op := remaining[bestIdx]
 	remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
-	m.queues[pool] = remaining
+	m.queues[pool][variant] = remaining
 	match := matchFromTickets(op, self)
-	m.matches[pool][op.UserID] = match
-	m.matches[pool][self.UserID] = match
+	m.matches[pool][variant][op.UserID] = match
+	m.matches[pool][variant][self.UserID] = match
 	return true
 }
 

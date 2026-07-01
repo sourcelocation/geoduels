@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import LobbyScreen from "../../../components/ui/LobbyScreen";
+import LobbyScreen, { type LobbyContentRoute } from "../../../components/ui/LobbyScreen";
 import type {
   HomeActions,
   HomeAuthView,
@@ -8,6 +8,8 @@ import type {
 } from "../model/types";
 
 type HomePageLobbyProps = {
+  contentRoute?: LobbyContentRoute;
+  mapId?: string;
   auth: HomeAuthView;
   lobby: HomeLobbyView;
   meta: HomeViewModel["meta"];
@@ -16,31 +18,25 @@ type HomePageLobbyProps = {
     | "joinQueue"
     | "startSingleplayer"
     | "cancelQueue"
-    | "createInviteLobby"
-    | "joinInviteLobby"
-    | "leavePrivateLobby"
-    | "kickLobbyMember"
-    | "transferLobbyOwner"
-    | "startPrivateLobby"
-    | "updatePrivateLobbySettings"
-    | "switchPrivateLobbyTeam"
+    | "createParty"
+    | "joinParty"
+    | "leaveParty"
+    | "kickPartyMember"
+    | "transferPartyOwner"
+    | "startParty"
+    | "updatePartySettings"
+    | "switchPartyTeam"
     | "devLogin"
     | "triggerGoogleSignIn"
     | "triggerDiscordSignIn"
-    | "linkAuthProvider"
-    | "upgradeGuestWithProvider"
-    | "unlinkAuthProvider"
     | "loadLeaderboard"
-    | "submitProfileNickname"
-    | "selectBadge"
     | "startSupportDonation"
-    | "setNicknameInput"
-    | "clearAuthSession"
-    | "deleteAccount"
   >;
 };
 
 export default function HomePageLobby({
+  contentRoute = "play",
+  mapId = "",
   auth,
   lobby,
   meta,
@@ -58,19 +54,18 @@ export default function HomePageLobby({
 
   return (
     <LobbyScreen
+      contentRoute={contentRoute}
+      mapId={mapId}
       userId={auth.userId}
+      accessToken={auth.accessToken}
       userEmail={auth.userEmail}
       displayName={auth.displayName}
       userAvatar={auth.userAvatar}
       isGuest={auth.isGuest}
       authMigrationRequired={!!auth.authMigrationRequired}
-      linkedProviders={auth.linkedProviders || []}
-      badges={auth.badges || []}
       selectedBadge={auth.selectedBadge}
       connected={lobby.connected}
       mmr={lobby.mmr}
-      gamesPlayed={lobby.gamesPlayed}
-      winsPct={lobby.winsPct}
       leaderboard={lobby.leaderboard}
       leaderboardLoading={lobby.leaderboardLoading}
       status={lobby.status}
@@ -78,15 +73,15 @@ export default function HomePageLobby({
       joinQueue={actions.joinQueue}
       startSingleplayer={actions.startSingleplayer}
       cancelQueue={actions.cancelQueue}
-      privateLobby={lobby.privateLobby}
-      createInviteLobby={actions.createInviteLobby}
-      joinInviteLobby={actions.joinInviteLobby}
-      leavePrivateLobby={actions.leavePrivateLobby}
-      kickLobbyMember={actions.kickLobbyMember}
-      transferLobbyOwner={actions.transferLobbyOwner}
-      startPrivateLobby={actions.startPrivateLobby}
-      updatePrivateLobbySettings={actions.updatePrivateLobbySettings}
-      switchPrivateLobbyTeam={actions.switchPrivateLobbyTeam}
+      party={lobby.party}
+      createParty={actions.createParty}
+      joinParty={actions.joinParty}
+      leaveParty={actions.leaveParty}
+      kickPartyMember={actions.kickPartyMember}
+      transferPartyOwner={actions.transferPartyOwner}
+      startParty={actions.startParty}
+      updatePartySettings={actions.updatePartySettings}
+      switchPartyTeam={actions.switchPartyTeam}
       queueError={lobby.queueError}
       onlinePlayers={lobby.onlinePlayers}
       maintenance={lobby.maintenance}
@@ -98,6 +93,7 @@ export default function HomePageLobby({
       }
       appVersion={meta.appVersion}
       isAdmin={auth.isAdmin}
+      isModerator={auth.isModerator}
       changelogEyebrow={lobby.changelogEyebrow}
       changelogTitle={lobby.changelogTitle}
       changelogMarkdown={lobby.changelogMarkdown}
@@ -106,21 +102,11 @@ export default function HomePageLobby({
       devLogin={actions.devLogin}
       onGoogleSignIn={actions.triggerGoogleSignIn}
       onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleSignIn}
-      onLinkAuthProvider={actions.linkAuthProvider}
-      onUpgradeGuestWithProvider={actions.upgradeGuestWithProvider}
-      onUnlinkAuthProvider={actions.unlinkAuthProvider}
       onBrowseLeaderboard={actions.loadLeaderboard}
       authLoading={auth.authLoading}
       authError={auth.authError}
-      nicknameInput={auth.nicknameInput}
-      nicknameError={auth.nicknameError}
       nicknameSaving={auth.nicknameSaving}
-      onChangeNickname={actions.setNicknameInput}
-      onSaveNickname={actions.submitProfileNickname}
-      onSelectBadge={actions.selectBadge}
       onSupportDonation={actions.startSupportDonation}
-      onLogout={() => actions.clearAuthSession()}
-      onDeleteAccount={actions.deleteAccount}
     />
   );
 }

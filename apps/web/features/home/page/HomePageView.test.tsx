@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { HomeModel } from "../model/types";
 import HomePageView from "./HomePageView";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("next/dynamic", () => ({
   default: () => () => null,
@@ -16,7 +17,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         userEmail: "self@example.com",
         displayName: "Self",
         userAvatar: "",
-        onboardingRequired: true,
+        nicknameRequired: true,
         isAdmin: false,
         isGuest: false,
         nicknameInput: "Self",
@@ -46,7 +47,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         changelogMarkdown: "",
         changelogSlug: "",
         changelogUpdatedAt: "",
-        privateLobby: {
+        party: {
           status: "idle",
           snapshot: null,
           inviteCode: "",
@@ -65,6 +66,8 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         showResultStage: false,
         showMatchEndPage: true,
         streetViewSrc: "",
+        ruleset: "moving",
+        streetNames: "shown",
         roundResult: undefined,
         roundResults: [],
         resultOverlay: undefined,
@@ -76,17 +79,20 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
           self: { kind: "player", id: "self", name: "Self", avatarFallback: "S" },
           opp: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O" },
         },
-        selfParticipant: { kind: "player", id: "self", name: "Self", avatarFallback: "S" },
-        opponentParticipant: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O" },
-        selfName: "Self",
-        selfAvatarUrl: "",
-        selfFallback: "S",
-        selfIsAdmin: false,
-        opponentName: "Opponent",
-        opponentIsAdmin: false,
-        opponentDisconnected: false,
-        oppAvatarUrl: "",
-        oppFallback: "O",
+        sides: {
+          self: {
+            id: "self",
+            participant: { kind: "player", id: "self", name: "Self", avatarFallback: "S", rating: 1200 },
+            hp: 5000,
+            connection: "connected",
+          },
+          opponent: {
+            id: "opp",
+            participant: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O", rating: 1100 },
+            hp: 0,
+            connection: "connected",
+          },
+        },
         mm: "00",
         ss: "00",
         isRoundTimerRunning: false,
@@ -105,8 +111,6 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         currentRoundId: "round-1",
         currentRoundNumber: 1,
         userAvatar: "",
-        selfElo: 1200,
-        opponentElo: 1100,
         damageMultiplier: 1,
         guessSubmitted: false,
         opponentGuessAlert: false,
@@ -123,7 +127,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         error: "",
       },
       overlays: {
-        onboardingOpen: true,
+        nicknameRequiredOpen: true,
         notifications: [],
         guestVerification: {
           open: false,
@@ -136,20 +140,21 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
           open: true,
           mode: "duel",
           outcome: "win",
-          selfName: "Self",
-          opponentName: "Opponent",
-          selfElo: 1200,
-          opponentElo: 1100,
-          selfEloDelta: 15,
-          opponentEloDelta: -15,
-          selfHP: 5000,
-          oppHP: 0,
-          selfIsAdmin: false,
-          opponentIsAdmin: false,
-          selfAvatarUrl: "",
-          oppAvatarUrl: "",
-          selfFallback: "S",
-          oppFallback: "O",
+          selfUserId: "self",
+          sides: {
+            self: {
+              id: "self",
+              participant: { kind: "player", id: "self", name: "Self", avatarFallback: "S", rating: 1200, ratingDelta: 15 },
+              hp: 5000,
+              connection: "connected",
+            },
+            opponent: {
+              id: "opp",
+              participant: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O", rating: 1100, ratingDelta: -15 },
+              hp: 0,
+              connection: "connected",
+            },
+          },
           totalScore: 0,
           roundResults: [
             {
@@ -182,13 +187,11 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
             self: { kind: "player", id: "self", name: "Self", avatarFallback: "S" },
             opp: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O" },
           },
-          selfParticipant: { kind: "player", id: "self", name: "Self", avatarFallback: "S" },
-          opponentParticipant: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O" },
         },
       },
       meta: {
         activeMatchId: "match-1",
-        sourceLobbyInviteCode: "",
+        sourcePartyInviteCode: "",
         appVersion: "dev",
         maxHP: 6000,
       },
@@ -197,6 +200,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
     actions: {
       joinQueue: vi.fn(),
       startSingleplayer: vi.fn(),
+      startSupportDonation: vi.fn(),
       cancelQueue: vi.fn(),
       placeGuess: vi.fn(),
       finalizeGuess: vi.fn(),
@@ -206,14 +210,14 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
       sendChatMessage: vi.fn(() => true),
       sendChatEmote: vi.fn(() => true),
       reportPlayer: vi.fn(async () => {}),
-      createInviteLobby: vi.fn(async () => true),
-      joinInviteLobby: vi.fn(async () => true),
-      leavePrivateLobby: vi.fn(async () => {}),
-      kickLobbyMember: vi.fn(async () => {}),
-      transferLobbyOwner: vi.fn(async () => {}),
-      startPrivateLobby: vi.fn(async () => {}),
-      updatePrivateLobbySettings: vi.fn(async () => {}),
-      switchPrivateLobbyTeam: vi.fn(async () => {}),
+      createParty: vi.fn(async () => true),
+      joinParty: vi.fn(async () => true),
+      leaveParty: vi.fn(async () => {}),
+      kickPartyMember: vi.fn(async () => {}),
+      transferPartyOwner: vi.fn(async () => {}),
+      startParty: vi.fn(async () => {}),
+      updatePartySettings: vi.fn(async () => {}),
+      switchPartyTeam: vi.fn(async () => {}),
       devLogin: vi.fn(async () => null),
       triggerGoogleSignIn: vi.fn(async () => {}),
       triggerDiscordSignIn: vi.fn(async () => {}),
@@ -223,7 +227,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
       loadLeaderboard: vi.fn(),
       clearAuthSession: vi.fn(),
       deleteAccount: vi.fn(async () => {}),
-      submitOnboardingNickname: vi.fn(async () => {}),
+      submitRequiredNickname: vi.fn(async () => {}),
       submitProfileNickname: vi.fn(async () => true),
       selectBadge: vi.fn(async () => {}),
       setNicknameInput: vi.fn(),
@@ -236,8 +240,9 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
 }
 
 describe("HomePageView", () => {
-  it("renders onboarding and end match overlays while hiding the game scene", () => {
-    render(<HomePageView model={createModel()} />);
+  it("renders required nickname and end match overlays while hiding the game scene", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><HomePageView model={createModel()} /></QueryClientProvider>);
 
     expect(screen.getByText("Choose Your Nickname")).toBeInTheDocument();
     expect(screen.getByText("Match Complete")).toBeInTheDocument();
@@ -245,8 +250,9 @@ describe("HomePageView", () => {
   });
 
   it("keeps chat on the top app layer over the match end page", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <HomePageView
+      <QueryClientProvider client={client}><HomePageView
         model={createModel({
           chat: {
             conversationId: "match:match-1",
@@ -255,7 +261,7 @@ describe("HomePageView", () => {
             error: "",
           },
         })}
-      />,
+      /></QueryClientProvider>,
     );
 
     expect(screen.getByLabelText("Open chat").parentElement).toHaveClass(

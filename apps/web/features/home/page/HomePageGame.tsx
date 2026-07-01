@@ -47,10 +47,13 @@ export default function HomePageGame({
       uiPhase={game.uiPhase}
       streetViewSrc={game.streetViewSrc}
       streetViewInteractive={game.streetViewInteractive}
+      ruleset={game.ruleset}
+      streetNames={game.streetNames}
       showResultStage={game.showResultStage}
       isSingleplayer={game.isSingleplayer}
       isPointsMode={game.isPointsMode}
       partyMode={game.mode === "singleplayer" ? undefined : game.mode}
+      backLabel={game.backLabel}
       resultOverlay={
         game.roundResult && game.resultOverlay
           ? {
@@ -64,19 +67,7 @@ export default function HomePageGame({
       resultPlayerAvatars={game.resultPlayerAvatars}
       resultPlayerFallbacks={game.resultPlayerFallbacks}
       participantsById={game.participantsById}
-      selfName={game.selfName}
-      selfAvatarUrl={game.selfAvatarUrl}
-      selfFallback={game.selfFallback}
-      selfAvatarColor={game.selfAvatarColor}
-      selfIsAdmin={game.selfIsAdmin}
-      selfSelectedBadge={game.selfSelectedBadge}
-      opponentName={game.opponentName}
-      opponentIsAdmin={game.opponentIsAdmin}
-      opponentSelectedBadge={game.opponentSelectedBadge}
-      opponentDisconnected={game.opponentDisconnected}
-      oppAvatarUrl={game.oppAvatarUrl}
-      oppFallback={game.oppFallback}
-      oppAvatarColor={game.oppAvatarColor}
+      sides={game.sides}
       hpPct={(hp) => formatHpPct(maxHP, hp)}
       mm={game.mm}
       ss={game.ss}
@@ -103,13 +94,12 @@ export default function HomePageGame({
           guess={game.guess}
           mode="guess"
           guessAvatarUrl={game.userAvatar}
-          guessAvatarFallback={game.selfFallback}
+          guessAvatarFallback={
+            game.participantsById[game.selfUserId]?.avatarFallback || "?"
+          }
         />
       }
       resultMapNode={framedResultMap}
-      selfElo={game.selfElo}
-      opponentElo={game.opponentElo}
-      selfRatingPreview={game.selfRatingPreview}
       damageMultiplier={game.damageMultiplier}
       guessSubmitted={game.guessSubmitted}
       opponentGuessAlert={game.opponentGuessAlert}

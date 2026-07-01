@@ -6,6 +6,7 @@ import {
   connectChat,
   type ChatConnection,
 } from "../lib/chat-client";
+import { isChatMuted } from "../lib/chat-preferences";
 
 export type ChatRuntimeState = {
   conversationId: string;
@@ -114,7 +115,9 @@ export class ChatController extends ObservableStore<ChatRuntimeState> {
               event.message,
             ].slice(-100),
           );
-          this.sfxController?.play("chat");
+          if (!isChatMuted()) {
+            this.sfxController?.play("chat");
+          }
           return;
         }
         if (event.type === "chat.error") {

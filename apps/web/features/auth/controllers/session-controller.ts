@@ -23,7 +23,7 @@ type AuthPopupPayload = {
   ok?: boolean;
   error?: string;
   accessToken?: string;
-  onboardingRequired?: boolean;
+  nicknameRequired?: boolean;
   authMigrationRequired?: boolean;
   recoveryAvailable?: boolean;
   linkedProviders?: string[];
@@ -33,7 +33,7 @@ type AuthPopupPayload = {
 };
 
 type SessionNetworkHandlers = {
-  bootstrapSession: () => Promise<AuthSessionSnapshot | null>;
+  bootstrapSession: (options?: { force?: boolean }) => Promise<AuthSessionSnapshot | null>;
   refreshSession: () => Promise<AuthSessionSnapshot | null>;
   getPlayableSession: () => Promise<AuthSessionSnapshot | null>;
 };
@@ -103,7 +103,7 @@ export type SessionState = {
   rankedWins: number;
   leaderboard: LeaderboardSummary | null;
   accessToken: string;
-  onboardingRequired: boolean;
+  nicknameRequired: boolean;
   authMigrationRequired?: boolean;
   recoveryAvailable?: boolean;
   linkedProviders?: string[];
@@ -134,6 +134,7 @@ export type LeaderboardEntrySummary = {
 export type LeaderboardSummary = {
   mode: string;
   season: string;
+  nextResetAt?: string;
   selfRank: number;
   totalPlayers: number;
   entries: LeaderboardEntrySummary[];
@@ -155,7 +156,7 @@ const initialState: SessionState = {
   rankedWins: 0,
   leaderboard: null,
   accessToken: "",
-  onboardingRequired: false,
+  nicknameRequired: false,
   authMigrationRequired: false,
   recoveryAvailable: false,
   linkedProviders: [],
@@ -182,6 +183,8 @@ export class SessionController extends ObservableStore<SessionState> {
   private session: AuthSessionSnapshot = emptyAuthSession();
   private refreshPromise: Promise<AuthSessionSnapshot | null> | null = null;
   private bootstrapPromise: Promise<AuthSessionSnapshot | null> | null = null;
+  private bootstrapCompleted = false;
+  private bootstrapResult: AuthSessionSnapshot | null = null;
   private mounted = true;
   private started = false;
   private networkHandlers: SessionNetworkHandlers = {
@@ -205,6 +208,9 @@ export class SessionController extends ObservableStore<SessionState> {
     this.onResetSession = params.onResetSession;
     this.messageHandler = (event: MessageEvent) => {
       const expectedOrigin = (() => {
+        if (!this.config.apiURL.trim()) {
+          return typeof window !== "undefined" ? window.location.origin : "";
+        }
         try {
           return new URL(this.config.apiURL).origin;
         } catch {
@@ -288,7 +294,7 @@ export class SessionController extends ObservableStore<SessionState> {
       canPlay:
         typeof session.canPlay === "boolean"
           ? session.canPlay
-          : !session.onboardingRequired && !session.authMigrationRequired,
+          : !session.nicknameRequired && !session.authMigrationRequired,
     };
   }
 
@@ -335,23 +341,29 @@ export class SessionController extends ObservableStore<SessionState> {
     });
   };
 
-  bootstrapSession = async (): Promise<AuthSessionSnapshot | null> => {
+  bootstrapSession = async (options?: { force?: boolean }): Promise<AuthSessionSnapshot | null> => {
     if (this.bootstrapPromise) {
       return this.bootstrapPromise;
+    }
+    if (this.bootstrapCompleted && !options?.force) {
+      return this.bootstrapResult;
     }
     this.bootstrapPromise = (async () => {
       try {
         const session = await this.networkHandlers.bootstrapSession();
+        this.bootstrapResult = session;
         if (!session && this.state.isGuest) {
           this.clearAuthSession(guestSessionExpiredMessage);
         }
         return session;
       } catch {
+        this.bootstrapResult = null;
         if (this.state.isGuest) {
           this.clearAuthSession(guestSessionExpiredMessage);
         }
         return null;
       } finally {
+        this.bootstrapCompleted = true;
         this.bootstrapPromise = null;
       }
     })();
@@ -387,7 +399,7 @@ export class SessionController extends ObservableStore<SessionState> {
     const sessionSnapshot: AuthSessionSnapshot = {
       userId: data.user?.id || "",
       accessToken: data.accessToken || "",
-      onboardingRequired: !!data?.onboardingRequired,
+      nicknameRequired: !!data?.nicknameRequired,
       authMigrationRequired: !!data?.authMigrationRequired,
       recoveryAvailable: !!data?.recoveryAvailable,
       linkedProviders: Array.isArray(data.linkedProviders)
@@ -396,7 +408,7 @@ export class SessionController extends ObservableStore<SessionState> {
       canPlay:
         typeof data.canPlay === "boolean"
           ? data.canPlay
-          : !data?.onboardingRequired && !data?.authMigrationRequired,
+          : !data?.nicknameRequired && !data?.authMigrationRequired,
       nicknameInput: data.suggestedNickname || displayName,
     };
     this.applySessionSnapshot(sessionSnapshot, {
@@ -432,58 +444,20 @@ export class SessionController extends ObservableStore<SessionState> {
     });
   };
 
-  setMmr = (update: number | ((value: number) => number)) => {
-    const value =
-      typeof update === "function" ? update(this.state.mmr) : update;
-    this.patchState({ mmr: value });
-  };
-
-  setRatingRd = (update: number | ((value: number) => number)) => {
-    const value =
-      typeof update === "function" ? update(this.state.ratingRd) : update;
-    this.patchState({ ratingRd: value });
-  };
-
-  setGamesPlayed = (update: number | ((value: number) => number)) => {
-    const value =
-      typeof update === "function" ? update(this.state.gamesPlayed) : update;
-    this.patchState({ gamesPlayed: value });
-  };
-
-  setWins = (update: number | ((value: number) => number)) => {
-    const value =
-      typeof update === "function" ? update(this.state.wins) : update;
-    this.patchState({ wins: value });
-  };
-
-  setRankedGamesPlayed = (update: number | ((value: number) => number)) => {
-    const value =
-      typeof update === "function"
-        ? update(this.state.rankedGamesPlayed)
-        : update;
-    this.patchState({ rankedGamesPlayed: value });
-  };
-
-  setRankedWins = (update: number | ((value: number) => number)) => {
-    const value =
-      typeof update === "function" ? update(this.state.rankedWins) : update;
-    this.patchState({ rankedWins: value });
-  };
-
   getSessionSnapshot = (): AuthSessionSnapshot | null => {
     return hasPlayableSession(this.session) ? this.session : null;
   };
 
   async ensureFreshSession(
     minValidityMs = 60_000,
-    options?: { allowOnboarding?: boolean; forceRefresh?: boolean },
+    options?: { allowNicknameRequired?: boolean; forceRefresh?: boolean },
   ): Promise<AuthSessionSnapshot | null> {
-    const allowOnboarding = !!options?.allowOnboarding;
+    const allowNicknameRequired = !!options?.allowNicknameRequired;
     const forceRefresh = !!options?.forceRefresh;
     if (!this.session.userId || !this.session.accessToken) {
       return null;
     }
-    if (!allowOnboarding && this.session.onboardingRequired) {
+    if (!allowNicknameRequired && this.session.nicknameRequired) {
       return null;
     }
 
@@ -517,7 +491,7 @@ export class SessionController extends ObservableStore<SessionState> {
         return fresh;
       }
     }
-    if (this.session.onboardingRequired) {
+    if (this.session.nicknameRequired) {
       return null;
     }
     return this.networkHandlers.getPlayableSession();
@@ -537,7 +511,7 @@ export class SessionController extends ObservableStore<SessionState> {
     this.patchState({
       userId: this.session.userId,
       accessToken: this.session.accessToken,
-      onboardingRequired: this.session.onboardingRequired,
+      nicknameRequired: this.session.nicknameRequired,
       authMigrationRequired: this.session.authMigrationRequired,
       recoveryAvailable: this.session.recoveryAvailable,
       linkedProviders: this.session.linkedProviders,
@@ -601,6 +575,16 @@ export class SessionController extends ObservableStore<SessionState> {
     });
   }
 
+  applyCommittedRating(mmr: number, ratingRd?: number) {
+    this.patchState({
+      mmr,
+      ratingRd:
+        typeof ratingRd === "number"
+          ? ratingRd
+          : this.state.ratingRd,
+    });
+  }
+
   applyBadgeSelection(payload: unknown) {
     if (!payload || typeof payload !== "object") return;
     const raw = payload as Record<string, unknown>;
@@ -656,6 +640,8 @@ function normalizeLeaderboardSummary(
   return {
     mode: typeof raw.mode === "string" ? raw.mode : "duel",
     season: typeof raw.season === "string" ? raw.season : "s2",
+    nextResetAt:
+      typeof raw.nextResetAt === "string" ? raw.nextResetAt : undefined,
     selfRank: typeof raw.selfRank === "number" ? raw.selfRank : 0,
     totalPlayers:
       typeof raw.totalPlayers === "number" ? raw.totalPlayers : entries.length,

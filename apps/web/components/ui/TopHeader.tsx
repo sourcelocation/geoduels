@@ -1,4 +1,5 @@
 import AvatarBadge from './AvatarBadge';
+import PlayerProfileLink from './PlayerProfileLink';
 
 type Props = {
   userId: string;
@@ -22,13 +23,13 @@ export default function TopHeader({ userId, displayName, userEmail, userAvatar, 
           <span className="text-[11px] font-bold uppercase tracking-[0.16em]">{connected ? 'Online' : 'Offline'}</span>
           <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-emerald-100/90">Competitive</span>
         </div>
-        <div className="flex items-center gap-3">
+        <PlayerProfileLink userId={userId} nickname={displayName} disabled={!userId} className="flex items-center gap-3">
           <AvatarBadge avatarUrl={userAvatar} fallback={fallback} alt={profileTitle} size="sm" />
           <div>
             <p className="text-sm font-semibold leading-tight">{profileTitle}</p>
             {/* <p className="text-xs text-emerald-100/85">{profileSubtitle}</p> */}
           </div>
-        </div>
+        </PlayerProfileLink>
       </div>
     </header>
   );

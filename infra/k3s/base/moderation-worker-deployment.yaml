@@ -40,6 +40,8 @@ spec:
               value: "true"
             - name: POSTGRES_MAX_CONNS
               value: "2"
+            - name: RISK_ENGINE_TIMEOUT
+              value: 750ms
           livenessProbe:
             httpGet:
               path: /health/live

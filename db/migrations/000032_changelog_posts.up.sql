@@ -2,7 +2,6 @@ create table if not exists changelog_posts (
   id bigserial primary key,
   slug text not null unique,
   title text not null,
-  summary text not null default '',
   markdown text not null default '',
   published boolean not null default true,
   created_at timestamptz not null default now(),
@@ -12,11 +11,10 @@ create table if not exists changelog_posts (
 create index if not exists changelog_posts_published_updated_idx
   on changelog_posts(published, updated_at desc);
 
-insert into changelog_posts(slug, title, summary, markdown, published)
+insert into changelog_posts(slug, title, markdown, published)
 select
   'geoduels-v1-1',
   coalesce(nullif(value_json->>'title', ''), 'GeoDuels v1.1'),
-  coalesce(nullif(value_json->>'eyebrow', ''), 'Latest News'),
   coalesce(nullif(value_json->>'markdown', ''), ''),
   true
 from site_settings

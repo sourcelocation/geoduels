@@ -15,6 +15,7 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
   }
   const urls: Array<{ loc: string; priority: string; lastmod?: string }> = [
     { loc: `${siteURL}/`, priority: '1.0' },
+    { loc: `${siteURL}/help`, priority: '0.7' },
     { loc: `${siteURL}/changelog`, priority: '0.6' },
     ...changelogPosts.map((post) => ({
       loc: `${siteURL}/changelog/${post.slug}`,
@@ -22,6 +23,7 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
       lastmod: post.updatedAt || now
     })),
     { loc: `${siteURL}/privacy`, priority: '0.3' },
+    { loc: `${siteURL}/privacy/extension`, priority: '0.3' },
     { loc: `${siteURL}/terms`, priority: '0.3' }
   ];
 

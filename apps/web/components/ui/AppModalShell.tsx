@@ -69,6 +69,7 @@ export default function AppModalShell({
               <button
                 type="button"
                 onClick={onClose}
+                aria-label={`Close ${title}`}
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
               >
                 <X size={18} strokeWidth={2.5} />

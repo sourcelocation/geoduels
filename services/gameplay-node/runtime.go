@@ -14,6 +14,37 @@ type matchConfigRegistry struct {
 	configs map[string]contracts.MatchConfig
 }
 
+type roundPlanRegistry struct {
+	mu    sync.RWMutex
+	plans map[string][]contracts.LocationPoint
+}
+
+func newRoundPlanRegistry() *roundPlanRegistry {
+	return &roundPlanRegistry{plans: map[string][]contracts.LocationPoint{}}
+}
+
+func (r *roundPlanRegistry) Set(matchID string, rounds []contracts.PlannedRound) {
+	points := make([]contracts.LocationPoint, len(rounds))
+	for _, round := range rounds {
+		if round.RoundIndex >= 0 && round.RoundIndex < len(points) {
+			points[round.RoundIndex] = round.Location
+		}
+	}
+	r.mu.Lock()
+	r.plans[matchID] = points
+	r.mu.Unlock()
+}
+
+func (r *roundPlanRegistry) Get(matchID string, roundIndex int) (contracts.LocationPoint, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	points := r.plans[matchID]
+	if roundIndex < 0 || roundIndex >= len(points) {
+		return contracts.LocationPoint{}, errors.New("round plan exhausted")
+	}
+	return points[roundIndex], nil
+}
+
 func newMatchConfigRegistry() *matchConfigRegistry {
 	return &matchConfigRegistry{configs: map[string]contracts.MatchConfig{}}
 }
@@ -103,7 +134,7 @@ type singleplayerRuntime struct {
 func (r singleplayerRuntime) Mode() contracts.MatchMode { return contracts.ModeSingleplayer }
 
 func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error {
-	_, err := r.engine.CreateMatch(matchID, playerIDs, profiles)
+	_, err := r.engine.CreateMatchWithConfig(matchID, playerIDs, profiles, config)
 	return err
 }
 

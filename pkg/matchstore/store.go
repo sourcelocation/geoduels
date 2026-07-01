@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/entityid"
 )
 
 var atomicMatchScript = redis.NewScript(`
@@ -132,29 +133,31 @@ const (
 )
 
 type ticket struct {
-	ID                string                 `json:"id"`
-	UserID            string                 `json:"userId"`
-	DisplayName       string                 `json:"displayName"`
-	AvatarURL         string                 `json:"avatarUrl,omitempty"`
-	MMR               int                    `json:"mmr"`
-	RatingRD          float64                `json:"ratingRd,omitempty"`
-	SeasonID          string                 `json:"seasonId,omitempty"`
-	RankedGamesPlayed int                    `json:"rankedGamesPlayed,omitempty"`
-	IsGuest           bool                   `json:"isGuest,omitempty"`
-	IsAdmin           bool                   `json:"isAdmin,omitempty"`
-	SelectedBadge     *contracts.PlayerBadge `json:"selectedBadge,omitempty"`
-	Ruleset           contracts.GameRuleset  `json:"ruleset,omitempty"`
-	JoinedAtUnixMS    int64                  `json:"joinedAtUnixMs"`
+	ID                string                          `json:"id"`
+	UserID            string                          `json:"userId"`
+	DisplayName       string                          `json:"displayName"`
+	AvatarURL         string                          `json:"avatarUrl,omitempty"`
+	MMR               int                             `json:"mmr"`
+	RatingRD          float64                         `json:"ratingRd,omitempty"`
+	SeasonID          string                          `json:"seasonId,omitempty"`
+	RankedGamesPlayed int                             `json:"rankedGamesPlayed,omitempty"`
+	IsGuest           bool                            `json:"isGuest,omitempty"`
+	IsAdmin           bool                            `json:"isAdmin,omitempty"`
+	SelectedBadge     *contracts.PlayerBadge          `json:"selectedBadge,omitempty"`
+	Ruleset           contracts.GameRuleset           `json:"ruleset,omitempty"`
+	StreetNames       contracts.StreetNamesVisibility `json:"streetNames,omitempty"`
+	Queue             QueueVariant                    `json:"queue,omitempty"`
+	JoinedAtUnixMS    int64                           `json:"joinedAtUnixMs"`
 }
 
 type Store interface {
-	Join(pool QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error)
-	Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error)
-	Leave(pool QueuePool, rulesets []contracts.GameRuleset, userID string) error
+	Join(pool QueuePool, queue QueueVariant, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error)
+	Heartbeat(pool QueuePool, queues []QueueVariant, userID string) (string, error)
+	Leave(pool QueuePool, queues []QueueVariant, userID string) error
 	LeaveAllRulesets(pool QueuePool, userID string) error
-	Poll(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error)
-	IsQueued(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error)
-	RunMatchmaking(pool QueuePool, ruleset contracts.GameRuleset, limit int) (int, error)
+	Poll(pool QueuePool, queues []QueueVariant, userID string) (*contracts.MatchFound, error)
+	IsQueued(pool QueuePool, queues []QueueVariant, userID string) (bool, error)
+	RunMatchmaking(pool QueuePool, queue QueueVariant, limit int) (int, error)
 }
 
 func NewFromEnv() (Store, error) {
@@ -185,11 +188,57 @@ const (
 	QueuePoolRegistered QueuePool = "registered"
 )
 
+type QueueVariant = string
+
+const (
+	QueueMoving       QueueVariant = "moving"
+	QueueNoMove       QueueVariant = "no_move"
+	QueueNMPZ         QueueVariant = "nmpz"
+	QueueMovingHidden QueueVariant = "moving_hidden"
+	QueueNoMoveHidden QueueVariant = "no_move_hidden"
+	QueueNMPZHidden   QueueVariant = "nmpz_hidden"
+)
+
 var allQueuePools = []QueuePool{QueuePoolRegistered}
-var allQueueRulesets = []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ}
+var AllQueueVariants = []QueueVariant{
+	QueueMovingHidden,
+	QueueNoMoveHidden,
+	QueueNMPZHidden,
+	QueueMoving,
+	QueueNoMove,
+	QueueNMPZ,
+}
+
+func NormalizeQueueVariant(value QueueVariant) QueueVariant {
+	switch value {
+	case QueueNoMove, QueueNMPZ, QueueMovingHidden, QueueNoMoveHidden, QueueNMPZHidden:
+		return value
+	default:
+		return QueueMoving
+	}
+}
+
+func QueueVariantConfig(queue QueueVariant) contracts.MatchConfig {
+	queue = NormalizeQueueVariant(queue)
+	cfg := contracts.MatchConfig{
+		Ruleset:     contracts.RulesetMoving,
+		StreetNames: contracts.StreetNamesShown,
+	}
+	switch queue {
+	case QueueNoMove, QueueNoMoveHidden:
+		cfg.Ruleset = contracts.RulesetNoMove
+	case QueueNMPZ, QueueNMPZHidden:
+		cfg.Ruleset = contracts.RulesetNMPZ
+	}
+	switch queue {
+	case QueueMovingHidden, QueueNoMoveHidden, QueueNMPZHidden:
+		cfg.StreetNames = contracts.StreetNamesHidden
+	}
+	return contracts.NormalizeMatchConfig(cfg)
+}
 
 func QueueMatchKeysForUsers(users []string) []string {
-	keys := make([]string, 0, len(users)*len(allQueuePools)*len(allQueueRulesets))
+	keys := make([]string, 0, len(users)*len(allQueuePools)*len(AllQueueVariants))
 	seen := map[string]struct{}{}
 	for _, userID := range users {
 		if userID == "" {
@@ -201,8 +250,8 @@ func QueueMatchKeysForUsers(users []string) []string {
 				seen[legacyKey] = struct{}{}
 				keys = append(keys, legacyKey)
 			}
-			for _, ruleset := range allQueueRulesets {
-				key := queueMatchKey(pool, ruleset, userID)
+			for _, queue := range AllQueueVariants {
+				key := queueMatchKey(pool, queue, userID)
 				if _, ok := seen[key]; ok {
 					continue
 				}
@@ -214,57 +263,58 @@ func QueueMatchKeysForUsers(users []string) []string {
 	return keys
 }
 
-func normalizedRulesets(in []contracts.GameRuleset) []contracts.GameRuleset {
+func normalizedQueues(in []QueueVariant) []QueueVariant {
 	if len(in) == 0 {
-		return []contracts.GameRuleset{contracts.RulesetMoving}
+		return []QueueVariant{QueueMoving}
 	}
-	out := make([]contracts.GameRuleset, 0, len(in))
-	seen := map[contracts.GameRuleset]bool{}
+	out := make([]QueueVariant, 0, len(in))
+	seen := map[QueueVariant]bool{}
 	for _, raw := range in {
-		ruleset := contracts.NormalizeRuleset(raw)
-		if seen[ruleset] {
+		queue := NormalizeQueueVariant(raw)
+		if seen[queue] {
 			continue
 		}
-		seen[ruleset] = true
-		out = append(out, ruleset)
+		seen[queue] = true
+		out = append(out, queue)
 	}
 	if len(out) == 0 {
-		return []contracts.GameRuleset{contracts.RulesetMoving}
+		return []QueueVariant{QueueMoving}
 	}
 	return out
 }
 
-func queuePrefix(pool QueuePool, ruleset contracts.GameRuleset) string {
-	return "queue:" + string(pool) + ":" + string(contracts.NormalizeRuleset(ruleset))
+func queuePrefix(pool QueuePool, queue QueueVariant) string {
+	return "queue:" + string(pool) + ":" + string(NormalizeQueueVariant(queue))
 }
 
-func queueMembersKey(pool QueuePool, ruleset contracts.GameRuleset) string {
-	return queuePrefix(pool, ruleset) + ":pool"
+func queueMembersKey(pool QueuePool, queue QueueVariant) string {
+	return queuePrefix(pool, queue) + ":pool"
 }
 
-func queueJoinedKey(pool QueuePool, ruleset contracts.GameRuleset) string {
-	return queuePrefix(pool, ruleset) + ":joined"
+func queueJoinedKey(pool QueuePool, queue QueueVariant) string {
+	return queuePrefix(pool, queue) + ":joined"
 }
 
-func queueTicketKey(pool QueuePool, ruleset contracts.GameRuleset, userID string) string {
-	return queuePrefix(pool, ruleset) + ":ticket:" + userID
+func queueTicketKey(pool QueuePool, queue QueueVariant, userID string) string {
+	return queuePrefix(pool, queue) + ":ticket:" + userID
 }
 
-func queueTicketPrefix(pool QueuePool, ruleset contracts.GameRuleset) string {
-	return queuePrefix(pool, ruleset) + ":ticket:"
+func queueTicketPrefix(pool QueuePool, queue QueueVariant) string {
+	return queuePrefix(pool, queue) + ":ticket:"
 }
 
-func queueMatchKey(pool QueuePool, ruleset contracts.GameRuleset, userID string) string {
-	return queuePrefix(pool, ruleset) + ":match:" + userID
+func queueMatchKey(pool QueuePool, queue QueueVariant, userID string) string {
+	return queuePrefix(pool, queue) + ":match:" + userID
 }
 
-func queueMatcherLockKey(pool QueuePool, ruleset contracts.GameRuleset) string {
-	return queuePrefix(pool, ruleset) + ":matcher-lock"
+func queueMatcherLockKey(pool QueuePool, queue QueueVariant) string {
+	return queuePrefix(pool, queue) + ":matcher-lock"
 }
 
-func (r *redisStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (r *redisStore) Join(pool QueuePool, queue QueueVariant, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	ctx := context.Background()
-	ruleset = contracts.NormalizeRuleset(ruleset)
+	queue = NormalizeQueueVariant(queue)
+	config := QueueVariantConfig(queue)
 	name := req.DisplayName
 	if name == "" {
 		name = req.UserID
@@ -281,7 +331,9 @@ func (r *redisStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req con
 		IsGuest:           req.IsGuest,
 		IsAdmin:           req.IsAdmin,
 		SelectedBadge:     req.SelectedBadge,
-		Ruleset:           ruleset,
+		Ruleset:           config.Ruleset,
+		StreetNames:       config.StreetNames,
+		Queue:             queue,
 		JoinedAtUnixMS:    time.Now().UnixMilli(),
 	}
 	tb, _ := json.Marshal(t)
@@ -290,15 +342,15 @@ func (r *redisStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req con
 			if other == pool {
 				continue
 			}
-			for _, otherRuleset := range allQueueRulesets {
-				pipe.ZRem(ctx, queueMembersKey(other, otherRuleset), req.UserID)
-				pipe.Del(ctx, queueTicketKey(other, otherRuleset, req.UserID), queueMatchKey(other, otherRuleset, req.UserID))
-				pipe.ZRem(ctx, queueJoinedKey(other, otherRuleset), req.UserID)
+			for _, otherQueue := range AllQueueVariants {
+				pipe.ZRem(ctx, queueMembersKey(other, otherQueue), req.UserID)
+				pipe.Del(ctx, queueTicketKey(other, otherQueue, req.UserID), queueMatchKey(other, otherQueue, req.UserID))
+				pipe.ZRem(ctx, queueJoinedKey(other, otherQueue), req.UserID)
 			}
 		}
-		pipe.Set(ctx, queueTicketKey(pool, ruleset, req.UserID), tb, queueTicketTTL)
-		pipe.ZAdd(ctx, queueMembersKey(pool, ruleset), redis.Z{Score: float64(req.MMR), Member: req.UserID})
-		pipe.ZAdd(ctx, queueJoinedKey(pool, ruleset), redis.Z{Score: float64(t.JoinedAtUnixMS), Member: req.UserID})
+		pipe.Set(ctx, queueTicketKey(pool, queue, req.UserID), tb, queueTicketTTL)
+		pipe.ZAdd(ctx, queueMembersKey(pool, queue), redis.Z{Score: float64(req.MMR), Member: req.UserID})
+		pipe.ZAdd(ctx, queueJoinedKey(pool, queue), redis.Z{Score: float64(t.JoinedAtUnixMS), Member: req.UserID})
 		return nil
 	})
 	if err != nil {
@@ -307,14 +359,14 @@ func (r *redisStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req con
 	return contracts.QueueJoinResponse{TicketID: t.ID, Status: "queued"}, nil, nil
 }
 
-func (r *redisStore) Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
+func (r *redisStore) Heartbeat(pool QueuePool, queues []QueueVariant, userID string) (string, error) {
 	ctx := context.Background()
 	anyQueueing := false
-	for _, ruleset := range normalizedRulesets(rulesets) {
+	for _, queue := range normalizedQueues(queues) {
 		raw, err := queueHeartbeatScript.Run(
 			ctx,
 			r.rdb,
-			[]string{queueMembersKey(pool, ruleset), queueTicketKey(pool, ruleset, userID), queueMatchKey(pool, ruleset, userID), queueJoinedKey(pool, ruleset)},
+			[]string{queueMembersKey(pool, queue), queueTicketKey(pool, queue, userID), queueMatchKey(pool, queue, userID), queueJoinedKey(pool, queue)},
 			userID,
 			intStr(queueTicketTTL.Milliseconds()),
 		).Result()
@@ -335,13 +387,13 @@ func (r *redisStore) Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset,
 	return QueuePresenceMissing, nil
 }
 
-func (r *redisStore) Leave(pool QueuePool, rulesets []contracts.GameRuleset, userID string) error {
+func (r *redisStore) Leave(pool QueuePool, queues []QueueVariant, userID string) error {
 	ctx := context.Background()
 	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		for _, ruleset := range normalizedRulesets(rulesets) {
-			pipe.ZRem(ctx, queueMembersKey(pool, ruleset), userID)
-			pipe.ZRem(ctx, queueJoinedKey(pool, ruleset), userID)
-			pipe.Del(ctx, queueTicketKey(pool, ruleset, userID), queueMatchKey(pool, ruleset, userID))
+		for _, queue := range normalizedQueues(queues) {
+			pipe.ZRem(ctx, queueMembersKey(pool, queue), userID)
+			pipe.ZRem(ctx, queueJoinedKey(pool, queue), userID)
+			pipe.Del(ctx, queueTicketKey(pool, queue, userID), queueMatchKey(pool, queue, userID))
 		}
 		return nil
 	})
@@ -349,13 +401,13 @@ func (r *redisStore) Leave(pool QueuePool, rulesets []contracts.GameRuleset, use
 }
 
 func (r *redisStore) LeaveAllRulesets(pool QueuePool, userID string) error {
-	return r.Leave(pool, allQueueRulesets, userID)
+	return r.Leave(pool, AllQueueVariants, userID)
 }
 
-func (r *redisStore) Poll(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
+func (r *redisStore) Poll(pool QueuePool, queues []QueueVariant, userID string) (*contracts.MatchFound, error) {
 	ctx := context.Background()
-	for _, ruleset := range normalizedRulesets(rulesets) {
-		b, err := r.rdb.GetDel(ctx, queueMatchKey(pool, ruleset, userID)).Bytes()
+	for _, queue := range normalizedQueues(queues) {
+		b, err := r.rdb.GetDel(ctx, queueMatchKey(pool, queue, userID)).Bytes()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
 				continue
@@ -372,20 +424,20 @@ func (r *redisStore) Poll(pool QueuePool, rulesets []contracts.GameRuleset, user
 	return nil, nil
 }
 
-func (r *redisStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
+func (r *redisStore) RunMatchmaking(pool QueuePool, queue QueueVariant, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	ruleset = contracts.NormalizeRuleset(ruleset)
+	queue = NormalizeQueueVariant(queue)
 	ctx := context.Background()
 	owner := ticketID("matcher")
-	locked, err := r.rdb.SetNX(ctx, queueMatcherLockKey(pool, ruleset), owner, matcherLockTTL).Result()
+	locked, err := r.rdb.SetNX(ctx, queueMatcherLockKey(pool, queue), owner, matcherLockTTL).Result()
 	if err != nil || !locked {
 		return 0, err
 	}
-	defer releaseMatcherLockScript.Run(ctx, r.rdb, []string{queueMatcherLockKey(pool, ruleset)}, owner)
+	defer releaseMatcherLockScript.Run(ctx, r.rdb, []string{queueMatcherLockKey(pool, queue)}, owner)
 
-	users, err := r.rdb.ZRangeByScore(ctx, queueJoinedKey(pool, ruleset), &redis.ZRangeBy{
+	users, err := r.rdb.ZRangeByScore(ctx, queueJoinedKey(pool, queue), &redis.ZRangeBy{
 		Min: "-inf",
 		Max: intStr(time.Now().UnixMilli() - mutualMatchWaitMS),
 	}).Result()
@@ -397,7 +449,7 @@ func (r *redisStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRulese
 		if matched >= limit {
 			break
 		}
-		ok, err := r.tryMatch(ctx, pool, ruleset, userID)
+		ok, err := r.tryMatch(ctx, pool, queue, userID)
 		if err != nil {
 			return matched, err
 		}
@@ -408,14 +460,14 @@ func (r *redisStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRulese
 	return matched, nil
 }
 
-func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, ruleset contracts.GameRuleset, userID string) (bool, error) {
-	selfRaw, err := r.rdb.Get(ctx, queueTicketKey(pool, ruleset, userID)).Bytes()
+func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, queue QueueVariant, userID string) (bool, error) {
+	selfRaw, err := r.rdb.Get(ctx, queueTicketKey(pool, queue, userID)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, ruleset), userID).Result(); remErr != nil {
+			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, queue), userID).Result(); remErr != nil {
 				return false, remErr
 			}
-			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, ruleset), userID).Result(); remErr != nil {
+			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, queue), userID).Result(); remErr != nil {
 				return false, remErr
 			}
 			return false, nil
@@ -429,7 +481,7 @@ func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, ruleset contr
 	rawOpp, err := atomicMatchScript.Run(
 		ctx,
 		r.rdb,
-		[]string{queueMembersKey(pool, ruleset), queueTicketPrefix(pool, ruleset), queueJoinedKey(pool, ruleset)},
+		[]string{queueMembersKey(pool, queue), queueTicketPrefix(pool, queue), queueJoinedKey(pool, queue)},
 		userID,
 		intStr(int64(selfTicket.MMR-maxMatchWindowMMR)),
 		intStr(int64(selfTicket.MMR+maxMatchWindowMMR)),
@@ -459,15 +511,15 @@ func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, ruleset contr
 	match := matchFromTickets(oppTicket, selfTicket)
 	mb, _ := json.Marshal(match)
 	_, err = r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, queueMatchKey(pool, ruleset, userID), mb, 2*time.Minute)
-		pipe.Set(ctx, queueMatchKey(pool, ruleset, oppTicket.UserID), mb, 2*time.Minute)
-		for _, queuedRuleset := range allQueueRulesets {
+		pipe.Set(ctx, queueMatchKey(pool, queue, userID), mb, 2*time.Minute)
+		pipe.Set(ctx, queueMatchKey(pool, queue, oppTicket.UserID), mb, 2*time.Minute)
+		for _, queuedQueue := range AllQueueVariants {
 			for _, matchedUserID := range []string{userID, oppTicket.UserID} {
-				pipe.ZRem(ctx, queueMembersKey(pool, queuedRuleset), matchedUserID)
-				pipe.ZRem(ctx, queueJoinedKey(pool, queuedRuleset), matchedUserID)
-				pipe.Del(ctx, queueTicketKey(pool, queuedRuleset, matchedUserID))
-				if queuedRuleset != ruleset {
-					pipe.Del(ctx, queueMatchKey(pool, queuedRuleset, matchedUserID))
+				pipe.ZRem(ctx, queueMembersKey(pool, queuedQueue), matchedUserID)
+				pipe.ZRem(ctx, queueJoinedKey(pool, queuedQueue), matchedUserID)
+				pipe.Del(ctx, queueTicketKey(pool, queuedQueue, matchedUserID))
+				if queuedQueue != queue {
+					pipe.Del(ctx, queueMatchKey(pool, queuedQueue, matchedUserID))
 				}
 			}
 		}
@@ -476,29 +528,29 @@ func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, ruleset contr
 	return err == nil, err
 }
 
-func (r *redisStore) IsQueued(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
+func (r *redisStore) IsQueued(pool QueuePool, queues []QueueVariant, userID string) (bool, error) {
 	ctx := context.Background()
 	queued := false
-	for _, ruleset := range normalizedRulesets(rulesets) {
-		ok, err := r.rdb.Exists(ctx, queueTicketKey(pool, ruleset, userID)).Result()
+	for _, queue := range normalizedQueues(queues) {
+		ok, err := r.rdb.Exists(ctx, queueTicketKey(pool, queue, userID)).Result()
 		if err != nil {
 			return false, err
 		}
 		if ok == 0 {
-			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, ruleset), userID).Result(); remErr != nil {
+			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, queue), userID).Result(); remErr != nil {
 				return false, remErr
 			}
-			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, ruleset), userID).Result(); remErr != nil {
+			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, queue), userID).Result(); remErr != nil {
 				return false, remErr
 			}
 			continue
 		}
-		if _, err := r.rdb.ZScore(ctx, queueMembersKey(pool, ruleset), userID).Result(); err != nil {
+		if _, err := r.rdb.ZScore(ctx, queueMembersKey(pool, queue), userID).Result(); err != nil {
 			if errors.Is(err, redis.Nil) {
-				if delErr := r.rdb.Del(ctx, queueTicketKey(pool, ruleset, userID)).Err(); delErr != nil {
+				if delErr := r.rdb.Del(ctx, queueTicketKey(pool, queue, userID)).Err(); delErr != nil {
 					return false, delErr
 				}
-				if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, ruleset), userID).Result(); remErr != nil {
+				if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, queue), userID).Result(); remErr != nil {
 					return false, remErr
 				}
 				continue
@@ -521,12 +573,12 @@ func matchFromTickets(opponent, self ticket) contracts.MatchFound {
 		seasonID = opponent.SeasonID
 	}
 	return contracts.MatchFound{
-		MatchID:  "m-" + intStr(time.Now().UnixMilli()),
+		MatchID:  entityid.New(),
 		Mode:     contracts.ModeDuel,
 		SeasonID: seasonID,
 		Config: contracts.NormalizeMatchConfig(contracts.MatchConfig{
-			Ruleset: ruleset,
-			MapKey:  contracts.MapKeyForRuleset(ruleset),
+			Ruleset:     ruleset,
+			StreetNames: self.StreetNames,
 		}),
 		Players: []string{opponent.UserID, self.UserID},
 		Profiles: map[string]contracts.PlayerProfile{

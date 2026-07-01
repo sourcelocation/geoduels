@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"geoduels/pkg/contentfilter"
 	"geoduels/pkg/persistence"
 )
 
@@ -98,17 +99,20 @@ func (a *api) resolveOAuthIdentity(r *http.Request, state oauthStateClaims, prov
 }
 
 func (a *api) oauthSessionPayload(provider, accessToken string, identity persistence.Identity, fallbackName, returnTo string) map[string]any {
-	suggestedNick := defaultStr(identity.ProviderName, defaultStr(fallbackName, identity.DisplayName))
+	suggestedNick, err := a.suggestedNickname(identity, fallbackName)
+	if err != nil {
+		suggestedNick = contentfilter.NicknameSuggestionBase(defaultStr(identity.ProviderName, defaultStr(fallbackName, identity.DisplayName)))
+	}
 	return map[string]any{
 		"ok":                    true,
 		"provider":              provider,
 		"accessToken":           accessToken,
-		"onboardingRequired":    !identity.Onboarded,
+		"nicknameRequired":      identity.NicknameRequired,
 		"suggestedNickname":     suggestedNick,
 		"linkedProviders":       identity.LinkedProviders,
 		"authMigrationRequired": false,
 		"recoveryAvailable":     false,
-		"canPlay":               identity.Onboarded && !identity.IsBanned,
+		"canPlay":               !identity.NicknameRequired && !identity.IsBanned,
 		"returnTo":              returnTo,
 		"user": map[string]any{
 			"id":           identity.Sub,

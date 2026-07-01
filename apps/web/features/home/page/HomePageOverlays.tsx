@@ -1,5 +1,5 @@
 import EndMatchOverlay from "../../../components/ui/EndMatchOverlay";
-import NicknameOnboardingModal from "../../../components/home/NicknameOnboardingModal";
+import RequiredNicknameModal from "../../../components/home/RequiredNicknameModal";
 import AppModalShell from "../../../components/ui/AppModalShell";
 import GuestVerificationOverlay from "./GuestVerificationOverlay";
 import type {
@@ -14,7 +14,7 @@ type HomePageOverlaysProps = {
   actions: Pick<
     HomeActions,
     | "setNicknameInput"
-    | "submitOnboardingNickname"
+    | "submitRequiredNickname"
     | "leaveGame"
     | "reportPlayer"
     | "startSingleplayer"
@@ -31,15 +31,18 @@ export default function HomePageOverlays({
   actions,
 }: HomePageOverlaysProps) {
   const activeNotification = overlays.notifications?.[0];
+  const replayConfig = overlays.endMatch.open
+    ? overlays.endMatch.matchConfig
+    : undefined;
   return (
     <>
-      <NicknameOnboardingModal
-        open={overlays.onboardingOpen}
+      <RequiredNicknameModal
+        open={overlays.nicknameRequiredOpen}
         nicknameInput={auth.nicknameInput}
         nicknameError={auth.nicknameError}
         nicknameSaving={auth.nicknameSaving}
         onChangeNickname={actions.setNicknameInput}
-        onSubmit={() => void actions.submitOnboardingNickname()}
+        onSubmit={() => void actions.submitRequiredNickname()}
       />
       <GuestVerificationOverlay
         verification={overlays.guestVerification}
@@ -70,7 +73,7 @@ export default function HomePageOverlays({
             onClick={() =>
               void actions.dismissNotification(activeNotification.id)
             }
-            className="mt-5 min-h-11 w-full rounded-xl bg-[#2ad18f] px-4 text-sm font-black text-[#08111b]"
+            className="mt-5 min-h-11 w-full rounded-xl bg-accentPrimary px-4 text-sm font-black text-white hover:bg-accentPrimaryDeep"
           >
             Got it
           </button>
@@ -108,7 +111,7 @@ export default function HomePageOverlays({
             onClick={() =>
               void actions.dismissNotification(activeNotification.id)
             }
-            className="mt-5 min-h-11 w-full rounded-xl bg-[#77f0be] px-4 text-sm font-black text-[#08111b]"
+            className="mt-5 min-h-11 w-full rounded-xl bg-accentPrimary px-4 text-sm font-black text-white hover:bg-accentPrimaryDeep"
           >
             Claim
           </button>
@@ -117,27 +120,11 @@ export default function HomePageOverlays({
       {overlays.endMatch.open && (
         <EndMatchOverlay
           onLeaveGame={actions.leaveGame}
+          backLabel={overlays.endMatch.backLabel}
           mode={overlays.endMatch.mode}
           outcome={overlays.endMatch.outcome}
-          selfName={overlays.endMatch.selfName}
-          opponentName={overlays.endMatch.opponentName}
-          opponentUserId={overlays.endMatch.opponentUserId}
-          selfElo={overlays.endMatch.selfElo}
-          opponentElo={overlays.endMatch.opponentElo}
-          selfEloDelta={overlays.endMatch.selfEloDelta}
-          opponentEloDelta={overlays.endMatch.opponentEloDelta}
-          selfHP={overlays.endMatch.selfHP}
-          oppHP={overlays.endMatch.oppHP}
-          selfAvatarUrl={overlays.endMatch.selfAvatarUrl}
-          oppAvatarUrl={overlays.endMatch.oppAvatarUrl}
-          selfFallback={overlays.endMatch.selfFallback}
-          oppFallback={overlays.endMatch.oppFallback}
-          selfAvatarColor={overlays.endMatch.selfAvatarColor}
-          oppAvatarColor={overlays.endMatch.oppAvatarColor}
-          selfIsAdmin={overlays.endMatch.selfIsAdmin}
-          opponentIsAdmin={overlays.endMatch.opponentIsAdmin}
-          selfSelectedBadge={overlays.endMatch.selfSelectedBadge}
-          opponentSelectedBadge={overlays.endMatch.opponentSelectedBadge}
+          sides={overlays.endMatch.sides}
+          selfUserId={overlays.endMatch.selfUserId}
           totalScore={overlays.endMatch.totalScore}
           roundResults={overlays.endMatch.roundResults}
           resultPlayerNames={overlays.endMatch.resultPlayerNames}
@@ -145,12 +132,10 @@ export default function HomePageOverlays({
           resultPlayerFallbacks={overlays.endMatch.resultPlayerFallbacks}
           resultPlayerBorderColors={overlays.endMatch.resultPlayerBorderColors}
           participantsById={overlays.endMatch.participantsById}
-          selfParticipant={overlays.endMatch.selfParticipant}
-          opponentParticipant={overlays.endMatch.opponentParticipant}
           onReportPlayer={actions.reportPlayer}
           onPlayAgain={
             overlays.endMatch.mode === "singleplayer"
-              ? actions.startSingleplayer
+              ? () => actions.startSingleplayer(replayConfig)
               : undefined
           }
           asPage

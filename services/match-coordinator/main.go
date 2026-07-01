@@ -22,7 +22,6 @@ import (
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
-	"geoduels/pkg/lobbysettings"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchlaunch"
 	"geoduels/pkg/matchstore"
@@ -32,19 +31,18 @@ import (
 )
 
 type matchCoordinator struct {
-	store         matchstore.Store
-	state         *coordinator.Store
-	persist       persistence.Store
-	redis         *redis.Client
-	lobbySettings *lobbysettings.Store
-	httpClient    *http.Client
-	appSecret     []byte
-	ticketAuth    []byte
-	internal      string
-	metrics       *observability.APIMetrics
-	draining      atomic.Bool
-	chatMu        sync.Mutex
-	chatRecent    map[string][]time.Time
+	store      matchstore.Store
+	state      *coordinator.Store
+	persist    persistence.Store
+	redis      *redis.Client
+	httpClient *http.Client
+	appSecret  []byte
+	ticketAuth []byte
+	internal   string
+	metrics    *observability.APIMetrics
+	draining   atomic.Bool
+	chatMu     sync.Mutex
+	chatRecent map[string][]time.Time
 }
 
 var queueUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
@@ -63,13 +61,13 @@ func main() {
 		log.Fatal(err)
 	}
 	singleplayerTTL := getenvDuration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
-	if err := persist.ExpireStaleRuntimeMatches("solo-", singleplayerTTL); err != nil {
+	if err := persist.ExpireStaleRuntimeMatches(string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
 		log.Fatal(err)
 	}
-	if err := persist.ExpireOpenLobbies(); err != nil {
+	if err := persist.ExpireOpenParties(); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := persist.ReopenEndedLobbies(); err != nil {
+	if _, err := persist.ReopenEndedParties(); err != nil {
 		log.Fatal(err)
 	}
 	appSecret, err := requiredSecret("APP_AUTH_SECRET", 32)
@@ -86,17 +84,16 @@ func main() {
 	}
 
 	q := &matchCoordinator{
-		store:         store,
-		state:         coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
-		persist:       persist,
-		redis:         rdb,
-		lobbySettings: lobbysettings.New(rdb, 2*time.Hour),
-		httpClient:    &http.Client{Timeout: 3 * time.Second},
-		appSecret:     appSecret,
-		ticketAuth:    ticketSecret,
-		internal:      internalSecret,
-		metrics:       observability.NewAPIMetrics(),
-		chatRecent:    map[string][]time.Time{},
+		store:      store,
+		state:      coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
+		persist:    persist,
+		redis:      rdb,
+		httpClient: &http.Client{Timeout: 3 * time.Second},
+		appSecret:  appSecret,
+		ticketAuth: ticketSecret,
+		internal:   internalSecret,
+		metrics:    observability.NewAPIMetrics(),
+		chatRecent: map[string][]time.Time{},
 	}
 	defer q.persist.Close()
 	defer redisCleanup()
@@ -109,17 +106,17 @@ func main() {
 	r.HandleFunc("/queue/heartbeat", q.heartbeat).Methods(http.MethodPost)
 	r.HandleFunc("/queue/online", q.online).Methods(http.MethodGet)
 	r.HandleFunc("/chat/ws", q.chatWS).Methods(http.MethodGet)
-	r.HandleFunc("/lobbies", q.createLobby).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{id}/ws", q.lobbyWS).Methods(http.MethodGet)
-	r.HandleFunc("/lobbies/{id}/presence", q.lobbyPresence).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{id}/start", q.startLobby).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{id}/leave", q.leaveLobby).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{id}/kick", q.kickLobbyMember).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{id}/transfer-owner", q.transferLobbyOwner).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{id}/team", q.updateLobbyTeam).Methods(http.MethodPatch)
-	r.HandleFunc("/lobbies/{id}/settings", q.updateLobbySettings).Methods(http.MethodPatch)
-	r.HandleFunc("/lobbies/{code}/join", q.joinLobby).Methods(http.MethodPost)
-	r.HandleFunc("/lobbies/{code}", q.getLobby).Methods(http.MethodGet)
+	r.HandleFunc("/parties", q.createParty).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{id}/ws", q.partyWS).Methods(http.MethodGet)
+	r.HandleFunc("/parties/{id}/presence", q.partyPresence).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{id}/start", q.startParty).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{id}/leave", q.leaveParty).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{id}/kick", q.kickPartyMember).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{id}/transfer-owner", q.transferPartyOwner).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{id}/team", q.updatePartyTeam).Methods(http.MethodPatch)
+	r.HandleFunc("/parties/{id}/settings", q.updatePartySettings).Methods(http.MethodPatch)
+	r.HandleFunc("/parties/{code}/join", q.joinParty).Methods(http.MethodPost)
+	r.HandleFunc("/parties/{code}", q.getParty).Methods(http.MethodGet)
 	r.Handle("/metrics", observability.Handler(q.metrics.Registry)).Methods(http.MethodGet)
 
 	addr := getenv("MATCH_COORDINATOR_ADDR", getenv("QUEUE_COORDINATOR_ADDR", ":8090"))
@@ -132,9 +129,9 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	observability.Log("info", "match-coordinator startup", map[string]any{"addr": addr})
-	go q.runLobbyCleanupLoop(
-		getenvDuration("LOBBY_CLEANUP_INTERVAL", 30*time.Second),
-		getenvDuration("LOBBY_INACTIVITY_TTL", 5*time.Minute),
+	go q.runPartyCleanupLoop(
+		getenvDuration("PARTY_CLEANUP_INTERVAL", getenvDuration("LOBBY_CLEANUP_INTERVAL", 30*time.Second)),
+		getenvDuration("PARTY_INACTIVITY_TTL", getenvDuration("LOBBY_INACTIVITY_TTL", 5*time.Minute)),
 	)
 	go q.runMatchmakingLoop(
 		getenvDuration("MATCHMAKING_INTERVAL", 500*time.Millisecond),
@@ -165,9 +162,9 @@ func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize 
 		if err == nil && status.QueueBlocked() {
 			continue
 		}
-		for _, ruleset := range []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ} {
-			if _, err := q.store.RunMatchmaking(matchstore.QueuePoolRegistered, ruleset, batchSize); err != nil {
-				observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(matchstore.QueuePoolRegistered), "ruleset": string(ruleset), "error": err.Error()})
+		for _, queue := range matchstore.AllQueueVariants {
+			if _, err := q.store.RunMatchmaking(matchstore.QueuePoolRegistered, queue, batchSize); err != nil {
+				observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(matchstore.QueuePoolRegistered), "queue": string(queue), "error": err.Error()})
 			}
 		}
 	}
@@ -201,8 +198,8 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "account is banned", http.StatusForbidden)
 		return
 	}
-	if !identity.Onboarded {
-		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+	if identity.NicknameRequired {
+		http.Error(w, "nickname required", http.StatusForbidden)
 		return
 	}
 	if identity.AccountType == "guest" {
@@ -273,7 +270,10 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		profile.DisplayName = userID
 	}
 	queuePool := matchstore.QueuePoolRegistered
-	selectedRulesets := parseQueueRulesets(r.URL.Query().Get("rulesets"))
+	selectedQueues := parseQueueVariants(
+		r.URL.Query().Get("queues"),
+		r.URL.Query().Get("rulesets"),
+	)
 
 	if err := q.store.LeaveAllRulesets(queuePool, userID); err != nil {
 		http.Error(w, "queue unavailable", http.StatusBadGateway)
@@ -281,8 +281,8 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var found *contracts.MatchFound
-	for _, ruleset := range selectedRulesets {
-		_, nextFound, err := q.store.Join(queuePool, ruleset, contracts.QueueJoinRequest{
+	for _, queue := range selectedQueues {
+		_, nextFound, err := q.store.Join(queuePool, queue, contracts.QueueJoinRequest{
 			UserID:            userID,
 			DisplayName:       profile.DisplayName,
 			AvatarURL:         profile.AvatarURL,
@@ -319,7 +319,7 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 	assigned := false
 	defer func() {
 		if !assigned {
-			_ = q.store.Leave(queuePool, selectedRulesets, userID)
+			_ = q.store.Leave(queuePool, selectedQueues, userID)
 		}
 	}()
 
@@ -329,9 +329,9 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if found == nil {
-			found, err = q.store.Poll(queuePool, selectedRulesets, userID)
+			found, err = q.store.Poll(queuePool, selectedQueues, userID)
 			if err != nil {
-				observability.Log("warn", "queue poll failed", map[string]any{"userId": userID, "pool": string(queuePool), "rulesets": selectedRulesets, "error": err.Error()})
+				observability.Log("warn", "queue poll failed", map[string]any{"userId": userID, "pool": string(queuePool), "queues": selectedQueues, "error": err.Error()})
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_POLL_FAILED", "message": "queue poll failed"})
 				return
 			}
@@ -363,9 +363,9 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		case <-pollTicker.C:
 		case <-heartbeatTicker.C:
 			q.touchPresence(userID)
-			status, err := q.store.Heartbeat(queuePool, selectedRulesets, userID)
+			status, err := q.store.Heartbeat(queuePool, selectedQueues, userID)
 			if err != nil {
-				observability.Log("warn", "queue heartbeat failed", map[string]any{"userId": userID, "pool": string(queuePool), "rulesets": selectedRulesets, "error": err.Error()})
+				observability.Log("warn", "queue heartbeat failed", map[string]any{"userId": userID, "pool": string(queuePool), "queues": selectedQueues, "error": err.Error()})
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_HEARTBEAT_FAILED", "message": "queue heartbeat failed"})
 				return
 			}
@@ -392,8 +392,8 @@ func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identity not found", http.StatusUnauthorized)
 		return
 	}
-	if !identity.Onboarded {
-		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+	if identity.NicknameRequired {
+		http.Error(w, "nickname required", http.StatusForbidden)
 		return
 	}
 	if identity.AccountType == "guest" {
@@ -402,7 +402,7 @@ func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	q.touchPresence(claims.Sub)
 
-	status, err := q.store.Heartbeat(matchstore.QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ}, claims.Sub)
+	status, err := q.store.Heartbeat(matchstore.QueuePoolRegistered, matchstore.AllQueueVariants, claims.Sub)
 	if err != nil {
 		http.Error(w, "queue unavailable", http.StatusBadGateway)
 		return
@@ -410,22 +410,41 @@ func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
 }
 
-func parseQueueRulesets(raw string) []contracts.GameRuleset {
-	if strings.TrimSpace(raw) == "" {
-		return []contracts.GameRuleset{contracts.RulesetMoving}
+func parseQueueVariants(rawQueues string, legacyRulesets string) []matchstore.QueueVariant {
+	if strings.TrimSpace(rawQueues) == "" {
+		return parseLegacyQueueRulesets(legacyRulesets)
 	}
-	out := []contracts.GameRuleset{}
-	seen := map[contracts.GameRuleset]bool{}
-	for _, part := range strings.Split(raw, ",") {
-		ruleset := contracts.NormalizeRuleset(contracts.GameRuleset(strings.TrimSpace(strings.ToLower(part))))
-		if seen[ruleset] {
+	out := []matchstore.QueueVariant{}
+	seen := map[matchstore.QueueVariant]bool{}
+	for _, part := range strings.Split(rawQueues, ",") {
+		queue := matchstore.NormalizeQueueVariant(matchstore.QueueVariant(strings.TrimSpace(strings.ToLower(part))))
+		if seen[queue] {
 			continue
 		}
-		seen[ruleset] = true
-		out = append(out, ruleset)
+		seen[queue] = true
+		out = append(out, queue)
 	}
 	if len(out) == 0 {
-		return []contracts.GameRuleset{contracts.RulesetMoving}
+		return []matchstore.QueueVariant{matchstore.QueueMoving}
+	}
+	return out
+}
+
+func parseLegacyQueueRulesets(raw string) []matchstore.QueueVariant {
+	if strings.TrimSpace(raw) == "" {
+		return []matchstore.QueueVariant{matchstore.QueueMoving}
+	}
+	out := []matchstore.QueueVariant{}
+	seen := map[matchstore.QueueVariant]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		variant := matchstore.QueueMoving
+		if strings.TrimSpace(strings.ToLower(part)) == string(contracts.RulesetNMPZ) {
+			variant = matchstore.QueueNMPZ
+		}
+		if !seen[variant] {
+			seen[variant] = true
+			out = append(out, variant)
+		}
 	}
 	return out
 }
@@ -497,15 +516,30 @@ func (q *matchCoordinator) launcher() matchlaunch.Launcher {
 }
 
 func (q *matchCoordinator) authenticatedClaims(r *http.Request) (auth.AppClaims, error) {
+	var claims auth.AppClaims
+	var err error
 	authz := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(authz, "Bearer ") {
-		return auth.ValidateAppAccessToken(q.appSecret, strings.TrimSpace(strings.TrimPrefix(authz, "Bearer ")))
+		claims, err = auth.ValidateAppAccessToken(q.appSecret, strings.TrimSpace(strings.TrimPrefix(authz, "Bearer ")))
+	} else {
+		accessToken := strings.TrimSpace(r.URL.Query().Get("accessToken"))
+		if accessToken == "" {
+			return auth.AppClaims{}, errors.New("missing bearer token")
+		}
+		claims, err = auth.ValidateAppAccessToken(q.appSecret, accessToken)
 	}
-	accessToken := strings.TrimSpace(r.URL.Query().Get("accessToken"))
-	if accessToken == "" {
-		return auth.AppClaims{}, errors.New("missing bearer token")
+	if err != nil {
+		return auth.AppClaims{}, err
 	}
-	return auth.ValidateAppAccessToken(q.appSecret, accessToken)
+	if resolver, ok := q.persist.(interface {
+		ResolveLegacyEntityID(entityType, legacyID string) (string, bool, error)
+	}); ok {
+		if id, found, resolveErr := resolver.ResolveLegacyEntityID("user", claims.Sub); resolveErr == nil && found {
+			claims.Sub = id
+			claims.Subject = id
+		}
+	}
+	return claims, nil
 }
 
 func (q *matchCoordinator) writeQueueMessage(conn *websocket.Conn, writeMu *sync.Mutex, event string, payload any) bool {

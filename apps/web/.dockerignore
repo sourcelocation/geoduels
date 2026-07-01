@@ -2,6 +2,7 @@
 .env*
 node_modules
 .next
+.next-dev
 coverage
 test-results
 playwright-report

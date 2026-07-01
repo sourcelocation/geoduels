@@ -2,15 +2,6 @@ package persistence
 
 import "testing"
 
-func TestGoogleOnboardedAt(t *testing.T) {
-	if got := googleOnboardedAt(false); got != nil {
-		t.Fatalf("expected non-guest google users to keep current onboarding state")
-	}
-	if got := googleOnboardedAt(true); got == nil {
-		t.Fatalf("expected linked guest users to stay onboarded")
-	}
-}
-
 func TestChooseGoogleIdentityUser(t *testing.T) {
 	tests := []struct {
 		name                     string

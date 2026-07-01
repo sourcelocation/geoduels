@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { LegalDocumentPage } from "../features/legal/LegalDocumentPage";
 
 const sections = [
   {
@@ -33,18 +33,19 @@ const sections = [
   {
     title: "5. User Content",
     body: [
-      "User content includes display names, avatars, lobby information, reports, report reasons, and any other information you submit or make available through GeoDuels.",
+      "User content includes display names, avatars, party information, reports, report reasons, and any other information you submit or make available through GeoDuels.",
       "You are responsible for your user content. You may not submit content that is illegal, hateful, harassing, threatening, sexually explicit, infringing, impersonating, spammy, or otherwise abusive.",
       "GeoDuels may remove, restrict, or moderate user content. Nickname checks and other automated or manual moderation tools may be used to block bad names or abusive content.",
       "By submitting user content, you give GeoDuels permission to host, display, process, reproduce, and use it as needed to operate, moderate, secure, and improve the service.",
     ],
   },
   {
-    title: "6. Fair Play and Ranked Integrity",
+    title: "6. Fair Play and Competitive Integrity",
     body: [
-      "Ranked integrity is central to GeoDuels. You may not cheat, automate, manipulate, or gain an unfair advantage in any match, lobby, queue, leaderboard, or ranking system.",
-      "Prohibited conduct includes bots, scripts, macros, overlays, location hint tools, external databases used during a match, unauthorized browser extensions, automated guessing, account sharing, boosting, smurf abuse, coordinated win-trading, intentionally throwing matches, MMR manipulation, and exploiting bugs or system behavior.",
-      "You may not tamper with clients, network traffic, tokens, matchmaking, game state APIs, maps, location data, or any infrastructure used by GeoDuels.",
+      "Competitive integrity is central to GeoDuels. You may not obtain or attempt to obtain an unfair advantage over other players in any context where your conduct affects other players' experience, ratings, standings, or outcomes. This rule applies regardless of the method used — including software, hardware, information sources, coordination with other users, or exploitation of bugs, design quirks, or system behavior.",
+      "This rule does not apply to a friendly match — a match, lobby, or party in which every participant has knowingly and mutually agreed to the rules of play, and which remains confined to those participants. For example, two friends in a private lobby who agree in advance that one of them may use a location-revealing tool while playing against the other are not gaining an unfair advantage, because the disadvantaged participant consented. Friendly matches may not feed into ranked systems, public leaderboards, or any other setting that affects players outside the agreed participants.",
+      "Conduct that typically violates the rule above includes — without limitation — bots, scripts, macros, overlays, location hint tools, external databases used during a match, unauthorized browser extensions, automated guessing, account sharing, boosting, smurf abuse, coordinated win-trading, intentionally throwing matches, MMR manipulation, and exploiting bugs or system behavior. The official GeoDuels browser extension is authorized only for the gameplay features presented by GeoDuels.",
+      "Separately, you may not tamper with clients, network traffic, tokens, matchmaking, game state APIs, maps, location data, or any infrastructure used by GeoDuels. This rule protects the service itself and applies regardless of consent, because it is not about competitive fairness between specific players.",
     ],
   },
   {
@@ -125,52 +126,11 @@ const sections = [
 
 export default function TermsPage() {
   return (
-    <div className="min-h-screen bg-[#0d1216] font-sans text-[#f4f9ff]">
-      <header className="border-b border-white/10">
-        <div className="mx-auto flex w-full max-w-4xl items-center justify-between px-6 py-5">
-          <Link
-            href="/"
-            className="text-sm font-bold text-[#a9bfd4] transition hover:text-white"
-          >
-            Back to GeoDuels
-          </Link>
-          <img
-            src="/logo.v2.png"
-            alt="GeoDuels"
-            width={120}
-            height={32}
-            className="h-auto w-[110px]"
-          />
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-4xl px-6 py-10 sm:py-14">
-        <div className="border-b border-white/10 pb-8">
-          <h1 className="text-3xl font-black text-white sm:text-4xl">
-            Terms of Service
-          </h1>
-          <p className="mt-3 text-sm text-[#a9bfd4]">
-            Last updated: May 10, 2026
-          </p>
-          <p className="mt-5 max-w-3xl text-base leading-7 text-[#c5d4e2]">
-            These Terms explain the rules for using GeoDuels and help protect
-            the game, players, and ranked integrity.
-          </p>
-        </div>
-
-        <div className="mt-8 space-y-8">
-          {sections.map((section) => (
-            <section key={section.title}>
-              <h2 className="text-xl font-black text-white">{section.title}</h2>
-              <div className="mt-3 space-y-3 text-[15px] leading-7 text-[#c5d4e2]">
-                {section.body.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      </main>
-    </div>
+    <LegalDocumentPage
+      title="Terms of Service"
+      updatedAt="June 25, 2026"
+      description="These Terms explain the rules for using GeoDuels and help protect the game, players, and ranked integrity."
+      sections={sections}
+    />
   );
 }

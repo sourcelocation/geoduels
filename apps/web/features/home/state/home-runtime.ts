@@ -5,14 +5,14 @@ import type { SfxController } from '../../../lib/audio/sfx';
 import { SessionController } from '../../auth/controllers/session-controller';
 import { ChatController } from '../../chat/controllers/chat-controller';
 import { GameController } from '../../game/controllers/game-controller';
-import { LobbyController } from '../../lobby/controllers/lobby-controller';
+import { PartyController } from '../../lobby/controllers/party-controller';
 import { MatchController } from '../../matchmaking/controllers/match-controller';
 import { MatchRouteController } from '../../matchmaking/controllers/match-route-controller';
 
 export type HomeRuntime = {
   config: RuntimeConfig;
   sessionController: SessionController;
-  lobbyController: LobbyController;
+  partyController: PartyController;
   matchController: MatchController;
   matchRouteController: MatchRouteController;
   gameController: GameController;
@@ -32,7 +32,7 @@ function createHomeRuntime(config: RuntimeConfig): HomeRuntime {
     config,
     onResetSession: () => {
       runtime.matchController.resetConnectionState();
-      runtime.lobbyController?.reset();
+      runtime.partyController?.reset();
       runtime.chatController?.reset();
     }
   });
@@ -41,7 +41,7 @@ function createHomeRuntime(config: RuntimeConfig): HomeRuntime {
     sessionController: runtime.sessionController,
     sfxController: runtime.sfxController
   });
-  runtime.lobbyController = new LobbyController({
+  runtime.partyController = new PartyController({
     config,
     sessionController: runtime.sessionController,
     matchController: runtime.matchController

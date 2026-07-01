@@ -1,10 +1,6 @@
 package sessionpolicy
 
-import (
-	"strings"
-
-	"geoduels/pkg/contracts"
-)
+import "geoduels/pkg/contracts"
 
 type Decision string
 
@@ -18,9 +14,6 @@ const (
 func NormalizeMode(mode contracts.MatchMode, matchID string) contracts.MatchMode {
 	if mode != "" {
 		return mode
-	}
-	if strings.HasPrefix(strings.TrimSpace(matchID), "solo-") {
-		return contracts.ModeSingleplayer
 	}
 	return contracts.ModeDuel
 }

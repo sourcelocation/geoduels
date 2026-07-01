@@ -4,6 +4,8 @@ export const MAX_DUEL_MMR_DELTA = 80;
 
 const MIN_RANKED_MMR = 500;
 const LOW_MMR_FORGIVENESS_END_MMR = 1000;
+const PROVISIONAL_LOSS_MIN_FACTOR = 0.2;
+const PROVISIONAL_PROTECTION_MMR_GAP = 250;
 const MIN_RATING_RD = 110;
 const MAX_RATING_RD = 220;
 const GLICKO_C = Math.sqrt((MAX_RATING_RD ** 2 - MIN_RATING_RD ** 2) / 365);
@@ -33,9 +35,23 @@ export function calculateDuelEloDeltas(
 
   const selfNext = calculateGlickoRating(selfElo, selfRd, opponentElo, opponentRd, selfScore);
   const opponentNext = calculateGlickoRating(opponentElo, opponentRd, selfElo, selfRd, opponentScore);
-  const selfNextRating = clampRankedMmr(applyLowMmrLossForgiveness(selfElo, capRatingDelta(selfElo, selfNext.rating)));
+  const selfCappedRating = capRatingDelta(selfElo, selfNext.rating);
+  const opponentCappedRating = capRatingDelta(opponentElo, opponentNext.rating);
+  const selfProtectedRating = applyProvisionalOpponentLossProtection(
+    selfElo,
+    opponentElo,
+    opponentRd,
+    selfCappedRating
+  );
+  const opponentProtectedRating = applyProvisionalOpponentLossProtection(
+    opponentElo,
+    selfElo,
+    selfRd,
+    opponentCappedRating
+  );
+  const selfNextRating = clampRankedMmr(applyLowMmrLossForgiveness(selfElo, selfProtectedRating));
   const opponentNextRating = clampRankedMmr(
-    applyLowMmrLossForgiveness(opponentElo, capRatingDelta(opponentElo, opponentNext.rating))
+    applyLowMmrLossForgiveness(opponentElo, opponentProtectedRating)
   );
 
   return {
@@ -117,6 +133,30 @@ function applyLowMmrLossForgiveness(current: number, next: number): number {
 
   const factor = (current - MIN_RANKED_MMR) / rangeSize;
   return current + Math.round(delta * factor);
+}
+
+function applyProvisionalOpponentLossProtection(
+  selfMmr: number,
+  opponentMmr: number,
+  opponentRd: number,
+  next: number
+): number {
+  const delta = next - selfMmr;
+  if (delta >= 0 || opponentMmr > selfMmr - PROVISIONAL_PROTECTION_MMR_GAP) return next;
+
+  const factor = provisionalRdFactor(opponentRd);
+  if (factor >= 1) return next;
+
+  return selfMmr + Math.round(delta * factor);
+}
+
+function provisionalRdFactor(rd: number): number {
+  const safeRd = clampRatingRd(rd);
+  const rangeSize = MAX_RATING_RD - MIN_RATING_RD;
+  if (rangeSize <= 0) return 1;
+
+  const certainty = 1 - (safeRd - MIN_RATING_RD) / rangeSize;
+  return Math.min(1, Math.max(PROVISIONAL_LOSS_MIN_FACTOR, certainty));
 }
 
 function clampRankedMmr(mmr: number): number {

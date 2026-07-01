@@ -108,7 +108,6 @@ builds=(
   "services/moderation-worker/Dockerfile|geoduels-moderation-worker|.|generic"
   "services/realtime-gateway/Dockerfile|geoduels-realtime-gateway|.|generic"
   "services/gameplay-node/Dockerfile|geoduels-gameplay-node|.|generic"
-  "workers/location-ingest/Dockerfile|geoduels-location-ingest|.|generic"
   "apps/web/Dockerfile|geoduels-web|apps/web|web"
 )
 

@@ -40,8 +40,8 @@ type Assignment struct {
 	Players               []string              `json:"players"`
 	UpdatedAt             int64                 `json:"updatedAt"`
 	RecoverableUntil      int64                 `json:"recoverableUntil,omitempty"`
-	SourceLobbyID         string                `json:"sourceLobbyId,omitempty"`
-	SourceLobbyInviteCode string                `json:"sourceLobbyInviteCode,omitempty"`
+	SourcePartyID         string                `json:"sourcePartyId,omitempty"`
+	SourcePartyInviteCode string                `json:"sourcePartyInviteCode,omitempty"`
 }
 
 type Store struct {

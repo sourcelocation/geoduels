@@ -161,6 +161,9 @@ services:
       - AIR_VERSION=v1.61.7
       - MODERATION_WORKER_ADDR=:8093
       - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
+      - RISK_ENGINE_URL=${RISK_ENGINE_URL:-}
+      - RISK_ENGINE_TOKEN=${RISK_ENGINE_TOKEN:-}
+      - RISK_ENGINE_TIMEOUT=${RISK_ENGINE_TIMEOUT:-750ms}
     ports:
       - "8093:8093"
     depends_on:
@@ -182,8 +185,6 @@ services:
       - DISCORD_WORKER_ADDR=:8094
       - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
-      - DISCORD_RECONCILE_INTERVAL=${DISCORD_RECONCILE_INTERVAL}
     ports:
       - "8094:8094"
     depends_on:

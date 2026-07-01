@@ -120,6 +120,39 @@ func TestCalculateDuelRatingUpdatesKeepsMinimumMMRAtFiveHundred(t *testing.T) {
 	}
 }
 
+func TestCalculateDuelRatingUpdatesProtectsEstablishedFavoriteAgainstNewUnderdog(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	favorite, underdog := CalculateDuelRatingUpdates(
+		RatingState{MMR: 1000, RD: minimumRatingRD, UpdatedAt: now},
+		RatingState{MMR: 500, RD: initialRatingRD, UpdatedAt: now},
+		"p2",
+		now,
+	)
+
+	if favorite.Delta > -8 || favorite.Delta < -15 {
+		t.Fatalf("expected protected favorite loss around 20%% of normal, got %d", favorite.Delta)
+	}
+	if underdog.Delta != maxDuelMMRDelta {
+		t.Fatalf("expected new underdog upset win to remain capped at +%d, got %d", maxDuelMMRDelta, underdog.Delta)
+	}
+}
+
+func TestCalculateDuelRatingUpdatesRestoresUpsetPenaltyAgainstEstablishedUnderdog(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	favorite, _ := CalculateDuelRatingUpdates(
+		RatingState{MMR: 1000, RD: minimumRatingRD, UpdatedAt: now},
+		RatingState{MMR: 500, RD: minimumRatingRD, UpdatedAt: now},
+		"p2",
+		now,
+	)
+
+	if favorite.Delta != -maxDuelMMRDelta {
+		t.Fatalf("expected established underdog upset penalty to cap at -%d, got %d", maxDuelMMRDelta, favorite.Delta)
+	}
+}
+
 func TestCalculateDuelRatingUpdatesHighRDExpectedLossMovesMoreThanSettledLoss(t *testing.T) {
 	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 

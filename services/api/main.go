@@ -36,6 +36,8 @@ func main() {
 	}
 	observability.Log("info", "api startup", map[string]any{"addr": addr})
 	go a.runGuestAccountCleanupLoop()
+	go a.runStorageCleanupLoop()
+	go a.runRankedSeasonResetLoop()
 	go handleAPIShutdown(a, srv)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)

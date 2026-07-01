@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { LegalDocumentPage } from "../features/legal/LegalDocumentPage";
 
 const sections = [
   {
@@ -14,7 +14,7 @@ const sections = [
       "Account information. If you sign in with Discord, we receive information needed to create and maintain your account, such as your Discord account identifier, email address when available, display name, and avatar URL. During account migration, Google OAuth may be used only to prove ownership of an older GeoDuels account. GeoDuels may also create guest accounts with generated identifiers and display names.",
       "Profile and ranking information. We store your display name, avatar, MMR, rating data, games played, wins, ranked statistics, account status, moderator/admin flags, bans, and related account history.",
       "Authentication and session information. We store session records, secure refresh-session information, IP addresses, user agents, timestamps, and related security data used to keep accounts signed in and protect the service.",
-      "Gameplay information. We store match IDs, players in a match, guesses, coordinates, round timing, scores, HP, match snapshots, match results, reconnect/session state, lobby data, invite codes, and match history.",
+      "Gameplay information. We store match IDs, players in a match, guesses, coordinates, round timing, scores, HP, match snapshots, match results, reconnect/session state, party data, invite codes, and match history.",
       "Moderation and safety information. We store reports, report categories and reasons, reporter and reported player IDs, moderation cases, evidence, moderator notes, actions, bans, report reputation signals, and related audit history.",
       "Technical information. We may collect logs, diagnostic data, request metadata, error information, service health data, and timing information needed to operate, secure, debug, and improve GeoDuels.",
       "Analytics information. GeoDuels may process basic analytics about matches, rankings, service usage, and timing to understand gameplay and operate the service.",
@@ -91,52 +91,11 @@ const sections = [
 
 export default function PrivacyPage() {
   return (
-    <div className="min-h-screen bg-[#0d1216] font-sans text-[#f4f9ff]">
-      <header className="border-b border-white/10">
-        <div className="mx-auto flex w-full max-w-4xl items-center justify-between px-6 py-5">
-          <Link
-            href="/"
-            className="text-sm font-bold text-[#a9bfd4] transition hover:text-white"
-          >
-            Back to GeoDuels
-          </Link>
-          <img
-            src="/logo.v2.png"
-            alt="GeoDuels"
-            width={120}
-            height={32}
-            className="h-auto w-[110px]"
-          />
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-4xl px-6 py-10 sm:py-14">
-        <div className="border-b border-white/10 pb-8">
-          <h1 className="text-3xl font-black text-white sm:text-4xl">
-            Privacy Policy
-          </h1>
-          <p className="mt-3 text-sm text-[#a9bfd4]">
-            Last updated: May 10, 2026
-          </p>
-          <p className="mt-5 max-w-3xl text-base leading-7 text-[#c5d4e2]">
-            This policy describes how GeoDuels handles information when you use
-            the game and related services.
-          </p>
-        </div>
-
-        <div className="mt-8 space-y-8">
-          {sections.map((section) => (
-            <section key={section.title}>
-              <h2 className="text-xl font-black text-white">{section.title}</h2>
-              <div className="mt-3 space-y-3 text-[15px] leading-7 text-[#c5d4e2]">
-                {section.body.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      </main>
-    </div>
+    <LegalDocumentPage
+      title="Privacy Policy"
+      updatedAt="May 10, 2026"
+      description="This policy describes how GeoDuels handles information when you use the game and related services."
+      sections={sections}
+    />
   );
 }

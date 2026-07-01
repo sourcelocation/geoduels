@@ -198,7 +198,6 @@ function FitToResults({ results }: { results: RoundResult[] }) {
 
 type WrappedResultLayerProps = {
   result: RoundResult;
-  actualLocationIcon: L.DivIcon;
   resultPlayerAvatars?: Record<string, string | undefined>;
   resultPlayerFallbacks?: Record<string, string | undefined>;
   resultPlayerBorderColors?: Record<string, string | undefined>;
@@ -206,13 +205,16 @@ type WrappedResultLayerProps = {
 
 function WrappedResultLayer({
   result,
-  actualLocationIcon,
   resultPlayerAvatars,
   resultPlayerFallbacks,
   resultPlayerBorderColors
 }: WrappedResultLayerProps) {
   const map = useMap();
   const [viewportVersion, setViewportVersion] = useState(0);
+  const actualLocationIcon = useMemo(
+    () => createActualLocationIcon(result.actualLocation.lat, result.actualLocation.lng),
+    [result.actualLocation.lat, result.actualLocation.lng]
+  );
 
   useMapEvents({
     move() {
@@ -251,9 +253,6 @@ function WrappedResultLayer({
         icon={actualLocationIcon}
         zIndexOffset={5000}
         title="Open actual location in Google Maps"
-        eventHandlers={{
-          click: (event) => openGoogleMapsLocation(result.actualLocation.lat, result.actualLocation.lng, event)
-        }}
       />
       {layout.players.map(({ id, result: player, displayedLatLng }) => (
         <Polyline
@@ -338,12 +337,13 @@ function WrappedResultsLayer({
         <Marker
           key={`actual-${round.roundIndex}`}
           position={[round.actualLatLng.lat, round.actualLatLng.lng]}
-          icon={createActualLocationIcon(round.roundIndex + 1)}
+          icon={createActualLocationIcon(
+            round.actualLocation.lat,
+            round.actualLocation.lng,
+            round.roundIndex + 1
+          )}
           zIndexOffset={4000}
           title={`Round ${round.roundIndex + 1}: Open actual location in Google Maps`}
-          eventHandlers={{
-            click: (event) => openGoogleMapsLocation(round.actualLocation.lat, round.actualLocation.lng, event)
-          }}
         />
       ))}
       {layout.flatMap((round) =>
@@ -428,19 +428,13 @@ function hasVisibleGuess(p: RoundPlayerResult) {
   return !(p.lat === 0 && p.lng === 0 && p.score === 0);
 }
 
-function buildGoogleMapsLocationUrl(lat: number, lng: number) {
+export function buildGoogleMapsLocationUrl(lat: number, lng: number) {
   const params = new URLSearchParams({
     api: '1',
     map_action: 'pano',
     viewpoint: `${lat},${normalizeLng(lng)}`
   });
   return `https://www.google.com/maps/@?${params.toString()}`;
-}
-
-function openGoogleMapsLocation(lat: number, lng: number, event?: L.LeafletMouseEvent) {
-  event?.originalEvent.preventDefault();
-  event?.originalEvent.stopPropagation();
-  window.open(buildGoogleMapsLocationUrl(lat, lng), '_blank', 'noopener,noreferrer');
 }
 
 function createAvatarMarkerIcon({
@@ -477,15 +471,19 @@ function normalizePinBorderColor(color?: string) {
   return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(trimmed) ? trimmed : '';
 }
 
-function createActualLocationIcon(roundNumber?: number) {
+export function createActualLocationIcon(lat: number, lng: number, roundNumber?: number) {
   const label = typeof roundNumber === 'number' ? String(roundNumber) : '';
   const content = label
     ? `<span class="actualLocationNumber">${label}</span>`
     : '<span class="actualLocationFlag"></span>';
+  const mapsUrl = buildGoogleMapsLocationUrl(lat, lng).replace(/&/g, '&amp;');
+  const accessibleLabel = label
+    ? `Open round ${label} actual location in Google Maps`
+    : 'Open actual location in Google Maps';
 
   return L.divIcon({
     className: 'actual-location-marker',
-    html: `<div class="actualLocationPin" aria-hidden="true">${content}</div>`,
+    html: `<a class="actualLocationLink" href="${mapsUrl}" target="_blank" rel="noopener noreferrer" aria-label="${accessibleLabel}"><span class="actualLocationPin" aria-hidden="true">${content}</span></a>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15]
   });
@@ -517,7 +515,6 @@ export default function GuessMap({
       size: 38 / 1.25
     });
   }, [guessAvatarUrl, guessAvatarFallback]);
-  const actualLocationIcon = useMemo(() => createActualLocationIcon(), []);
 
   return (
     <MapContainer
@@ -549,7 +546,6 @@ export default function GuessMap({
       {mode === 'result' && result ? (
         <WrappedResultLayer
           result={result}
-          actualLocationIcon={actualLocationIcon}
           resultPlayerAvatars={resultPlayerAvatars}
           resultPlayerFallbacks={resultPlayerFallbacks}
           resultPlayerBorderColors={resultPlayerBorderColors}

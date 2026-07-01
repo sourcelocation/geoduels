@@ -36,4 +36,31 @@ describe('calculateDuelEloDeltas', () => {
     expect(regular.opponentDelta).toBeGreaterThanOrEqual(-32);
     expect(regular.opponentDelta).toBeLessThanOrEqual(-28);
   });
+
+  it('protects established favorites from large losses against new low-rated opponents', () => {
+    const result = calculateDuelEloDeltas(
+      1000,
+      500,
+      'opp',
+      110,
+      220
+    );
+
+    expect(result.selfDelta).toBeGreaterThanOrEqual(-15);
+    expect(result.selfDelta).toBeLessThanOrEqual(-8);
+    expect(result.opponentDelta).toBe(MAX_DUEL_MMR_DELTA);
+  });
+
+  it('keeps normal upset penalties against established low-rated opponents', () => {
+    const result = calculateDuelEloDeltas(
+      1000,
+      500,
+      'opp',
+      110,
+      110
+    );
+
+    expect(result.selfDelta).toBeGreaterThanOrEqual(-65);
+    expect(result.selfDelta).toBeLessThanOrEqual(-55);
+  });
 });

@@ -2,7 +2,6 @@ export type ChangelogPost = {
   id: number;
   slug: string;
   title: string;
-  summary: string;
   markdown: string;
   published: boolean;
   createdAt: string;
@@ -12,7 +11,6 @@ export type ChangelogPost = {
 export type ChangelogPostInput = {
   slug: string;
   title: string;
-  summary: string;
   markdown: string;
   published: boolean;
 };

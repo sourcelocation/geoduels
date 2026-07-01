@@ -1,11 +1,11 @@
 import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { readError } from "../../../lib/http";
+import { apiFetch, authHeaders, mergeHeaders, readError } from "../../../lib/http";
 import type { LeaderboardSummary } from "../controllers/session-controller";
 
 export type OAuthIntent = "signin" | "link" | "upgrade_guest";
 
 export async function requestSession(config: RuntimeConfig) {
-  const resp = await fetch(`${config.apiURL}/v1/auth/session`, {
+  const resp = await apiFetch(config, "/v1/auth/session", {
     credentials: "include",
   });
   if (resp.status === 204) {
@@ -21,7 +21,7 @@ export async function requestGuestSession(
   config: RuntimeConfig,
   turnstileToken?: string,
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/auth/guest`, {
+  const resp = await apiFetch(config, "/v1/auth/guest", {
     method: "POST",
     credentials: "include",
     headers: turnstileToken
@@ -38,7 +38,7 @@ export async function requestGuestSession(
 }
 
 export async function requestRefreshSession(config: RuntimeConfig) {
-  const resp = await fetch(`${config.apiURL}/v1/auth/refresh`, {
+  const resp = await apiFetch(config, "/v1/auth/refresh", {
     method: "POST",
     credentials: "include",
   });
@@ -49,10 +49,8 @@ export async function requestRefreshSession(config: RuntimeConfig) {
 }
 
 export async function requestMe(config: RuntimeConfig, accessToken: string) {
-  const resp = await fetch(`${config.apiURL}/v1/me`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
+  const resp = await apiFetch(config, "/v1/me", {
+    headers: authHeaders(accessToken),
   });
   return resp;
 }
@@ -86,8 +84,8 @@ export async function requestUserNotifications(
   config: RuntimeConfig,
   accessToken: string,
 ): Promise<{ notifications: UserNotification[] }> {
-  const resp = await fetch(`${config.apiURL}/v1/me/notifications`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const resp = await apiFetch(config, "/v1/me/notifications", {
+    headers: authHeaders(accessToken),
   });
   if (!resp.ok) {
     return { notifications: [] };
@@ -100,11 +98,12 @@ export async function markUserNotificationRead(
   accessToken: string,
   notificationId: number,
 ) {
-  await fetch(
-    `${config.apiURL}/v1/me/notifications/${encodeURIComponent(notificationId)}/read`,
+  await apiFetch(
+    config,
+    `/v1/me/notifications/${encodeURIComponent(notificationId)}/read`,
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: authHeaders(accessToken),
     },
   );
 }
@@ -113,9 +112,9 @@ export async function requestSupportDonation(
   config: RuntimeConfig,
   accessToken: string,
 ): Promise<{ donationUrl: string }> {
-  const resp = await fetch(`${config.apiURL}/v1/support/donate`, {
+  const resp = await apiFetch(config, "/v1/support/donate", {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: authHeaders(accessToken),
   });
   if (!resp.ok) {
     throw new Error(await readError(resp, "Could not start donation"));
@@ -127,10 +126,8 @@ export async function requestLeaderboard(
   config: RuntimeConfig,
   accessToken?: string,
 ): Promise<LeaderboardSummary | null> {
-  const resp = await fetch(`${config.apiURL}/v1/leaderboard`, {
-    headers: accessToken
-      ? { Authorization: `Bearer ${accessToken}` }
-      : undefined,
+  const resp = await apiFetch(config, "/v1/leaderboard", {
+    headers: authHeaders(accessToken),
   });
   if (!resp.ok) {
     return null;
@@ -139,24 +136,23 @@ export async function requestLeaderboard(
 }
 
 export async function requestLogout(config: RuntimeConfig) {
-  await fetch(`${config.apiURL}/v1/auth/logout`, {
+  await apiFetch(config, "/v1/auth/logout", {
     method: "POST",
     credentials: "include",
   });
 }
 
-export async function requestCompleteOnboarding(
+export async function requestUpdateNickname(
   config: RuntimeConfig,
   accessToken: string,
   nickname: string,
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/auth/onboarding`, {
-    method: "POST",
+  const resp = await apiFetch(config, "/v1/me/nickname", {
+    method: "PUT",
     credentials: "include",
-    headers: {
+    headers: mergeHeaders({
       "content-type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
+    }, authHeaders(accessToken)),
     body: JSON.stringify({ nickname }),
   });
   if (!resp.ok) {
@@ -165,35 +161,17 @@ export async function requestCompleteOnboarding(
   return resp.json();
 }
 
-export async function requestUpdateNickname(
-  config: RuntimeConfig,
-  accessToken: string,
-  nickname: string,
-) {
-  const resp = await fetch(`${config.apiURL}/v1/me/nickname`, {
-    method: "PATCH",
-    credentials: "include",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ nickname }),
-  });
-  return resp;
-}
-
 export async function requestUpdateSelectedBadge(
   config: RuntimeConfig,
   accessToken: string,
   badgeId: string,
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/me/badge`, {
+  const resp = await apiFetch(config, "/v1/me/badge", {
     method: "PATCH",
     credentials: "include",
-    headers: {
+    headers: mergeHeaders({
       "content-type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
+    }, authHeaders(accessToken)),
     body: JSON.stringify({ badgeId }),
   });
   if (!resp.ok) {
@@ -210,13 +188,12 @@ export async function requestGoogleStart(
     returnTo?: string;
   } = {},
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/auth/google/start`, {
+  const resp = await apiFetch(config, "/v1/auth/google/start", {
     method: "POST",
     credentials: "include",
-    headers: {
+    headers: mergeHeaders({
       "content-type": "application/json",
-      ...(params.accessToken ? { Authorization: `Bearer ${params.accessToken}` } : {}),
-    },
+    }, authHeaders(params.accessToken)),
     body: JSON.stringify({
       intent: params.intent || "signin",
       returnTo: params.returnTo,
@@ -236,13 +213,12 @@ export async function requestDiscordStart(
     returnTo?: string;
   } = {},
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/auth/discord/start`, {
+  const resp = await apiFetch(config, "/v1/auth/discord/start", {
     method: "POST",
     credentials: "include",
-    headers: {
+    headers: mergeHeaders({
       "content-type": "application/json",
-      ...(params.accessToken ? { Authorization: `Bearer ${params.accessToken}` } : {}),
-    },
+    }, authHeaders(params.accessToken)),
     body: JSON.stringify({
       intent: params.intent || "signin",
       returnTo: params.returnTo,
@@ -259,14 +235,13 @@ export async function requestUnlinkAuthProvider(
   accessToken: string,
   provider: "google" | "discord",
 ) {
-  const resp = await fetch(
-    `${config.apiURL}/v1/me/auth-providers/${encodeURIComponent(provider)}`,
+  const resp = await apiFetch(
+    config,
+    `/v1/me/auth-providers/${encodeURIComponent(provider)}`,
     {
       method: "DELETE",
       credentials: "include",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: authHeaders(accessToken),
     },
   );
   if (!resp.ok) {
@@ -279,13 +254,12 @@ export async function requestDeleteAccount(
   config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/me`, {
+  const resp = await apiFetch(config, "/v1/me", {
     method: "DELETE",
     credentials: "include",
-    headers: {
+    headers: mergeHeaders({
       "content-type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
+    }, authHeaders(accessToken)),
     body: JSON.stringify({ confirm: "DELETE" }),
   });
   if (!resp.ok) {
@@ -294,7 +268,7 @@ export async function requestDeleteAccount(
 }
 
 export async function requestLobbyChangelog(config: RuntimeConfig) {
-  const resp = await fetch(`${config.apiURL}/v1/content/lobby-changelog`);
+  const resp = await apiFetch(config, "/v1/content/lobby-changelog");
   if (!resp.ok) {
     return null;
   }
@@ -315,14 +289,14 @@ export async function requestMatchReport(
   category = "cheating",
   reason = "",
 ) {
-  const resp = await fetch(
-    `${config.apiURL}/v1/matches/${encodeURIComponent(matchId)}/reports`,
+  const resp = await apiFetch(
+    config,
+    `/v1/matches/${encodeURIComponent(matchId)}/reports`,
     {
       method: "POST",
-      headers: {
+      headers: mergeHeaders({
         "content-type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
+      }, authHeaders(accessToken)),
       body: JSON.stringify({ reportedUserId, category, reason }),
     },
   );

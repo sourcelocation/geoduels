@@ -1,28 +1,15 @@
 import { motion } from "framer-motion";
 import DuelOverlayBackground from "./DuelOverlayBackground";
-import DuelPlayerProfile from "./DuelPlayerProfile";
+import MatchSideProfile from "./MatchSideProfile";
 import IntroCountdownText from "./IntroCountdownText";
-import type { RatingDeltaPreview } from "./types";
-import type { PlayerBadgeInfo } from "./PlayerBadge";
+import type { MatchSidesView } from "./ParticipantIdentity";
 
 type Props = {
   roundNumber: number;
   modeName: string;
   mapName?: string;
   countdownSec: number;
-  selfName: string;
-  selfElo: number;
-  selfRatingPreview?: RatingDeltaPreview;
-  selfAvatarUrl?: string;
-  selfFallback: string;
-  selfIsAdmin?: boolean;
-  selfSelectedBadge?: PlayerBadgeInfo | null;
-  oppName: string;
-  oppElo: number;
-  oppAvatarUrl?: string;
-  oppFallback: string;
-  oppIsAdmin?: boolean;
-  oppSelectedBadge?: PlayerBadgeInfo | null;
+  sides: MatchSidesView;
   isFreeForAll?: boolean;
 };
 
@@ -31,19 +18,7 @@ export default function GameStartOverlay({
   modeName,
   mapName,
   countdownSec,
-  selfName,
-  selfElo,
-  selfRatingPreview,
-  selfAvatarUrl,
-  selfFallback,
-  selfIsAdmin = false,
-  selfSelectedBadge,
-  oppName,
-  oppElo,
-  oppAvatarUrl,
-  oppFallback,
-  oppIsAdmin = false,
-  oppSelectedBadge,
+  sides,
   isFreeForAll = false,
 }: Props) {
   const content = (
@@ -72,14 +47,8 @@ export default function GameStartOverlay({
         {/* Left Player */}
         {!isFreeForAll && (
           <div className="flex-1 flex justify-start">
-            <DuelPlayerProfile
-              name={selfName}
-              elo={selfElo}
-              ratingPreview={selfRatingPreview}
-              avatarUrl={selfAvatarUrl}
-              fallback={selfFallback}
-              isAdmin={selfIsAdmin}
-              selectedBadge={selfSelectedBadge}
+            <MatchSideProfile
+              side={sides.self}
             />
           </div>
         )}
@@ -92,13 +61,9 @@ export default function GameStartOverlay({
         {/* Right Player */}
         {!isFreeForAll && (
           <div className="flex-1 flex justify-end">
-            <DuelPlayerProfile
-              name={oppName}
-              elo={oppElo}
-              avatarUrl={oppAvatarUrl}
-              fallback={oppFallback}
-              isAdmin={oppIsAdmin}
-              selectedBadge={oppSelectedBadge}
+            <MatchSideProfile
+              side={sides.opponent}
+              opponent
             />
           </div>
         )}

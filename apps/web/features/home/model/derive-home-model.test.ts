@@ -22,7 +22,7 @@ function createAuthState(overrides: Partial<SessionState> = {}): SessionState {
     rankedWins: 2,
     leaderboard: null,
     accessToken: 'access-token',
-    onboardingRequired: false,
+    nicknameRequired: false,
     nicknameInput: 'Self',
     nicknameError: '',
     nicknameSaving: false,
@@ -81,7 +81,10 @@ function createSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   };
 }
 
-function createMatchState(snapshot: Snapshot | null): MatchState {
+function createMatchState(
+  snapshot: Snapshot | null,
+  overrides: Partial<MatchState> = {},
+): MatchState {
   return {
       matchmaking: {
         status: snapshot ? 'in_match' : 'ready',
@@ -92,11 +95,12 @@ function createMatchState(snapshot: Snapshot | null): MatchState {
     connected: true,
 	    snapshot,
 	    activeMatchId: snapshot?.matchId || '',
-	    sourceLobbyId: '',
-    sourceLobbyInviteCode: '',
+	    sourcePartyId: '',
+    sourcePartyInviteCode: '',
     queueError: '',
     connectionIssue: '',
-    onlinePlayers: 42
+    onlinePlayers: 42,
+    ...overrides
   };
 }
 
@@ -118,6 +122,8 @@ function createGameState(overrides: Partial<GameState> = {}): GameState {
 
 describe('deriveHomeModel', () => {
   const config = createRuntimeConfigFixture();
+  const ratingDelta = (participant: { kind: string; ratingDelta?: number }) =>
+    participant.kind === 'player' ? participant.ratingDelta : undefined;
 
   it('derives live round state for lobby and game views', () => {
     const model = deriveHomeModel({
@@ -130,9 +136,9 @@ describe('deriveHomeModel', () => {
 
     expect(model.lobby.inGame).toBe(true);
     expect(model.game.uiPhase).toBe('live_round');
-    expect(model.game.selfName).toBe('Self');
-    expect(model.game.opponentName).toBe('Opponent');
-    expect(model.game.opponentDisconnected).toBe(false);
+    expect(model.game.sides.self.participant.name).toBe('Self');
+    expect(model.game.sides.opponent.participant.name).toBe('Opponent');
+    expect(model.game.sides.opponent.connection).toBe('connected');
     expect(model.game.damageMultiplier).toBe(1.5);
     expect(model.meta.appVersion).toBe('dev');
   });
@@ -164,7 +170,7 @@ describe('deriveHomeModel', () => {
       routeMatchId: 'match-1'
     });
 
-    expect(model.game.selfFallback).toBe('?');
+    expect(model.game.sides.self.participant.avatarFallback).toBe('?');
     expect(model.game.resultPlayerFallbacks.self).toBe('?');
   });
 
@@ -237,7 +243,7 @@ describe('deriveHomeModel', () => {
       routeMatchId: 'match-1'
     });
 
-    expect(model.game.opponentDisconnected).toBe(true);
+    expect(model.game.sides.opponent.connection).toBe('disconnected');
   });
 
   it('prefers the round pano ID in the Street View URL', () => {
@@ -354,12 +360,12 @@ describe('deriveHomeModel', () => {
       routeMatchId: 'match-1'
     });
 
-    expect(model.game.selfName).toBe('Team Red');
-    expect(model.game.opponentName).toBe('Team Blue');
+    expect(model.game.sides.self.participant.name).toBe('Team Red');
+    expect(model.game.sides.opponent.participant.name).toBe('Team Blue');
     expect(model.game.resultOverlay?.winner).toBe('self');
     expect(model.game.resultOverlay?.damage).toBe(2400);
-    expect(model.game.resultOverlay?.players.self.fallback).toBe('R');
-    expect(model.game.resultOverlay?.players.opp.fallback).toBe('B');
+    expect(model.game.resultOverlay?.sides.self.participant.avatarFallback).toBe('R');
+    expect(model.game.resultOverlay?.sides.opponent.participant.avatarFallback).toBe('B');
   });
 
   it('uses points result UI for free for all instead of the duel overlay', () => {
@@ -406,7 +412,7 @@ describe('deriveHomeModel', () => {
       routeMatchId: 'match-1'
     });
 
-    expect(model.game.opponentName).toBe('Opponent');
+    expect(model.game.sides.opponent.participant.name).toBe('Opponent');
     expect(model.game.oppHP).toBe(0);
   });
 
@@ -450,12 +456,13 @@ describe('deriveHomeModel', () => {
 
     expect(model.overlays.endMatch.open).toBe(true);
     if (model.overlays.endMatch.open) {
-      expect(model.overlays.endMatch.selfEloDelta).not.toBe(0);
+      expect(model.overlays.endMatch.sides.self.participant.kind).toBe('player');
+      expect(ratingDelta(model.overlays.endMatch.sides.self.participant)).not.toBe(0);
       expect(model.overlays.endMatch.roundResults).toHaveLength(1);
     }
   });
 
-  it('hides elo deltas for unranked private lobby matches', () => {
+  it('hides elo deltas for unranked party matches', () => {
     const snapshot = createSnapshot({
       unranked: true,
       state: 'ended',
@@ -470,12 +477,57 @@ describe('deriveHomeModel', () => {
       routeMatchId: 'match-1'
     });
 
-    expect(model.game.selfRatingPreview).toBeUndefined();
-    expect(model.game.opponentRatingPreview).toBeUndefined();
+    expect(
+      model.game.sides.self.participant.kind === 'player'
+        ? model.game.sides.self.participant.ratingPreview
+        : undefined,
+    ).toBeUndefined();
+    expect(
+      model.game.sides.opponent.participant.kind === 'player'
+        ? model.game.sides.opponent.participant.ratingPreview
+        : undefined,
+    ).toBeUndefined();
     expect(model.overlays.endMatch.open).toBe(true);
     if (model.overlays.endMatch.open) {
-      expect(model.overlays.endMatch.selfEloDelta).toBeUndefined();
-      expect(model.overlays.endMatch.opponentEloDelta).toBeUndefined();
+      expect(model.overlays.endMatch.sides.self.participant.kind).toBe('player');
+      expect(model.overlays.endMatch.sides.opponent.participant.kind).toBe('player');
+      expect(ratingDelta(model.overlays.endMatch.sides.self.participant)).toBeUndefined();
+      expect(ratingDelta(model.overlays.endMatch.sides.opponent.participant)).toBeUndefined();
+    }
+  });
+
+  it('preserves the completed match config for replay and derives the return label from party provenance', () => {
+    const matchConfig = {
+      ruleset: 'nmpz' as const,
+      mapId: 'map-custom',
+      mapName: 'Custom World',
+      roundTimerMode: 'fixed' as const,
+      roundTimeLimitMs: 60_000,
+      pressureTimeLimitMs: 12_000
+    };
+    const snapshot = createSnapshot({
+      mode: 'singleplayer',
+      config: matchConfig,
+      state: 'ended',
+      phase: 'ended',
+      roundPhase: 'ended'
+    });
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(snapshot, {
+        sourcePartyId: 'party-1',
+        sourcePartyInviteCode: 'PARTY1'
+      }),
+      game: createGameState({ showMatchEndPage: true }),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.backLabel).toBe('Back to party');
+    expect(model.overlays.endMatch.open).toBe(true);
+    if (model.overlays.endMatch.open) {
+      expect(model.overlays.endMatch.matchConfig).toEqual(matchConfig);
+      expect(model.overlays.endMatch.backLabel).toBe('Back to party');
     }
   });
 
@@ -503,8 +555,10 @@ describe('deriveHomeModel', () => {
 
     expect(model.overlays.endMatch.open).toBe(true);
     if (model.overlays.endMatch.open) {
-      expect(model.overlays.endMatch.selfEloDelta).not.toBe(0);
-      expect(model.overlays.endMatch.opponentEloDelta).toBeUndefined();
+      expect(model.overlays.endMatch.sides.self.participant.kind).toBe('player');
+      expect(model.overlays.endMatch.sides.opponent.participant.kind).toBe('player');
+      expect(ratingDelta(model.overlays.endMatch.sides.self.participant)).not.toBe(0);
+      expect(ratingDelta(model.overlays.endMatch.sides.opponent.participant)).toBeUndefined();
     }
   });
 
@@ -532,8 +586,10 @@ describe('deriveHomeModel', () => {
 
     expect(model.overlays.endMatch.open).toBe(true);
     if (model.overlays.endMatch.open) {
-      expect(model.overlays.endMatch.selfEloDelta).toBeUndefined();
-      expect(model.overlays.endMatch.opponentEloDelta).not.toBe(0);
+      expect(model.overlays.endMatch.sides.self.participant.kind).toBe('player');
+      expect(model.overlays.endMatch.sides.opponent.participant.kind).toBe('player');
+      expect(ratingDelta(model.overlays.endMatch.sides.self.participant)).toBeUndefined();
+      expect(ratingDelta(model.overlays.endMatch.sides.opponent.participant)).not.toBe(0);
     }
   });
 

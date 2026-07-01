@@ -22,7 +22,7 @@ spec:
                 name: match-coordinator
                 port:
                   number: 8090
-          - path: /lobbies
+          - path: /parties
             pathType: Prefix
             backend:
               service:

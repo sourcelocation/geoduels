@@ -1,8 +1,9 @@
 import type { RuntimeConfig } from "../../lib/runtime-config";
+import { apiFetch } from "../../lib/http";
 import type { ChangelogPost } from "./types";
 
 export async function requestChangelogPosts(config: RuntimeConfig) {
-  const resp = await fetch(`${config.apiURL}/v1/content/changelog`);
+  const resp = await apiFetch(config, "/v1/content/changelog");
   if (!resp.ok) {
     throw new Error("Failed to load changelog");
   }
@@ -10,7 +11,7 @@ export async function requestChangelogPosts(config: RuntimeConfig) {
 }
 
 export async function requestChangelogPost(config: RuntimeConfig, slug: string) {
-  const resp = await fetch(`${config.apiURL}/v1/content/changelog/${encodeURIComponent(slug)}`);
+  const resp = await apiFetch(config, `/v1/content/changelog/${encodeURIComponent(slug)}`);
   if (resp.status === 404) {
     return null;
   }

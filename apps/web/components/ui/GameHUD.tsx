@@ -10,6 +10,7 @@ type Props = {
   isTimerCritical: boolean;
   isTimerPulseActive: boolean;
   hideMultiplier?: boolean;
+  hasTopCompass?: boolean;
 };
 
 export default function GameHUD({
@@ -21,6 +22,7 @@ export default function GameHUD({
   isTimerCritical,
   isTimerPulseActive,
   hideMultiplier = false,
+  hasTopCompass = false,
 }: Props) {
   const ringColor = isTimerCritical ? '#ff6d42' : '#2ad18f';
   const progress = Number(Math.max(0, Math.min(100, timerProgressPct)).toFixed(2));
@@ -38,7 +40,11 @@ export default function GameHUD({
   const multiplierLabel = formatDamageMultiplierLabel(damageMultiplier);
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[91px] z-40 animate-hudSlideIn md:top-4">
+    <div
+      className={`pointer-events-none absolute inset-x-0 top-[91px] z-40 animate-hudSlideIn ${
+        hasTopCompass ? "md:top-14" : "md:top-4"
+      }`}
+    >
       <div className="absolute left-1/2 -translate-x-1/2">
         <div className="flex items-center gap-2.5 md:gap-3">
           <AnimatePresence initial={false}>

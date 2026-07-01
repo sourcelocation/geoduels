@@ -1,10 +1,10 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { RESULT_ANIMATION_CONFIG } from "../../../components/ui/round-result-animation-config";
 import { getRuntimeConfig } from "../../../lib/runtime-config";
+import type { AuthSessionSnapshot } from "../../auth/session";
 import { selectActiveChatConversationId } from "../../chat/lib/chat-scope";
 import {
-  requestCompleteOnboarding,
   requestDeleteAccount,
   requestDiscordStart,
   requestGoogleStart,
@@ -22,11 +22,10 @@ import {
   markUserNotificationRead,
   type UserNotification,
 } from "../../auth/lib/auth-client";
-import type { AuthSessionSnapshot } from "../../auth/session";
 import {
-  type LobbyTeamId,
+  type PartyTeamId,
   type PartyMode,
-} from "../../lobby/lib/lobby-client";
+} from "../../lobby/lib/party-client";
 import { getHomeRuntime, startHomeRuntime } from "../state/home-runtime";
 import { deriveHomeModel } from "./derive-home-model";
 import type { HomeModel } from "./types";
@@ -37,82 +36,41 @@ import {
   type MatchConfig,
 } from "../../matchmaking/lib/queue-client";
 
-type AuthResponseUser = {
-  id?: string;
-  email?: string;
-  display_name?: string;
-  avatar_url?: string;
-  isGuest?: boolean;
-  isAdmin?: boolean;
-  isModerator?: boolean;
-};
+import {
+  buildSessionFromAuthResponse,
+  clearGoogleAuthParams,
+  currentReturnTo,
+  getErrorMessage,
+  type AuthResponse,
+  type GuestVerificationView,
+} from "./auth-session-model";
 
-type AuthResponse = {
-  accessToken?: string;
-  onboardingRequired?: boolean;
-  authMigrationRequired?: boolean;
-  recoveryAvailable?: boolean;
-  linkedProviders?: string[];
-  canPlay?: boolean;
-  suggestedNickname?: string;
-  authURL?: string;
-  user?: AuthResponseUser;
-};
-
-type GuestVerificationView = HomeModel["view"]["overlays"]["guestVerification"];
-
-function currentReturnTo() {
-  if (typeof window === "undefined") return "/";
-  const path = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  return path.startsWith("/") ? path : "/";
-}
-
-function clearGoogleAuthParams(url: URL) {
-  url.searchParams.delete("googleAuth");
-  url.searchParams.delete("googleAuthError");
-  url.searchParams.delete("auth");
-  url.searchParams.delete("authError");
-  url.searchParams.delete("provider");
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof Error && error.message) return error.message;
-  return fallback;
-}
-
-function buildSessionFromAuthResponse(
-  data: AuthResponse,
-  fallback: { userId: string; nicknameInput: string },
-): AuthSessionSnapshot {
-  return {
-    userId:
-      typeof data.user?.id === "string" && data.user.id
-        ? data.user.id
-        : fallback.userId,
-    accessToken: data.accessToken || "",
-    onboardingRequired: !!data.onboardingRequired,
-    authMigrationRequired: !!data.authMigrationRequired,
-    recoveryAvailable: !!data.recoveryAvailable,
-    linkedProviders: Array.isArray(data.linkedProviders)
-      ? data.linkedProviders.filter((provider): provider is string => typeof provider === "string")
-      : [],
-    canPlay: typeof data.canPlay === "boolean" ? data.canPlay : !data.onboardingRequired && !data.authMigrationRequired,
-    nicknameInput: data.suggestedNickname || fallback.nicknameInput,
-  };
+function nicknameValidationError(nickname: string) {
+  if (!nickname) return "Please choose a nickname.";
+  if (nickname.length < 2 || nickname.length > 14) {
+    return "Nickname must be 2–14 characters.";
+  }
+  if (!/^[A-Za-z0-9._]+$/.test(nickname)) {
+    return "Use only letters, numbers, dots, and underscores.";
+  }
+  if (nickname.includes("..") || nickname.includes("__")) {
+    return "Repeated dots or underscores are not allowed.";
+  }
+  return "";
 }
 
 export function useHomeModel(options?: {
   routeMatchId?: string | null;
   routeContext?: "home" | "match";
-  lobbyInviteCode?: string | null;
-  onPrivateLobbyEntered?: (inviteCode: string) => void;
-  onPrivateLobbyLeft?: () => void;
+  backgroundDataEnabled?: boolean;
+  partyInviteCode?: string | null;
+  onPartyEntered?: (inviteCode: string) => void;
+  onPartyLeft?: () => void;
 }): HomeModel {
   const config = getRuntimeConfig();
   const runtimeRef = useRef(getHomeRuntime(config));
-  const { sessionController, matchController, matchRouteController, gameController, lobbyController, chatController, sfxController } =
+  const { sessionController, matchController, matchRouteController, gameController, partyController, chatController, sfxController } =
     runtimeRef.current;
-  const [homeResumeMatchId, setHomeResumeMatchId] = useState("");
   const [guestVerification, setGuestVerification] =
     useState<GuestVerificationView>({
       open: false,
@@ -127,11 +85,12 @@ export function useHomeModel(options?: {
   } | null>(null);
   const routeMatchId = options?.routeMatchId ?? null;
   const routeContext = options?.routeContext ?? "home";
-  const lobbyInviteCode = options?.lobbyInviteCode?.trim().toUpperCase() ?? "";
-  const onPrivateLobbyEntered = options?.onPrivateLobbyEntered;
-  const onPrivateLobbyLeft = options?.onPrivateLobbyLeft;
+  const backgroundDataEnabled = options?.backgroundDataEnabled ?? true;
+  const partyInviteCode = options?.partyInviteCode?.trim().toUpperCase() ?? "";
+  const onPartyEntered = options?.onPartyEntered;
+  const onPartyLeft = options?.onPartyLeft;
   const isMatchRoute = routeContext === "match";
-  const [notifications, setNotifications] = useState<UserNotification[]>([]);
+  const queryClient = useQueryClient();
 
   const auth = useSyncExternalStore(
     sessionController.subscribe,
@@ -153,10 +112,10 @@ export function useHomeModel(options?: {
     gameController.getState.bind(gameController),
     gameController.getState.bind(gameController),
   );
-  const lobbyState = useSyncExternalStore(
-    lobbyController.subscribe,
-    lobbyController.getState.bind(lobbyController),
-    lobbyController.getState.bind(lobbyController),
+  const partyState = useSyncExternalStore(
+    partyController.subscribe,
+    partyController.getState.bind(partyController),
+    partyController.getState.bind(partyController),
   );
   const chatState = useSyncExternalStore(
     chatController.subscribe,
@@ -167,7 +126,40 @@ export function useHomeModel(options?: {
     config,
     sessionController,
     auth,
-    enabled: !isMatchRoute,
+    enabled: !isMatchRoute && backgroundDataEnabled,
+  });
+
+  const notificationsQuery = useQuery({
+    queryKey: ["notifications", auth.userId || "anonymous"],
+    enabled: !isMatchRoute && backgroundDataEnabled && !!auth.userId && !!auth.accessToken && !auth.nicknameRequired,
+    queryFn: async () => {
+      const session = await sessionController.ensureFreshSession(60_000, {
+        allowNicknameRequired: false,
+      });
+      if (!session?.accessToken) {
+        return { notifications: [] };
+      }
+      return requestUserNotifications(config, session.accessToken);
+    },
+    refetchInterval: 60_000,
+    refetchOnMount: false,
+    staleTime: 60_000,
+  });
+
+  const resumableSessionQuery = useQuery({
+    queryKey: ["session-resumable", auth.userId || "anonymous"],
+    enabled: !isMatchRoute && backgroundDataEnabled && !partyInviteCode && !!auth.userId && !auth.nicknameRequired,
+    queryFn: async ({ signal }) => {
+      const session = await sessionController.ensureFreshSession(60_000, {
+        allowNicknameRequired: false,
+      });
+      if (!session?.accessToken) {
+        return { status: "none" as const };
+      }
+      return fetchResumableSession(config, session.accessToken, signal);
+    },
+    refetchOnMount: false,
+    staleTime: 60_000,
   });
 
   const refreshSessionMutation = useMutation({
@@ -179,15 +171,6 @@ export function useHomeModel(options?: {
   const guestSessionMutation = useMutation({
     mutationFn: ({ turnstileToken }: { turnstileToken?: string }) =>
       requestGuestSession(config, turnstileToken),
-  });
-  const completeOnboardingMutation = useMutation({
-    mutationFn: ({
-      accessToken,
-      nickname,
-    }: {
-      accessToken: string;
-      nickname: string;
-    }) => requestCompleteOnboarding(config, accessToken, nickname),
   });
   const updateNicknameMutation = useMutation({
     mutationFn: ({
@@ -390,7 +373,7 @@ export function useHomeModel(options?: {
       return currentSession;
     }
     const current = sessionController.getState();
-    if (current.onboardingRequired) {
+    if (current.nicknameRequired) {
       return null;
     }
     sessionController.setAuthPending({
@@ -410,7 +393,7 @@ export function useHomeModel(options?: {
       const nextSession: AuthSessionSnapshot = {
         userId: data.user?.id || "",
         accessToken: data.accessToken || "",
-        onboardingRequired: !!data.onboardingRequired,
+        nicknameRequired: !!data.nicknameRequired,
         nicknameInput: data.suggestedNickname || name,
       };
       sessionController.applySessionSnapshot(nextSession, {
@@ -454,8 +437,8 @@ export function useHomeModel(options?: {
     }
   }
 
-  const prevEndedMatchRef = useRef("");
-  const hadLobbyRuntimeRef = useRef(false);
+  const hadPartyRuntimeRef = useRef(false);
+  const lastSingleplayerPBRefreshRef = useRef("");
 
   useEffect(() => {
     startHomeRuntime(runtimeRef.current);
@@ -533,154 +516,69 @@ export function useHomeModel(options?: {
   }, [isMatchRoute, sessionController]);
 
   useEffect(() => {
-    if (isMatchRoute) {
-      setHomeResumeMatchId("");
+    if (isMatchRoute || !partyInviteCode) {
       return;
     }
-    const session = sessionController.getSessionSnapshot();
-    if (!session || session.onboardingRequired) {
-      setHomeResumeMatchId("");
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-    void (async () => {
-      const ensured = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: false,
-      });
-      if (!ensured || cancelled) {
-        if (!cancelled) setHomeResumeMatchId("");
-        return;
-      }
-      const resumable = await fetchResumableSession(
-        config,
-        ensured.accessToken,
-        controller.signal,
-      );
-      if (cancelled) return;
-      setHomeResumeMatchId(
-        resumable.status === "match" ? resumable.matchId : "",
-      );
-    })().catch(() => {
-      if (!cancelled) {
-        setHomeResumeMatchId("");
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [
-    auth.userId,
-    auth.onboardingRequired,
-    config,
-    isMatchRoute,
-    sessionController,
-  ]);
-
-  useEffect(() => {
-    if (isMatchRoute || !lobbyInviteCode) {
-      return;
-    }
-    void lobbyController.ensureLobby(lobbyInviteCode);
+    void partyController.ensureParty(partyInviteCode);
   }, [
     auth.accessToken,
     auth.userId,
     isMatchRoute,
-    lobbyController,
-    lobbyInviteCode,
+    partyController,
+    partyInviteCode,
   ]);
 
   useEffect(() => {
-    const hasLobbyRuntime =
-      !!lobbyState.lobbyId || !!lobbyState.inviteCode || !!lobbyState.snapshot;
+    const hasPartyRuntime =
+      !!partyState.partyId || !!partyState.inviteCode || !!partyState.snapshot;
     if (
-      lobbyInviteCode &&
-      hadLobbyRuntimeRef.current &&
-      !hasLobbyRuntime &&
-      lobbyState.status === "idle"
+      partyInviteCode &&
+      hadPartyRuntimeRef.current &&
+      !hasPartyRuntime &&
+      partyState.status === "idle"
     ) {
-      onPrivateLobbyLeft?.();
+      onPartyLeft?.();
     }
-    hadLobbyRuntimeRef.current = hasLobbyRuntime;
+    hadPartyRuntimeRef.current = hasPartyRuntime;
   }, [
-    lobbyInviteCode,
-    lobbyState.inviteCode,
-    lobbyState.lobbyId,
-    lobbyState.snapshot,
-    lobbyState.status,
-    onPrivateLobbyLeft,
+    partyInviteCode,
+    partyState.inviteCode,
+    partyState.partyId,
+    partyState.snapshot,
+    partyState.status,
+    onPartyLeft,
   ]);
+
+  useEffect(() => {
+    if (!match.lastFinalizedMatchId) return;
+    void queryClient.invalidateQueries({ queryKey: ["me"] });
+    void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+    void queryClient.invalidateQueries({ queryKey: ["maps"] });
+    void queryClient.invalidateQueries({ queryKey: ["map-details"] });
+  }, [match.lastFinalizedMatchId, queryClient]);
 
   useEffect(() => {
     const snapshot = match.snapshot;
     if (
       !snapshot ||
+      snapshot.mode !== "singleplayer" ||
       snapshot.state !== "ended" ||
-      snapshot.matchId === prevEndedMatchRef.current
+      snapshot.matchId === lastSingleplayerPBRefreshRef.current
     ) {
       return;
     }
-    prevEndedMatchRef.current = snapshot.matchId;
-    if (snapshot.mode === "singleplayer") {
-      return;
-    }
-    sessionController.setGamesPlayed((value) => value + 1);
-    const me = snapshot.players[auth.userId];
-    const opponentId =
-      Object.keys(snapshot.players || {}).find((id) => id !== auth.userId) ||
-      "";
-    const opp = opponentId ? snapshot.players[opponentId] : undefined;
-    if (me && opp && me.hp > opp.hp) {
-      sessionController.setWins((value) => value + 1);
-    }
-    if (me && opp && !me.isGuest) {
-      const preview = snapshot.ratingPreview?.[me.userId];
-      const selfDelta =
-        me.hp > opp.hp
-          ? preview?.win
-          : me.hp < opp.hp
-            ? preview?.lose
-            : preview?.draw;
-      if (typeof selfDelta === "number") {
-        sessionController.setMmr(me.mmr + selfDelta);
-      }
-      sessionController.setRankedGamesPlayed((value) => value + 1);
-      if (me.hp > opp.hp) {
-        sessionController.setRankedWins((value) => value + 1);
-      }
-    }
-  }, [match.snapshot, auth.userId, sessionController]);
+    lastSingleplayerPBRefreshRef.current = snapshot.matchId;
+    void queryClient.invalidateQueries({ queryKey: ["maps"] });
+    void queryClient.invalidateQueries({ queryKey: ["map-details"] });
+  }, [match.snapshot, queryClient]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!auth.userId || !auth.accessToken || auth.onboardingRequired) {
-      setNotifications([]);
-      return;
-    }
-    const refresh = async () => {
-      const result = await requestUserNotifications(config, auth.accessToken);
-      if (!cancelled) {
-        setNotifications(result.notifications || []);
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 60_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [auth.userId, auth.accessToken, auth.onboardingRequired]);
-
-  const routeSourceLobbyId =
-    matchRoute.replacement && "sourceLobbyId" in matchRoute.replacement
-      ? matchRoute.replacement.sourceLobbyId || ""
+  const routeSourcePartyId =
+    matchRoute.replacement && "sourcePartyId" in matchRoute.replacement
+      ? matchRoute.replacement.sourcePartyId || ""
       : "";
   const routeFallbackChatConversationId =
-    isMatchRoute && routeSourceLobbyId
-      ? `lobby:${routeSourceLobbyId}`
+    isMatchRoute && routeSourcePartyId
+      ? `party:${routeSourcePartyId}`
       : isMatchRoute &&
           routeMatchId &&
           matchRoute.historySnapshot &&
@@ -689,21 +587,27 @@ export function useHomeModel(options?: {
         : "";
   const activeChatConversationId = selectActiveChatConversationId({
     userId: auth.userId,
-    lobby: lobbyState,
+    party: partyState,
     match,
   }) || routeFallbackChatConversationId;
 
   useEffect(() => {
     chatController.setConversation(
-      auth.onboardingRequired ? "" : activeChatConversationId,
+      auth.nicknameRequired ? "" : activeChatConversationId,
       auth.accessToken,
     );
   }, [
     activeChatConversationId,
     auth.accessToken,
-    auth.onboardingRequired,
+    auth.nicknameRequired,
     chatController,
   ]);
+
+  const homeResumeMatchId =
+    resumableSessionQuery.data?.status === "match"
+      ? resumableSessionQuery.data.matchId
+      : "";
+  const notifications = notificationsQuery.data?.notifications || [];
 
   const baseView = deriveHomeModel({
     auth,
@@ -726,20 +630,20 @@ export function useHomeModel(options?: {
     changelogSlug: lobbyData.changelogSlug,
     changelogUpdatedAt: lobbyData.changelogUpdatedAt,
   });
-  const privateLobbyMember = lobbyState.snapshot?.members.find(
+  const partyMember = partyState.snapshot?.members.find(
     (member) => member.userId === auth.userId,
   );
-  const lobbyBusy = [
+  const partyBusy = [
     "creating",
     "joining",
     "connecting",
     "reconnecting",
     "leaving",
-  ].includes(lobbyState.status);
-  const privateLobbyStatus =
-    lobbyInviteCode && !isMatchRoute && lobbyState.status === "idle"
+  ].includes(partyState.status);
+  const partyStatus =
+    partyInviteCode && !isMatchRoute && partyState.status === "idle"
       ? "connecting"
-      : lobbyState.status;
+      : partyState.status;
   const view = {
     ...baseView,
     overlays: {
@@ -749,18 +653,18 @@ export function useHomeModel(options?: {
     },
     lobby: {
       ...baseView.lobby,
-      privateLobby: {
-        status: privateLobbyStatus,
-        snapshot: lobbyState.snapshot,
+      party: {
+        status: partyStatus,
+        snapshot: partyState.snapshot,
         inviteCode:
-          lobbyState.inviteCode ||
-          lobbyState.snapshot?.inviteCode ||
-          lobbyInviteCode ||
+          partyState.inviteCode ||
+          partyState.snapshot?.inviteCode ||
+          partyInviteCode ||
           "",
-        isMember: !!privateLobbyMember,
-        isOwner: !!lobbyState.snapshot && lobbyState.snapshot.ownerUserId === auth.userId,
-        busy: lobbyBusy,
-        error: lobbyState.error,
+        isMember: !!partyMember,
+        isOwner: !!partyState.snapshot && partyState.snapshot.ownerUserId === auth.userId,
+        busy: partyBusy,
+        error: partyState.error,
       },
     },
     chat: {
@@ -815,11 +719,12 @@ export function useHomeModel(options?: {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [view.game.canFinalizeGuess, view.game.canAdvanceRound, gameController]);
 
-  const submitOnboardingNickname = async () => {
+  const submitRequiredNickname = async () => {
     const nick = sessionController.getState().nicknameInput.trim();
-    if (!nick) {
+    const validationError = nicknameValidationError(nick);
+    if (validationError) {
       sessionController.setAuthPending({
-        nicknameError: "Please choose a nickname.",
+        nicknameError: validationError,
       });
       return;
     }
@@ -831,7 +736,7 @@ export function useHomeModel(options?: {
     });
     try {
       const session = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: true,
+        allowNicknameRequired: true,
       });
       if (!session) {
         sessionController.clearAuthSession(
@@ -839,14 +744,14 @@ export function useHomeModel(options?: {
         );
         throw new Error("Session expired. Please sign in again.");
       }
-      const data = await completeOnboardingMutation.mutateAsync({
+      const data = await updateNicknameMutation.mutateAsync({
         accessToken: session.accessToken,
         nickname: nick,
       });
       const nextSession: AuthSessionSnapshot = {
         userId: typeof data.user?.id === "string" && data.user.id ? data.user.id : current.userId,
         accessToken: data.accessToken || current.accessToken,
-        onboardingRequired: false,
+        nicknameRequired: !!data.nicknameRequired,
         authMigrationRequired: !!data.authMigrationRequired,
         recoveryAvailable: !!data.recoveryAvailable,
         linkedProviders: Array.isArray(data.linkedProviders)
@@ -877,9 +782,10 @@ export function useHomeModel(options?: {
   const submitProfileNickname = async (): Promise<boolean> => {
     const current = sessionController.getState();
     const nick = current.nicknameInput.trim();
-    if (!nick) {
+    const validationError = nicknameValidationError(nick);
+    if (validationError) {
       sessionController.setAuthPending({
-        nicknameError: "Please choose a nickname.",
+        nicknameError: validationError,
       });
       return false;
     }
@@ -908,41 +814,29 @@ export function useHomeModel(options?: {
         );
         throw new Error("Session expired. Please sign in again.");
       }
-      let resp = await updateNicknameMutation.mutateAsync({
+      const data = await updateNicknameMutation.mutateAsync({
         accessToken: session.accessToken,
         nickname: nick,
       });
-      if (resp.status === 401 || resp.status === 403) {
-        const refreshed = await sessionController.ensureFreshSession(60_000, {
-          forceRefresh: true,
-        });
-        if (!refreshed) {
-          sessionController.clearAuthSession(
-            "Session expired. Please sign in again.",
-          );
-          throw new Error("Session expired. Please sign in again.");
-        }
-        resp = await updateNicknameMutation.mutateAsync({
-          accessToken: refreshed.accessToken,
-          nickname: nick,
-        });
-      }
-      if (!resp.ok) {
-        throw new Error((await resp.text()) || "Failed to save nickname");
-      }
-      const data = (await resp.json()) as { user?: { display_name?: string } };
-      sessionController.setAuthPending({
+      const nextSession: AuthSessionSnapshot = {
+        ...session,
+        accessToken:
+          typeof data.accessToken === "string" && data.accessToken
+            ? data.accessToken
+            : session.accessToken,
+        nicknameRequired: !!data.nicknameRequired,
+        canPlay: typeof data.canPlay === "boolean" ? data.canPlay : true,
+        nicknameInput: nick,
+      };
+      sessionController.applySessionSnapshot(nextSession, {
+        displayName:
+          typeof data.user?.display_name === "string" &&
+          data.user.display_name
+            ? data.user.display_name
+            : nick,
         nicknameSaving: false,
         nicknameError: "",
       });
-      if (
-        typeof data.user?.display_name === "string" &&
-        data.user.display_name
-      ) {
-        sessionController.applyProfileSnapshot({
-          display_name: data.user.display_name,
-        });
-      }
       return true;
     } catch (error) {
       sessionController.setAuthPending({
@@ -971,7 +865,7 @@ export function useHomeModel(options?: {
     sessionController.setAuthPending({ authLoading: true, authError: "" });
     try {
       const session = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: true,
+        allowNicknameRequired: true,
       });
       if (!session?.accessToken) {
         throw new Error("Please sign in again.");
@@ -1046,7 +940,7 @@ export function useHomeModel(options?: {
     sessionController.setAuthPending({ authLoading: true, authError: "" });
     try {
       const session = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: true,
+        allowNicknameRequired: true,
       });
       if (!session?.accessToken) {
         throw new Error(
@@ -1096,7 +990,7 @@ export function useHomeModel(options?: {
     sessionController.setAuthPending({ authLoading: true, authError: "" });
     try {
       const session = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: true,
+        allowNicknameRequired: true,
       });
       if (!session?.accessToken) {
         throw new Error("Please sign in again.");
@@ -1138,50 +1032,50 @@ export function useHomeModel(options?: {
     }
   };
 
-  const createInviteLobby = async (mode: PartyMode = "duel") => {
-    const ok = await lobbyController.createLobby(mode);
-    const inviteCode = lobbyController.getState().inviteCode;
+  const createParty = async (mode: PartyMode = "duel", matchConfig?: MatchConfig) => {
+    const ok = await partyController.createParty(mode, matchConfig);
+    const inviteCode = partyController.getState().inviteCode;
     if (ok && inviteCode) {
-      onPrivateLobbyEntered?.(inviteCode);
+      onPartyEntered?.(inviteCode);
     }
     return ok;
   };
 
-  const joinInviteLobby = async (requestedInviteCode?: string) => {
-    const ok = await lobbyController.joinLobby(requestedInviteCode);
-    const inviteCode = lobbyController.getState().inviteCode;
+  const joinParty = async (requestedInviteCode?: string) => {
+    const ok = await partyController.joinParty(requestedInviteCode);
+    const inviteCode = partyController.getState().inviteCode;
     if (ok && inviteCode) {
-      onPrivateLobbyEntered?.(inviteCode);
+      onPartyEntered?.(inviteCode);
     }
     return ok;
   };
 
-  const leavePrivateLobby = async () => {
-    const hadLobby = !!lobbyController.getState().lobbyId;
-    await lobbyController.leaveLobby();
-    if (hadLobby && lobbyController.getState().status === "idle") {
-      onPrivateLobbyLeft?.();
+  const leaveParty = async () => {
+    const hadParty = !!partyController.getState().partyId;
+    await partyController.leaveParty();
+    if (hadParty && partyController.getState().status === "idle") {
+      onPartyLeft?.();
     }
   };
 
-  const kickLobbyMember = async (userId: string) => {
-    await lobbyController.kickMember(userId);
+  const kickPartyMember = async (userId: string) => {
+    await partyController.kickMember(userId);
   };
 
-  const transferLobbyOwner = async (userId: string) => {
-    await lobbyController.transferOwner(userId);
+  const transferPartyOwner = async (userId: string) => {
+    await partyController.transferOwner(userId);
   };
 
-  const startPrivateLobby = async () => {
-    await lobbyController.startLobby();
+  const startParty = async () => {
+    await partyController.startParty();
   };
 
-  const updatePrivateLobbySettings = async (matchConfig: MatchConfig, mode?: PartyMode) => {
-    await lobbyController.updateSettings(matchConfig, mode);
+  const updatePartySettings = async (matchConfig: MatchConfig, mode?: PartyMode) => {
+    await partyController.updateSettings(matchConfig, mode);
   };
 
-  const switchPrivateLobbyTeam = async (teamId: LobbyTeamId) => {
-    await lobbyController.switchTeam(teamId);
+  const switchPartyTeam = async (teamId: PartyTeamId) => {
+    await partyController.switchTeam(teamId);
   };
 
   const reportPlayer = async (
@@ -1222,8 +1116,13 @@ export function useHomeModel(options?: {
 
   const dismissNotification = async (notificationId: number) => {
     const notification = notifications.find((item) => item.id === notificationId);
-    setNotifications((current) =>
-      current.filter((notification) => notification.id !== notificationId),
+    queryClient.setQueryData<{ notifications: UserNotification[] }>(
+      ["notifications", auth.userId || "anonymous"],
+      (current) => ({
+        notifications: (current?.notifications || []).filter(
+          (notification) => notification.id !== notificationId,
+        ),
+      }),
     );
     if (!auth.accessToken) return;
     await markUserNotificationRead(config, auth.accessToken, notificationId);
@@ -1263,14 +1162,14 @@ export function useHomeModel(options?: {
       joinQueue: matchController.joinQueue,
       startSingleplayer: matchController.startSingleplayer,
       cancelQueue: matchController.cancelQueue,
-      createInviteLobby,
-      joinInviteLobby,
-      leavePrivateLobby,
-      kickLobbyMember,
-      transferLobbyOwner,
-      startPrivateLobby,
-      updatePrivateLobbySettings,
-      switchPrivateLobbyTeam,
+      createParty,
+      joinParty,
+      leaveParty,
+      kickPartyMember,
+      transferPartyOwner,
+      startParty,
+      updatePartySettings,
+      switchPartyTeam,
       placeGuess: gameController.placeGuess,
       finalizeGuess: gameController.finalizeGuess,
       advanceRound: gameController.advanceRound,
@@ -1288,7 +1187,7 @@ export function useHomeModel(options?: {
       loadLeaderboard: lobbyData.loadLeaderboard,
       clearAuthSession: logout,
       deleteAccount,
-      submitOnboardingNickname,
+      submitRequiredNickname,
       submitProfileNickname,
       selectBadge,
       startSupportDonation,

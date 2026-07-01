@@ -63,6 +63,36 @@ func TestSingleplayerFlowFinalizeAndAdvance(t *testing.T) {
 	}
 }
 
+func TestSingleplayerSnapshotPreservesMatchConfig(t *testing.T) {
+	engine := New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{
+			Lat:     float64(roundIndex),
+			Lng:     float64(roundIndex),
+			Country: "US",
+		}, nil
+	})
+	_, err := engine.CreateMatchWithConfig("solo-config", []string{"u1"}, map[string]contracts.PlayerProfile{
+		"u1": {UserID: "u1", DisplayName: "Solo"},
+	}, contracts.MatchConfig{
+		Ruleset:     contracts.RulesetNoMove,
+		StreetNames: contracts.StreetNamesHidden,
+	})
+	if err != nil {
+		t.Fatalf("create match: %v", err)
+	}
+
+	snap, err := engine.GetSnapshot("solo-config")
+	if err != nil {
+		t.Fatalf("get snapshot: %v", err)
+	}
+	if snap.Config.Ruleset != contracts.RulesetNoMove {
+		t.Fatalf("ruleset = %q, want %q", snap.Config.Ruleset, contracts.RulesetNoMove)
+	}
+	if snap.Config.StreetNames != contracts.StreetNamesHidden {
+		t.Fatalf("street names = %q, want %q", snap.Config.StreetNames, contracts.StreetNamesHidden)
+	}
+}
+
 func TestSingleplayerDisconnectResume(t *testing.T) {
 	engine := New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
 		return contracts.LocationPoint{

@@ -119,6 +119,13 @@ func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFou
 	defer func() {
 		_ = l.Coord.UnlockMatch(context.Background(), found.MatchID, holder)
 	}()
+	if planner, ok := l.Persist.(interface {
+		PrepareMatchPlan(context.Context, *contracts.MatchFound) error
+	}); ok {
+		if err := planner.PrepareMatchPlan(ctx, &found); err != nil {
+			return coordinator.Assignment{}, err
+		}
+	}
 
 	nodes, err := l.Coord.ListNodes(ctx)
 	if err != nil {
@@ -166,8 +173,18 @@ func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFou
 		NodeEpoch:             target.OwnerEpoch,
 		PublicRoute:           target.PublicRoute,
 		Players:               append([]string(nil), found.Players...),
-		SourceLobbyID:         found.SourceLobbyID,
-		SourceLobbyInviteCode: found.SourceLobbyInviteCode,
+		SourcePartyID:         found.SourcePartyID,
+		SourcePartyInviteCode: found.SourcePartyInviteCode,
+	}
+	if l.Persist != nil {
+		if err := l.Persist.UpsertMatchSession(persistence.MatchSessionUpsert{
+			Found:       found,
+			NodeID:      target.NodeID,
+			NodeEpoch:   target.OwnerEpoch,
+			PublicRoute: target.PublicRoute,
+		}); err != nil {
+			return coordinator.Assignment{}, err
+		}
 	}
 	if err := l.Coord.SaveAssignment(ctx, rec); err != nil {
 		return coordinator.Assignment{}, err
@@ -177,6 +194,16 @@ func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFou
 
 func (l Launcher) AssignedPayload(userID string, assigned coordinator.Assignment) (contracts.MatchAssignedPayload, bool, error) {
 	if assigned.MatchID == "" || assigned.PublicRoute == "" {
+		return contracts.MatchAssignedPayload{}, false, nil
+	}
+	assignedPlayer := false
+	for _, playerID := range assigned.Players {
+		if playerID == userID {
+			assignedPlayer = true
+			break
+		}
+	}
+	if !assignedPlayer {
 		return contracts.MatchAssignedPayload{}, false, nil
 	}
 	node, ok, err := l.Coord.GetNodeByRoute(context.Background(), assigned.PublicRoute)
@@ -197,8 +224,8 @@ func (l Launcher) AssignedPayload(userID string, assigned coordinator.Assignment
 		Node:                  assigned.PublicRoute,
 		Ticket:                ticket,
 		WSPath:                "/ws/" + assigned.PublicRoute,
-		SourceLobbyID:         assigned.SourceLobbyID,
-		SourceLobbyInviteCode: assigned.SourceLobbyInviteCode,
+		SourcePartyID:         assigned.SourcePartyID,
+		SourcePartyInviteCode: assigned.SourcePartyInviteCode,
 	}, true, nil
 }
 

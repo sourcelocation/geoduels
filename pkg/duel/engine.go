@@ -2,7 +2,9 @@ package duel
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,11 +96,16 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 			return nil, errors.New("duel requires exactly two players")
 		}
 	case contracts.ModeTeamDuel, contracts.ModeFreeForAll:
-		if len(playerIDs) < 2 || len(playerIDs) > 8 {
-			return nil, errors.New("party match requires 2 to 8 players")
+		if len(playerIDs) < contracts.MinPartyMembers || len(playerIDs) > contracts.MaxPartyMembers {
+			return nil, fmt.Errorf("party match requires %d to %d players", contracts.MinPartyMembers, contracts.MaxPartyMembers)
 		}
 	default:
 		return nil, errors.New("unsupported duel mode")
+	}
+	for _, id := range playerIDs {
+		if strings.TrimSpace(id) == "" {
+			return nil, errors.New("player id required")
+		}
 	}
 	if e.roundProvider == nil {
 		return nil, errors.New("round provider required")
@@ -271,41 +278,43 @@ func (e *Engine) Tick() []string {
 		if e.roundExpired(m, now) {
 			e.resolveRound(m)
 		}
-		allDisconnected := true
-		maxDue := int64(0)
-		for _, p := range m.Players {
-			if !p.Disconnected {
-				allDisconnected = false
+		if !m.Unranked {
+			allDisconnected := true
+			maxDue := int64(0)
+			for _, p := range m.Players {
+				if !p.Disconnected {
+					allDisconnected = false
+				}
+				if p.DisconnectDue > maxDue {
+					maxDue = p.DisconnectDue
+				}
+				if p.Disconnected && p.DisconnectDue > 0 && now.UnixMilli() > p.DisconnectDue {
+					p.HP = 0
+					m.State = contracts.MatchEnded
+					m.LastActivity = now
+					m.EventSeq++
+				}
 			}
-			if p.DisconnectDue > maxDue {
-				maxDue = p.DisconnectDue
+			if m.State != contracts.MatchLive {
+				if m.EventSeq != beforeSeq {
+					changed = append(changed, m.ID)
+				}
+				continue
 			}
-			if p.Disconnected && p.DisconnectDue > 0 && now.UnixMilli() > p.DisconnectDue {
-				p.HP = 0
+			if allDisconnected && maxDue > 0 && now.UnixMilli() > maxDue {
+				for _, p := range m.Players {
+					p.HP = 0
+				}
 				m.State = contracts.MatchEnded
 				m.LastActivity = now
 				m.EventSeq++
+			} else if allDisconnected && !m.LastActivity.IsZero() && now.Sub(m.LastActivity) > staleGrace {
+				for _, p := range m.Players {
+					p.HP = 0
+				}
+				m.State = contracts.MatchEnded
+				m.EventSeq++
 			}
-		}
-		if m.State != contracts.MatchLive {
-			if m.EventSeq != beforeSeq {
-				changed = append(changed, m.ID)
-			}
-			continue
-		}
-		if allDisconnected && maxDue > 0 && now.UnixMilli() > maxDue {
-			for _, p := range m.Players {
-				p.HP = 0
-			}
-			m.State = contracts.MatchEnded
-			m.LastActivity = now
-			m.EventSeq++
-		} else if allDisconnected && !m.LastActivity.IsZero() && now.Sub(m.LastActivity) > staleGrace {
-			for _, p := range m.Players {
-				p.HP = 0
-			}
-			m.State = contracts.MatchEnded
-			m.EventSeq++
 		}
 		if m.EventSeq != beforeSeq {
 			changed = append(changed, m.ID)
@@ -326,7 +335,11 @@ func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnaps
 		return nil, errors.New("player not in match")
 	}
 	p.Disconnected = true
-	p.DisconnectDue = time.Now().Add(disconnectGrace).UnixMilli()
+	if m.Unranked {
+		p.DisconnectDue = 0
+	} else {
+		p.DisconnectDue = time.Now().Add(disconnectGrace).UnixMilli()
+	}
 	m.LastActivity = time.Now()
 	m.EventSeq++
 	return m.snapshot(), nil
@@ -775,8 +788,17 @@ func (e *Engine) roundExpired(m *Match, now time.Time) bool {
 	if !m.RoundDeadline.IsZero() {
 		return now.After(m.RoundDeadline)
 	}
+	// No fixed deadline (time limit "none", or pressure mode before the first
+	// finalize). Fall back to an idle watchdog so genuinely abandoned rounds
+	// don't pin a gameplay node forever. Measure the idle window from the last
+	// player activity (pin placement/move, (re)connect) rather than the round
+	// start, so an actively-played unlimited round is never force-resolved.
 	liveAt := m.RoundStartedAt.Add(roundIntro)
-	return now.After(liveAt.Add(roundIdleCap))
+	idleSince := m.LastActivity
+	if idleSince.Before(liveAt) {
+		idleSince = liveAt
+	}
+	return now.After(idleSince.Add(roundIdleCap))
 }
 
 func roundID(matchID string, round int) string {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeConfigFixture } from "../../../test/runtime-config.fixture";
+import { CHAT_MUTED_STORAGE_KEY } from "../lib/chat-preferences";
 import { ChatController } from "./chat-controller";
 
 class MockWebSocket {
@@ -34,6 +35,17 @@ describe("ChatController", () => {
 
   beforeEach(() => {
     MockWebSocket.instances = [];
+    const values = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        clear: () => values.clear(),
+        getItem: (key: string) => values.get(key) ?? null,
+        removeItem: (key: string) => values.delete(key),
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    window.localStorage.clear();
     global.WebSocket = MockWebSocket as unknown as typeof WebSocket;
     window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
   });
@@ -41,17 +53,18 @@ describe("ChatController", () => {
   afterEach(() => {
     global.WebSocket = originalWebSocket;
     window.WebSocket = originalWebSocket;
+    window.localStorage.clear();
     vi.restoreAllMocks();
   });
 
   it("connects to the selected conversation and sends through the active socket", () => {
     const controller = new ChatController({ config: runtimeConfig });
 
-    controller.setConversation("lobby:lobby-1", "token-1");
+    controller.setConversation("party:party-1", "token-1");
 
     expect(MockWebSocket.instances).toHaveLength(1);
     expect(MockWebSocket.instances[0]?.url).toBe(
-      "ws://localhost:8090/chat/ws?conversationId=lobby%3Alobby-1&accessToken=token-1",
+      "ws://localhost:8090/chat/ws?conversationId=party%3Aparty-1&accessToken=token-1",
     );
 
     MockWebSocket.instances[0]?.open();
@@ -63,13 +76,13 @@ describe("ChatController", () => {
 
   it("caches messages by conversation across temporary conversation changes", () => {
     const controller = new ChatController({ config: runtimeConfig });
-    controller.setConversation("lobby:lobby-1", "token-1");
+    controller.setConversation("party:party-1", "token-1");
 
     MockWebSocket.instances[0]?.emitMessage({
       type: "chat.message",
       payload: {
         id: "chat-1",
-        conversationId: "lobby:lobby-1",
+        conversationId: "party:party-1",
         matchId: "",
         senderUserId: "u2",
         senderDisplayName: "Two",
@@ -86,9 +99,34 @@ describe("ChatController", () => {
     controller.setConversation("", "");
     expect(controller.getState().messages).toEqual([]);
 
-    controller.setConversation("lobby:lobby-1", "token-1");
+    controller.setConversation("party:party-1", "token-1");
     expect(controller.getState().messages.map((message) => message.id)).toEqual([
       "chat-1",
     ]);
+  });
+
+  it("does not play incoming chat sounds while chat is muted", () => {
+    window.localStorage.setItem(CHAT_MUTED_STORAGE_KEY, "true");
+    const play = vi.fn();
+    const controller = new ChatController({
+      config: runtimeConfig,
+      sfxController: { play } as never,
+    });
+    controller.setConversation("party:party-1", "token-1");
+
+    MockWebSocket.instances[0]?.emitMessage({
+      type: "chat.message",
+      payload: {
+        id: "chat-muted",
+        conversationId: "party:party-1",
+        senderUserId: "u2",
+        senderDisplayName: "Two",
+        kind: "text",
+        body: "quiet",
+        createdAt: "2026-06-18T00:00:00Z",
+      },
+    });
+
+    expect(play).not.toHaveBeenCalled();
   });
 });

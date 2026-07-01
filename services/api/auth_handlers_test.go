@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"geoduels/pkg/auth"
+	"geoduels/pkg/contracts"
 	"geoduels/pkg/persistence"
 )
 
@@ -24,13 +26,45 @@ type guestAuthTestStore struct {
 	sessions      map[string]persistence.RefreshTokenRecord
 }
 
+type nicknameAuthTestStore struct {
+	persistence.Store
+	identity       persistence.Identity
+	setErr         error
+	setName        string
+	suggestedName  string
+	suggestionFrom string
+}
+
+func (s *nicknameAuthTestStore) GetIdentity(sub string) (persistence.Identity, error) {
+	return s.identity, nil
+}
+
+func (s *nicknameAuthTestStore) SetNickname(sub, displayName string) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
+	s.setName = displayName
+	s.identity.DisplayName = displayName
+	s.identity.NicknameRequired = false
+	return nil
+}
+
+func (s *nicknameAuthTestStore) SyncLoginBadges(userID string) error {
+	return nil
+}
+
+func (s *nicknameAuthTestStore) SuggestNickname(sub, displayName string) (string, error) {
+	s.suggestionFrom = displayName
+	return s.suggestedName, nil
+}
+
 func (s *guestAuthTestStore) CreateGuestIdentity() (persistence.Identity, error) {
 	s.createdGuests++
 	s.identity = persistence.Identity{
-		Sub:         "guest-1",
-		DisplayName: "Guest",
-		Onboarded:   true,
-		AccountType: "guest",
+		Sub:              "guest-1",
+		DisplayName:      "Guest",
+		NicknameRequired: false,
+		AccountType:      "guest",
 	}
 	return s.identity, nil
 }
@@ -122,6 +156,122 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 	}
 	if store.createdGuests != 1 {
 		t.Fatalf("guest login should reuse cookie session, created guests = %d", store.createdGuests)
+	}
+}
+
+func TestSessionFailureDoesNotClearRefreshCookie(t *testing.T) {
+	a := &api{
+		store:                 &guestAuthTestStore{},
+		refreshCookieName:     "geoduels_refresh",
+		refreshCookieSameSite: http.SameSiteLaxMode,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  "geoduels_refresh",
+		Value: "stale-token",
+	})
+	rec := httptest.NewRecorder()
+
+	a.session(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("session status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("session failure must not overwrite a possibly newer cookie, got %v", cookies)
+	}
+}
+
+func TestSessionUsesValidRefreshCookieWhenStaleDuplicateComesFirst(t *testing.T) {
+	store := &guestAuthTestStore{
+		identity: persistence.Identity{
+			Sub:         "user-1",
+			DisplayName: "Player",
+			AccountType: "registered",
+		},
+		sessions: map[string]persistence.RefreshTokenRecord{},
+	}
+	validToken := "valid-token"
+	validHash := auth.RefreshTokenHash(validToken)
+	store.sessions[validHash] = persistence.RefreshTokenRecord{
+		ID:               "session-1",
+		UserID:           "user-1",
+		RefreshTokenHash: validHash,
+		ExpiresAt:        time.Now().Add(time.Hour),
+		CreatedAt:        time.Now(),
+		LastUsedAt:       time.Now(),
+	}
+	a := &api{
+		store:                 store,
+		appAuthSecret:         []byte("01234567890123456789012345678901"),
+		accessTokenTTL:        15 * time.Minute,
+		refreshTokenTTL:       30 * 24 * time.Hour,
+		refreshCookieName:     "geoduels_refresh",
+		refreshCookieSameSite: http.SameSiteLaxMode,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	req.Header.Set("Cookie", "geoduels_refresh=stale-token; geoduels_refresh="+validToken)
+	rec := httptest.NewRecorder()
+
+	a.session(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("session status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("session bootstrap must not rotate the refresh cookie, got %v", cookies)
+	}
+	if _, ok := store.sessions[validHash]; !ok {
+		t.Fatal("session bootstrap unexpectedly rotated the stored refresh token")
+	}
+}
+
+func TestSessionBootstrapIsIdempotent(t *testing.T) {
+	store := &guestAuthTestStore{
+		identity: persistence.Identity{
+			Sub:         "user-1",
+			DisplayName: "Player",
+			AccountType: "registered",
+		},
+		sessions: map[string]persistence.RefreshTokenRecord{},
+	}
+	refreshToken := "valid-token"
+	refreshHash := auth.RefreshTokenHash(refreshToken)
+	store.sessions[refreshHash] = persistence.RefreshTokenRecord{
+		ID:               "session-1",
+		UserID:           "user-1",
+		RefreshTokenHash: refreshHash,
+		ExpiresAt:        time.Now().Add(time.Hour),
+		CreatedAt:        time.Now(),
+		LastUsedAt:       time.Now(),
+	}
+	a := &api{
+		store:                 store,
+		appAuthSecret:         []byte("01234567890123456789012345678901"),
+		accessTokenTTL:        15 * time.Minute,
+		refreshTokenTTL:       30 * 24 * time.Hour,
+		refreshCookieName:     "geoduels_refresh",
+		refreshCookieSameSite: http.SameSiteLaxMode,
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+		req.AddCookie(&http.Cookie{Name: "geoduels_refresh", Value: refreshToken})
+		rec := httptest.NewRecorder()
+
+		a.session(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("session bootstrap %d status = %d, want %d; body = %s", attempt, rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+			t.Fatalf("session bootstrap %d unexpectedly changed cookies: %v", attempt, cookies)
+		}
+	}
+	if _, ok := store.sessions[refreshHash]; !ok {
+		t.Fatal("repeated bootstrap unexpectedly rotated the stored refresh token")
 	}
 }
 
@@ -274,6 +424,103 @@ func TestSessionUserIncludesProfileFields(t *testing.T) {
 	}
 	if !user.IsAdmin {
 		t.Fatal("expected admin flag to be preserved")
+	}
+}
+
+func TestUpdateNicknameClaimsRequiredNickname(t *testing.T) {
+	secret := []byte("01234567890123456789012345678901")
+	store := &nicknameAuthTestStore{
+		identity: persistence.Identity{
+			Sub:              "user-1",
+			DisplayName:      "Old Name",
+			NicknameRequired: true,
+			AccountType:      "registered",
+		},
+	}
+	a := &api{
+		store:          store,
+		appAuthSecret:  secret,
+		accessTokenTTL: 15 * time.Minute,
+	}
+	token, err := auth.IssueAppAccessToken(secret, "user-1", "session-1", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/v1/me/nickname", strings.NewReader(`{"nickname":"Player.One"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	a.updateNickname(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update nickname status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if store.setName != "Player.One" {
+		t.Fatalf("stored nickname = %q", store.setName)
+	}
+	var payload contracts.AuthSessionPayload
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.NicknameRequired {
+		t.Fatal("nickname should be claimed after successful update")
+	}
+	if !payload.CanPlay {
+		t.Fatal("claimed registered user should be playable")
+	}
+}
+
+func TestUpdateNicknameReturnsConflictWhenTaken(t *testing.T) {
+	secret := []byte("01234567890123456789012345678901")
+	store := &nicknameAuthTestStore{
+		identity: persistence.Identity{
+			Sub:              "user-1",
+			NicknameRequired: true,
+			AccountType:      "registered",
+		},
+		setErr: persistence.ErrNicknameTaken,
+	}
+	a := &api{store: store, appAuthSecret: secret}
+	token, err := auth.IssueAppAccessToken(secret, "user-1", "session-1", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/v1/me/nickname", strings.NewReader(`{"nickname":"Taken"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	a.updateNickname(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("update nickname status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !errors.Is(store.setErr, persistence.ErrNicknameTaken) {
+		t.Fatal("expected nickname conflict")
+	}
+}
+
+func TestSuggestedNicknameUsesAvailableStoreSuggestion(t *testing.T) {
+	store := &nicknameAuthTestStore{
+		identity: persistence.Identity{
+			Sub:              "user-1",
+			ProviderName:     "Player Name",
+			NicknameRequired: true,
+			AccountType:      "registered",
+		},
+		suggestedName: "Player.Name4821",
+	}
+	a := &api{store: store}
+
+	got, err := a.suggestedNickname(store.identity, "")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Player.Name4821" {
+		t.Fatalf("suggested nickname = %q", got)
+	}
+	if store.suggestionFrom != "Player Name" {
+		t.Fatalf("suggestion source = %q", store.suggestionFrom)
 	}
 }
 

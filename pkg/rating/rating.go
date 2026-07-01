@@ -11,9 +11,12 @@ const (
 	MinimumRatingRD  = 110.0
 	MaximumRatingRD  = 220.0
 	MinimumRankedMMR = 500
-	MaxDuelMMRDelta  = 80
+	MaxDuelMMRDelta  = 40
 
 	LowMMRForgivenessEndMMR = 1000
+
+	ProvisionalLossMinFactor    = 0.20
+	ProvisionalProtectionMMRGap = 250
 )
 
 var glickoC = math.Sqrt((MaximumRatingRD*MaximumRatingRD - MinimumRatingRD*MinimumRatingRD) / 365.0)
@@ -47,6 +50,8 @@ func CalculateDuelUpdates(p1, p2 State, winner string, now time.Time) (Update, U
 
 	p1MMR = CapDelta(p1.MMR, p1MMR)
 	p2MMR = CapDelta(p2.MMR, p2MMR)
+	p1MMR = ApplyProvisionalOpponentLossProtection(p1.MMR, p2.MMR, p2InflatedRD, p1MMR)
+	p2MMR = ApplyProvisionalOpponentLossProtection(p2.MMR, p1.MMR, p1InflatedRD, p2MMR)
 	p1MMR = ApplyLowMMRLossForgiveness(p1.MMR, p1MMR)
 	p2MMR = ApplyLowMMRLossForgiveness(p2.MMR, p2MMR)
 	p1MMR = ClampRankedMMR(p1MMR)
@@ -147,4 +152,32 @@ func ApplyLowMMRLossForgiveness(current, next int) int {
 	}
 	factor := float64(current-MinimumRankedMMR) / float64(rangeSize)
 	return current + int(math.Round(float64(delta)*factor))
+}
+
+func ApplyProvisionalOpponentLossProtection(selfMMR, opponentMMR int, opponentRD float64, next int) int {
+	delta := next - selfMMR
+	if delta >= 0 || opponentMMR > selfMMR-ProvisionalProtectionMMRGap {
+		return next
+	}
+	factor := provisionalRDFactor(opponentRD)
+	if factor >= 1 {
+		return next
+	}
+	return selfMMR + int(math.Round(float64(delta)*factor))
+}
+
+func provisionalRDFactor(rd float64) float64 {
+	rd = ClampRD(rd)
+	rangeSize := MaximumRatingRD - MinimumRatingRD
+	if rangeSize <= 0 {
+		return 1
+	}
+	certainty := 1 - ((rd - MinimumRatingRD) / rangeSize)
+	if certainty < ProvisionalLossMinFactor {
+		return ProvisionalLossMinFactor
+	}
+	if certainty > 1 {
+		return 1
+	}
+	return certainty
 }

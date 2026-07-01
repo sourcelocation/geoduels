@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import EndMatchOverlay from "../../components/ui/EndMatchOverlay";
 import type { Snapshot } from "../../components/ui/types";
 import { requestMatchReport } from "../../features/auth/lib/auth-client";
+import { deriveMatchSides } from "../../features/game/model/match-sides";
 import HomePageChatDock from "../../features/home/page/HomePageChatDock";
 import HomePageGame from "../../features/home/page/HomePageGame";
 import HomePageOverlays from "../../features/home/page/HomePageOverlays";
@@ -12,7 +13,15 @@ import { useHomeModel } from "../../features/home/model/useHomeModel";
 import { useMatchRouteSession } from "../../features/matchmaking/hooks/use-match-route-session";
 import { getRuntimeConfig } from "../../lib/runtime-config";
 import { getSiteURL } from "../../lib/site";
-import type { MatchSessionResponse } from "../../features/matchmaking/lib/queue-client";
+import { getTeamPresentation } from "../../lib/team-presentation";
+import {
+  normalizeEntityRouteId,
+  toPublicEntityId,
+} from "../../lib/entity-id";
+import type {
+  MatchConfig,
+  MatchSessionResponse,
+} from "../../features/matchmaking/lib/queue-client";
 
 export function normalizeRouteMatchId(
   raw: string | string[] | undefined,
@@ -20,16 +29,16 @@ export function normalizeRouteMatchId(
 ) {
   if (typeof raw === "string") {
     const value = raw.trim();
-    return /^\[[^/]+\]$/.test(value) ? "" : value;
+    return /^\[[^/]+\]$/.test(value) ? "" : normalizeEntityRouteId(value);
   }
   const pathMatch = asPath.match(/^\/match\/([^?#/]+)/);
   if (pathMatch?.[1]) {
     try {
       const value = decodeURIComponent(pathMatch[1]).trim();
-      return /^\[[^/]+\]$/.test(value) ? "" : value;
+      return /^\[[^/]+\]$/.test(value) ? "" : normalizeEntityRouteId(value);
     } catch {
       const value = pathMatch[1].trim();
-      return /^\[[^/]+\]$/.test(value) ? "" : value;
+      return /^\[[^/]+\]$/.test(value) ? "" : normalizeEntityRouteId(value);
     }
   }
   return "";
@@ -44,9 +53,25 @@ function buildHistoryOverlay(
   const playerIds = Object.keys(snapshot.players || {});
   const selfPlayer =
     snapshot.players[userId] || snapshot.players[playerIds[0] || ""];
-  const opponentId = playerIds.find((id) => id !== selfPlayer?.userId) || "";
-  const opponentPlayer = opponentId ? snapshot.players[opponentId] : undefined;
   const mode = snapshot.mode || "duel";
+  const derivedSides = deriveMatchSides({
+    snapshot,
+    selfUserId: selfPlayer?.userId || userId,
+    fallbackSelf: {
+      id: userId || "self",
+      name: selfPlayer?.displayName || displayName || "You",
+      avatarUrl: selfPlayer?.avatarUrl || userAvatar,
+      avatarFallback: (
+        selfPlayer?.displayName ||
+        displayName ||
+        "Y"
+      ).slice(0, 1).toUpperCase(),
+      isAdmin: selfPlayer?.isAdmin,
+      isGuest: selfPlayer?.isGuest,
+      selectedBadge: selfPlayer?.selectedBadge,
+      rating: selfPlayer?.mmr,
+    },
+  });
   const roundResults =
     snapshot.roundResults && snapshot.roundResults.length > 0
       ? snapshot.roundResults
@@ -61,19 +86,17 @@ function buildHistoryOverlay(
     resultPlayerNames[id] = player.displayName || player.userId;
     resultPlayerAvatars[id] = player.avatarUrl;
     resultPlayerBorderColors[id] =
-      mode === "team_duel" ? (player.teamId === "b" ? "#2563eb" : "#dc2626") : undefined;
+      mode === "team_duel"
+        ? getTeamPresentation(player.teamId).color
+        : undefined;
     resultPlayerFallbacks[id] = (player.displayName || player.userId || "P")
       .slice(0, 1)
       .toUpperCase();
   });
-  const selfName = selfPlayer?.displayName || displayName || "You";
-  const opponentName = opponentPlayer?.displayName || "Opponent";
-  const selfIsAdmin = !!selfPlayer?.isAdmin;
-  const opponentIsAdmin = !!opponentPlayer?.isAdmin;
-  const selfHP = selfPlayer?.hp || 0;
-  const oppHP = opponentPlayer?.hp || 0;
+  const selfHP = derivedSides.sides.self.hp ?? 0;
+  const oppHP = derivedSides.sides.opponent.hp ?? 0;
   const outcome: "win" | "lose" | "draw" | undefined =
-    mode === "singleplayer"
+    mode === "singleplayer" || mode === "free_for_all"
       ? undefined
       : selfHP === oppHP
         ? "draw"
@@ -84,33 +107,19 @@ function buildHistoryOverlay(
   return {
     mode,
     outcome,
-    selfName,
-    opponentName: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentName,
-    opponentUserId: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentId,
-    selfElo: mode === "singleplayer" || mode === "free_for_all" ? undefined : selfPlayer?.mmr,
-    opponentElo: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentPlayer?.mmr,
-    selfHP,
-    oppHP: mode === "singleplayer" || mode === "free_for_all" ? undefined : oppHP,
-    selfAvatarUrl: selfPlayer?.avatarUrl || userAvatar,
-    oppAvatarUrl:
-      mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentPlayer?.avatarUrl,
-    selfFallback: (selfName || "Y").slice(0, 1).toUpperCase(),
-    oppFallback:
-      mode === "singleplayer" || mode === "free_for_all"
-        ? undefined
-        : (opponentName || "O").slice(0, 1).toUpperCase(),
-    selfIsAdmin,
-    opponentIsAdmin: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentIsAdmin,
+    sides: derivedSides.sides,
+    selfUserId: derivedSides.selfPlayerId,
     totalScore: selfPlayer?.totalScore || 0,
     roundResults,
     resultPlayerNames,
     resultPlayerAvatars,
     resultPlayerFallbacks,
     resultPlayerBorderColors,
+    participantsById: derivedSides.playersById,
   };
 }
 
-function matchSourceLobbyInviteCode(
+function matchSourcePartyInviteCode(
   response: MatchSessionResponse | null,
 ): string {
   if (!response) return "";
@@ -119,7 +128,7 @@ function matchSourceLobbyInviteCode(
     response.status === "history" ||
     response.status === "replaced"
   ) {
-    return response.sourceLobbyInviteCode || "";
+    return response.sourcePartyInviteCode || "";
   }
   return "";
 }
@@ -137,24 +146,28 @@ export default function MatchPage() {
   const routeSession = useMatchRouteSession(routeMatchId || null);
   const siteURL = getSiteURL();
   const canonicalURL = routeMatchId
-    ? `${siteURL}/match/${encodeURIComponent(routeMatchId)}`
+    ? `${siteURL}/match/${encodeURIComponent(toPublicEntityId(routeMatchId))}`
     : `${siteURL}/`;
-  const handleLeaveToLobby = () => {
-    const sourceLobbyInviteCode =
-      model.view.meta.sourceLobbyInviteCode ||
-      matchSourceLobbyInviteCode(routeSession.replacement) ||
-      "";
+  const sourcePartyInviteCode =
+    model.view.meta.sourcePartyInviteCode ||
+    matchSourcePartyInviteCode(routeSession.replacement) ||
+    "";
+  const backHref = sourcePartyInviteCode
+    ? `/party/${encodeURIComponent(sourcePartyInviteCode)}`
+    : "/";
+  const backLabel = sourcePartyInviteCode
+    ? "Back to party"
+    : "Back to lobby";
+  const handleLeaveToParty = () => {
     model.actions.leaveGame();
-    void router.push(
-      sourceLobbyInviteCode
-        ? `/lobby/${encodeURIComponent(sourceLobbyInviteCode)}`
-        : "/",
-    );
+    void router.push(backHref);
   };
-  const handlePlayAgain = async () => {
-    const nextMatchId = await model.actions.startSingleplayer();
+  const handlePlayAgain = async (matchConfig?: MatchConfig) => {
+    const nextMatchId = await model.actions.startSingleplayer(matchConfig);
     if (nextMatchId) {
-      void router.push(`/match/${encodeURIComponent(nextMatchId)}`);
+      void router.push(
+        `/match/${encodeURIComponent(toPublicEntityId(nextMatchId))}`,
+      );
     }
     return nextMatchId;
   };
@@ -230,46 +243,37 @@ export default function MatchPage() {
           overlays={model.view.overlays}
           actions={{
             ...model.actions,
-            leaveGame: handleLeaveToLobby,
+            leaveGame: handleLeaveToParty,
             startSingleplayer: handlePlayAgain,
           }}
         />
         <HomePageGame
           game={model.view.game}
           maxHP={model.view.meta.maxHP}
-          actions={{ ...model.actions, leaveGame: handleLeaveToLobby }}
+          actions={{ ...model.actions, leaveGame: handleLeaveToParty }}
         />
         <HomePageChatDock chat={model.view.chat} actions={model.actions} />
         {!model.view.game.inGame &&
           !model.view.overlays.endMatch.open &&
           historyOverlay && (
             <EndMatchOverlay
-              onLeaveGame={handleLeaveToLobby}
+              onLeaveGame={handleLeaveToParty}
+              backLabel={backLabel}
               mode={historyOverlay.mode}
               outcome={historyOverlay.outcome}
-              selfName={historyOverlay.selfName}
-              opponentName={historyOverlay.opponentName}
-              opponentUserId={historyOverlay.opponentUserId}
-              selfElo={historyOverlay.selfElo}
-              opponentElo={historyOverlay.opponentElo}
-              selfHP={historyOverlay.selfHP}
-              oppHP={historyOverlay.oppHP}
-              selfAvatarUrl={historyOverlay.selfAvatarUrl}
-              oppAvatarUrl={historyOverlay.oppAvatarUrl}
-              selfFallback={historyOverlay.selfFallback}
-              oppFallback={historyOverlay.oppFallback}
-              selfIsAdmin={historyOverlay.selfIsAdmin}
-              opponentIsAdmin={historyOverlay.opponentIsAdmin}
+              sides={historyOverlay.sides}
+              selfUserId={historyOverlay.selfUserId}
               totalScore={historyOverlay.totalScore}
               roundResults={historyOverlay.roundResults}
               resultPlayerNames={historyOverlay.resultPlayerNames}
               resultPlayerAvatars={historyOverlay.resultPlayerAvatars}
               resultPlayerFallbacks={historyOverlay.resultPlayerFallbacks}
               resultPlayerBorderColors={historyOverlay.resultPlayerBorderColors}
+              participantsById={historyOverlay.participantsById}
               onReportPlayer={handleHistoryReport}
               onPlayAgain={
                 historyOverlay.mode === "singleplayer"
-                  ? handlePlayAgain
+                  ? () => handlePlayAgain(routeSession.historySnapshot?.config)
                   : undefined
               }
               asPage
@@ -301,19 +305,19 @@ export default function MatchPage() {
                     type="button"
                     onClick={() =>
                       void router.replace(
-                        `/match/${encodeURIComponent(replacementMatchId)}`,
+                        `/match/${encodeURIComponent(toPublicEntityId(replacementMatchId))}`,
                       )
                     }
-                    className="mt-6 inline-flex rounded-full border border-[#2ad18f]/40 bg-[#2ad18f]/10 px-5 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-[#b6f5d8] transition hover:bg-[#2ad18f]/20"
+                    className="mt-6 inline-flex rounded-full border border-[#2ad18f]/40 bg-[#2ad18f]/10 px-5 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-[#2ad18f]/20"
                   >
                     Resume Current Match
                   </button>
                 ) : null}
                 <Link
-                  href="/"
+                  href={backHref}
                   className="mt-4 inline-flex rounded-full border border-white/10 bg-white/10 px-5 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-white/15"
                 >
-                  Back To Lobby
+                  {backLabel}
                 </Link>
               </div>
             </div>

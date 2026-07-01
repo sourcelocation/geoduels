@@ -36,7 +36,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w.startReportNotificationWorker(ctx)
-	w.startModerationProjectionWorker(ctx)
 
 	r := http.NewServeMux()
 	r.HandleFunc("/health/live", w.healthLive)

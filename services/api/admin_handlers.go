@@ -3,19 +3,20 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5"
 
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/maintenance"
+	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
 )
 
@@ -141,7 +142,7 @@ func (a *api) adminPlayerDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	detail, err := a.store.GetAdminPlayerDetail(strings.TrimSpace(mux.Vars(r)["id"]))
+	detail, err := a.store.GetAdminPlayerDetail(a.resolveEntityID("user", mux.Vars(r)["id"]))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "player not found", http.StatusNotFound)
@@ -157,34 +158,19 @@ func (a *api) adminPlayerDetail(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(detail)
 }
 
-func (a *api) adminModerationCases(w http.ResponseWriter, r *http.Request) {
+func (a *api) moderatorTasks(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.moderatorIdentity(r)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	view := strings.TrimSpace(r.URL.Query().Get("view"))
-	if view != "" {
-		status = view
-	}
-	switch status {
-	case "active":
-		status = "active:" + identity.Sub
-	case "archive":
-		status = "archived"
-	case "mine":
-		status = "mine:" + identity.Sub
-	}
-	cases, err := a.store.ListModerationCases(status, 50)
+	tasks, err := a.store.ListReviewTasks(r.URL.Query().Get("view"), identity.Sub, 50)
 	if err != nil {
-		http.Error(w, "moderation cases unavailable", http.StatusInternalServerError)
+		http.Error(w, "moderation tasks unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"cases": cases,
-	})
+	_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks})
 }
 
 func (a *api) adminPlayerMatches(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +178,7 @@ func (a *api) adminPlayerMatches(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	matches, err := a.store.ListPlayerMatchHistory(strings.TrimSpace(mux.Vars(r)["id"]), 50)
+	matches, err := a.store.ListPlayerMatchHistory(a.resolveEntityID("user", mux.Vars(r)["id"]), 50)
 	if err != nil {
 		http.Error(w, "match history unavailable", http.StatusInternalServerError)
 		return
@@ -215,7 +201,7 @@ func (a *api) adminMatchChat(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	matchID := strings.TrimSpace(mux.Vars(r)["id"])
+	matchID := a.resolveEntityID("match", mux.Vars(r)["id"])
 	messages, err := a.store.ListChatMessages("match:"+matchID, limit)
 	if err != nil {
 		http.Error(w, "chat log unavailable", http.StatusInternalServerError)
@@ -225,130 +211,95 @@ func (a *api) adminMatchChat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages})
 }
 
-func (a *api) adminModerationCase(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.moderatorIdentity(r)
+func (a *api) moderatorIncident(w http.ResponseWriter, r *http.Request) {
+	_, err := a.moderatorIdentity(r)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	caseID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
+	incidentID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid case id", http.StatusBadRequest)
+		http.Error(w, "invalid incident id", http.StatusBadRequest)
 		return
 	}
-	detail, err := a.store.GetModerationCase(caseID)
+	detail, err := a.store.GetIncidentDetail(incidentID)
 	if err != nil {
-		http.Error(w, "moderation case unavailable", http.StatusInternalServerError)
+		http.Error(w, "moderation incident unavailable", http.StatusInternalServerError)
 		return
-	}
-	if !identity.IsAdmin {
-		sanitizeModerationCaseDetailForModerator(&detail)
 	}
 	_ = json.NewEncoder(w).Encode(detail)
 }
 
-func (a *api) adminModerationCaseClaim(w http.ResponseWriter, r *http.Request) {
+func (a *api) moderatorTaskClaim(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.moderatorIdentity(r)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	caseID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
+	taskID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid case id", http.StatusBadRequest)
+		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
-	detail, err := a.store.ClaimModerationCase(caseID, identity.Sub)
+	detail, err := a.store.ClaimReviewTask(taskID, identity.Sub)
 	if err != nil {
-		http.Error(w, "failed to claim moderation case", http.StatusInternalServerError)
+		http.Error(w, "failed to claim moderation task", http.StatusInternalServerError)
 		return
-	}
-	if !identity.IsAdmin {
-		sanitizeModerationCaseDetailForModerator(&detail)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(detail)
 }
 
-func (a *api) adminModerationCaseRelease(w http.ResponseWriter, r *http.Request) {
+func (a *api) moderatorTaskRelease(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.moderatorIdentity(r)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	caseID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
+	taskID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid case id", http.StatusBadRequest)
+		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
-	detail, err := a.store.ReleaseModerationCase(caseID, identity.Sub)
+	detail, err := a.store.ReleaseReviewTask(taskID, identity.Sub)
 	if err != nil {
-		http.Error(w, "failed to release moderation case", http.StatusInternalServerError)
+		http.Error(w, "failed to release moderation task", http.StatusInternalServerError)
 		return
-	}
-	if !identity.IsAdmin {
-		sanitizeModerationCaseDetailForModerator(&detail)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(detail)
 }
 
-func (a *api) adminModerationCaseAction(w http.ResponseWriter, r *http.Request) {
-	admin, err := a.moderatorIdentity(r)
+func (a *api) moderatorIncidentVerdict(w http.ResponseWriter, r *http.Request) {
+	moderator, err := a.moderatorIdentity(r)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	caseID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
+	incidentID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid case id", http.StatusBadRequest)
+		http.Error(w, "invalid incident id", http.StatusBadRequest)
 		return
 	}
-	var req struct {
-		ActionType string `json:"actionType"`
-		Reason     string `json:"reason"`
-		Status     string `json:"status"`
-		AssignedTo string `json:"assignedTo"`
-		MuteUserID string `json:"muteUserId"`
-		MuteUntil  string `json:"muteUntil"`
-	}
+	var req persistence.ModerationVerdictInput
 	if err := decodeJSONBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	var muteUntil time.Time
-	if strings.TrimSpace(req.MuteUntil) != "" {
-		muteUntil, err = time.Parse(time.RFC3339, strings.TrimSpace(req.MuteUntil))
-		if err != nil {
-			http.Error(w, "invalid muteUntil", http.StatusBadRequest)
-			return
-		}
-	}
-	detail, err := a.store.AddModerationCaseAction(persistence.ModerationCaseActionParams{
-		CaseID:      caseID,
-		ActorUserID: admin.Sub,
-		ActionType:  req.ActionType,
-		Reason:      req.Reason,
-		Status:      req.Status,
-		AssignedTo:  req.AssignedTo,
-		MuteUserID:  req.MuteUserID,
-		MuteUntil:   muteUntil,
-	})
+	detail, err := a.store.SubmitVerdict(incidentID, moderator.Sub, req)
 	if err != nil {
-		http.Error(w, "failed to update moderation case", http.StatusInternalServerError)
+		observability.Log("warn", "moderation verdict failed", map[string]any{
+			"incidentId":        incidentID,
+			"actorUserId":       moderator.Sub,
+			"verdict":           req.Verdict,
+			"enforcementAction": req.EnforcementAction,
+			"error":             err.Error(),
+		})
+		http.Error(w, "failed to submit moderation verdict", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(detail)
-}
-
-func sanitizeModerationCaseDetailForModerator(detail *persistence.ModerationCaseDetail) {
-	if detail == nil || detail.TargetPlayer == nil {
-		return
-	}
-	detail.TargetPlayer.Email = ""
-	detail.TargetPlayer.LastIPAddress = ""
-	detail.TargetPlayer.Identities = nil
 }
 
 func sanitizeAdminPlayerSummariesForModerator(players []persistence.AdminPlayerSummary) {
@@ -366,40 +317,55 @@ func sanitizeAdminPlayerSummaryForModerator(player *persistence.AdminPlayerSumma
 	player.Identities = nil
 }
 
-func (a *api) adminDebugTestReports(w http.ResponseWriter, r *http.Request) {
-	admin, err := a.adminIdentity(r)
-	if err != nil {
+func (a *api) moderatorSubject(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.moderatorIdentity(r); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	var req struct {
-		ReportedUserID string `json:"reportedUserId"`
-		Count          int    `json:"count"`
-		Category       string `json:"category"`
-		Reason         string `json:"reason"`
-	}
-	if err := decodeJSONBody(r, &req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+	profile, err := a.store.ListSubjectModerationProfile(a.resolveEntityID("user", mux.Vars(r)["userId"]))
+	if err != nil {
+		http.Error(w, "moderation subject unavailable", http.StatusInternalServerError)
 		return
 	}
-	result, err := a.store.CreateDebugModerationReports(persistence.CreateDebugModerationReportsParams{
-		ReportedUserID: req.ReportedUserID,
-		Count:          req.Count,
-		Category:       req.Category,
-		Reason:         req.Reason,
-		CreatedBy:      admin.Sub,
-	})
+	sanitizeAdminPlayerSummaryForModerator(&profile.Player)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(profile)
+}
+
+func (a *api) moderatorSignals(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.moderatorIdentity(r); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	signals, err := a.store.ListModerationSignals(100)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "moderation signals unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(map[string]any{"signals": signals})
 }
 
 func (a *api) adminBanPlayer(w http.ResponseWriter, r *http.Request) {
 	admin, err := a.moderatorIdentity(r)
 	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	a.banPlayerForCheating(w, r, mux.Vars(r)["id"], admin.Sub)
+}
+
+func (a *api) moderatorSubjectCheatingBan(w http.ResponseWriter, r *http.Request) {
+	moderator, err := a.moderatorIdentity(r)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	a.banPlayerForCheating(w, r, mux.Vars(r)["userId"], moderator.Sub)
+}
+
+func (a *api) moderatorSubjectUnban(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.moderatorIdentity(r); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -410,7 +376,22 @@ func (a *api) adminBanPlayer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	summary, err := a.store.BanPlayerForCheating(strings.TrimSpace(mux.Vars(r)["id"]), req.Reason, admin.Sub)
+	if err := a.store.SetPlayerBan(a.resolveEntityID("user", mux.Vars(r)["userId"]), req.Reason, false); err != nil {
+		http.Error(w, "failed to unban player", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) banPlayerForCheating(w http.ResponseWriter, r *http.Request, rawUserID, actorUserID string) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	summary, err := a.store.BanPlayerForCheating(a.resolveEntityID("user", rawUserID), req.Reason, actorUserID)
 	if err != nil {
 		http.Error(w, "failed to ban player", http.StatusInternalServerError)
 		return
@@ -424,7 +405,7 @@ func (a *api) adminUnbanPlayer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.SetPlayerBan(strings.TrimSpace(mux.Vars(r)["id"]), "", false); err != nil {
+	if err := a.store.SetPlayerBan(a.resolveEntityID("user", mux.Vars(r)["id"]), "", false); err != nil {
 		http.Error(w, "failed to unban player", http.StatusInternalServerError)
 		return
 	}
@@ -436,7 +417,7 @@ func (a *api) adminClearReporterMute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.ClearReporterMute(strings.TrimSpace(mux.Vars(r)["id"])); err != nil {
+	if err := a.store.ClearReporterMute(a.resolveEntityID("user", mux.Vars(r)["id"])); err != nil {
 		http.Error(w, "failed to unmute reporter", http.StatusInternalServerError)
 		return
 	}
@@ -448,7 +429,7 @@ func (a *api) adminPromoteModerator(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	userID := strings.TrimSpace(mux.Vars(r)["id"])
+	userID := a.resolveEntityID("user", mux.Vars(r)["id"])
 	if err := a.store.SetUserModerator(userID, true); err != nil {
 		http.Error(w, "failed to promote moderator", http.StatusInternalServerError)
 		return
@@ -461,11 +442,56 @@ func (a *api) adminDemoteModerator(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.SetUserModerator(strings.TrimSpace(mux.Vars(r)["id"]), false); err != nil {
+	if err := a.store.SetUserModerator(a.resolveEntityID("user", mux.Vars(r)["id"]), false); err != nil {
 		http.Error(w, "failed to demote moderator", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) adminSetMapCreatorTier(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.adminIdentity(r); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Tier string `json:"tier"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	var tier *int
+	switch strings.ToLower(strings.TrimSpace(req.Tier)) {
+	case "auto":
+	case "base":
+		value := 0
+		tier = &value
+	case "trusted":
+		value := 1
+		tier = &value
+	case "established":
+		value := 2
+		tier = &value
+	default:
+		http.Error(w, "tier must be auto, base, trusted, or established", http.StatusBadRequest)
+		return
+	}
+	repository, ok := a.store.(persistence.MapCreatorAdminRepository)
+	if !ok {
+		http.Error(w, "map creator administration unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	quota, err := repository.SetMapCreatorTierOverride(a.resolveEntityID("user", mux.Vars(r)["id"]), tier)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to update map creator tier", http.StatusInternalServerError)
+		return
+	}
+	writeJSONResponse(w, quota)
 }
 
 func (a *api) adminListRoles(w http.ResponseWriter, r *http.Request) {
@@ -497,7 +523,7 @@ func (a *api) adminGrantRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.GrantUserRole(req.UserID, req.Role, admin.Sub, req.Reason); err != nil {
+	if err := a.store.GrantUserRole(a.resolveEntityID("user", req.UserID), req.Role, admin.Sub, req.Reason); err != nil {
 		http.Error(w, "failed to grant role", http.StatusInternalServerError)
 		return
 	}
@@ -517,15 +543,15 @@ func (a *api) adminRevokeRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.RevokeUserRole(strings.TrimSpace(mux.Vars(r)["id"]), strings.TrimSpace(mux.Vars(r)["role"]), admin.Sub, req.Reason); err != nil {
+	if err := a.store.RevokeUserRole(a.resolveEntityID("user", mux.Vars(r)["id"]), strings.TrimSpace(mux.Vars(r)["role"]), admin.Sub, req.Reason); err != nil {
 		http.Error(w, "failed to revoke role", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *api) adminEnforcementActions(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.adminIdentity(r); err != nil {
+func (a *api) moderatorEnforcementActions(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.moderatorIdentity(r); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -686,6 +712,78 @@ func (a *api) adminPutModerationSettings(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(settings)
 }
 
+func (a *api) adminGetDiscordIntegrationSettings(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.adminIdentity(r); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	settings, err := a.store.GetDiscordIntegrationSettings()
+	if err != nil {
+		http.Error(w, "discord integration settings unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(settings)
+}
+
+func (a *api) adminPutDiscordIntegrationSettings(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.adminIdentity(r); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var settings persistence.DiscordIntegrationSettings
+	if err := decodeJSONBody(r, &settings); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	for label, value := range map[string]string{
+		"guild id":         settings.GuildID,
+		"joins channel id": settings.JoinsChannelID,
+		"1k role id":       settings.Elo1000RoleID,
+		"1.5k role id":     settings.Elo1500RoleID,
+		"2k role id":       settings.Elo2000RoleID,
+	} {
+		if err := validateOptionalDiscordSnowflake(label, value); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if settings.ReconcileIntervalMinutes < 1 || settings.ReconcileIntervalMinutes > 1440 {
+		http.Error(w, "reconcile interval must be between 1 and 1440 minutes", http.StatusBadRequest)
+		return
+	}
+	// Managed role history is server-owned so old configured roles can be
+	// removed safely after an administrator changes a role ID.
+	settings.ManagedRoleIDs = nil
+	if err := a.store.SetDiscordIntegrationSettings(settings); err != nil {
+		http.Error(w, "failed to save discord integration settings", http.StatusInternalServerError)
+		return
+	}
+	saved, err := a.store.GetDiscordIntegrationSettings()
+	if err != nil {
+		http.Error(w, "discord integration settings unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(saved)
+}
+
+func validateOptionalDiscordSnowflake(label, raw string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+	if len(value) < 17 || len(value) > 20 {
+		return fmt.Errorf("%s must be a Discord ID", label)
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return fmt.Errorf("%s must be a Discord ID", label)
+		}
+	}
+	return nil
+}
+
 func (a *api) adminGetRankedSeason(w http.ResponseWriter, r *http.Request) {
 	if _, err := a.adminIdentity(r); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -700,30 +798,30 @@ func (a *api) adminGetRankedSeason(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(settings)
 }
 
-func (a *api) adminRolloverRankedSeason(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminPutRankedSeasonResetRule(w http.ResponseWriter, r *http.Request) {
 	if _, err := a.adminIdentity(r); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var req struct {
-		NextSeasonID string `json:"nextSeasonId"`
+		MonthlyResetDay int `json:"monthlyResetDay"`
 	}
 	if err := decodeJSONBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	result, err := a.store.RolloverRankedSeason(req.NextSeasonID)
+	settings, err := a.store.SetRankedSeasonResetRule(req.MonthlyResetDay)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
-		if strings.Contains(msg, "season") {
+		if strings.Contains(msg, "reset day") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		http.Error(w, "season rollover failed", http.StatusInternalServerError)
+		http.Error(w, "season settings update failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(settings)
 }
 
 func normalizeDiscordWebhookURL(raw string) (string, error) {
@@ -799,7 +897,6 @@ func (a *api) adminGetChangelog(w http.ResponseWriter, r *http.Request) {
 
 func normalizeChangelogPostInput(req persistence.ChangelogPostInput) (persistence.ChangelogPostInput, error) {
 	req.Title = strings.TrimSpace(req.Title)
-	req.Summary = strings.TrimSpace(req.Summary)
 	req.Markdown = strings.TrimSpace(req.Markdown)
 	req.Slug = slugifyChangelogPost(req.Slug)
 	if req.Slug == "" {
@@ -816,9 +913,6 @@ func normalizeChangelogPostInput(req persistence.ChangelogPostInput) (persistenc
 	}
 	if len(req.Title) > 160 {
 		return persistence.ChangelogPostInput{}, errors.New("title is too long")
-	}
-	if len(req.Summary) > 400 {
-		return persistence.ChangelogPostInput{}, errors.New("summary is too long")
 	}
 	return req, nil
 }
@@ -899,6 +993,42 @@ func (a *api) adminUpdateChangelogPost(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(post)
 }
 
+func (a *api) adminImportOfficialMap(w http.ResponseWriter, r *http.Request) {
+	identity, err := a.adminIdentity(r)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	catalog, ok := a.mapCatalog(w)
+	if !ok {
+		return
+	}
+	file, closeFile, err := mapUploadFile(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer closeFile()
+	input := persistence.OfficialMapImportInput{
+		MapKey:             r.FormValue("mapKey"),
+		DisplayName:        r.FormValue("displayName"),
+		Description:        r.FormValue("description"),
+		Visibility:         r.FormValue("visibility"),
+		Difficulty:         r.FormValue("difficulty"),
+		ThumbnailKey:       r.FormValue("thumbnailKey"),
+		ThumbnailVariant:   atoiDefault(r.FormValue("thumbnailVariant"), 1),
+		OfficialRegionType: r.FormValue("officialRegionType"),
+		OfficialRegionCode: r.FormValue("officialRegionCode"),
+	}
+	item, err := catalog.ImportOfficialMap(identity.Sub, input, file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSONResponse(w, item)
+}
+
 func (a *api) adminUploadCurrentMap(w http.ResponseWriter, r *http.Request) {
 	a.uploadMap(w, r, contracts.MapKeyMoving)
 }
@@ -932,7 +1062,7 @@ func (a *api) uploadMap(w http.ResponseWriter, r *http.Request, mapKey string) {
 		http.Error(w, "failed to read file", http.StatusBadRequest)
 		return
 	}
-	summary, err := a.store.ActivateMapRevision(mapKey, mapKey, dataset)
+	summary, err := a.store.ReplaceMapLocations(mapKey, mapKey, dataset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -945,4 +1075,4 @@ func readUploadedFile(file multipart.File, _ *multipart.FileHeader) ([]byte, err
 	return io.ReadAll(file)
 }
 
-var _ contracts.MapRevisionSummary
+var _ contracts.MapImportSummary

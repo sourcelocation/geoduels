@@ -65,7 +65,7 @@ describe('MinimapPanel', () => {
       </MinimapPanel>
     );
 
-    fireEvent.click(screen.getByText('Map'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open map to place guess' }));
 
     expect(screen.queryByRole('button', { name: 'Resize minimap' })).not.toBeInTheDocument();
   });

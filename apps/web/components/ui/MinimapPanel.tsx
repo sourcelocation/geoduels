@@ -236,41 +236,44 @@ export default function MinimapPanel({
         }
       : {};
 
-  if (!isDesktop && !mapViewOpen) {
-    return (
-      <button
-        type="button"
-        aria-label="Open map"
-        onClick={() => setMapViewOpen(true)}
-        className="font-hud absolute bottom-4 right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
-      >
-        <MapPin size={16} strokeWidth={2.4} aria-hidden="true" />
-        Open Map
-      </button>
-    );
-  }
-
-  if (!isDesktop && mapViewOpen) {
+  if (!isDesktop) {
     return (
       <>
         <div
           data-testid="mobile-map-overlay"
-          className="absolute inset-0 z-30 flex flex-col gap-2 p-3"
+          className={
+            mapViewOpen
+              ? 'absolute inset-0 z-30 flex flex-col gap-2 p-3'
+              : 'hidden'
+          }
+          aria-hidden={!mapViewOpen}
         >
           <div className="min-h-0 flex-1 overflow-hidden rounded-panel border border-white/20 bg-slate-900/70 shadow-elev-4">
             {children}
           </div>
-          {finalizeButton}
+          {mapViewOpen ? finalizeButton : null}
         </div>
-        <button
-          type="button"
-          aria-label="Back to Street View"
-          onClick={() => setMapViewOpen(false)}
-          className="font-hud absolute bottom-[calc(1rem+3.25rem)] right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
-        >
-          <ChevronLeft size={16} strokeWidth={2.4} aria-hidden="true" />
-          Back
-        </button>
+        {mapViewOpen ? (
+          <button
+            type="button"
+            aria-label="Back to Street View"
+            onClick={() => setMapViewOpen(false)}
+            className="font-hud absolute bottom-[calc(1rem+3.25rem)] right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
+          >
+            <ChevronLeft size={16} strokeWidth={2.4} aria-hidden="true" />
+            Back
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label="Open map"
+            onClick={() => setMapViewOpen(true)}
+            className="font-hud absolute bottom-4 right-3 z-40 flex min-h-11 items-center gap-2 rounded-pill border border-white/15 bg-hudBg px-4 text-sm uppercase tracking-[0.12em] text-white shadow-elev-2 backdrop-blur-hud transition hover:bg-white/10"
+          >
+            <MapPin size={16} strokeWidth={2.4} aria-hidden="true" />
+            Open Map
+          </button>
+        )}
       </>
     );
   }

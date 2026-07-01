@@ -67,7 +67,7 @@ function loadTurnstileScript() {
 export default function GuestVerificationOverlay({
   verification,
   onToken,
-  onExpired,
+  onExpired, 
   onCancel,
 }: GuestVerificationOverlayProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);

@@ -26,6 +26,9 @@ export const CLOCK_OPTIONS = [
 export const PRESSURE_OPTIONS = [
   { value: "none", label: "None" },
   { value: "15", label: "15s" },
+  { value: "30", label: "30s" },
+  { value: "60", label: "60s" },
+  { value: "90", label: "90s" },
 ] as const;
 
 export const NAV_ITEMS = APP_NAV_ITEMS;

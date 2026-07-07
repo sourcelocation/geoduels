@@ -19,6 +19,8 @@ type UsePartyPanelStateInput = {
   setInviteCopied: (copied: boolean) => void;
 };
 
+const pressureTimeLimitsMs = new Set([15000, 30000, 60000, 90000]);
+
 const defaultPartyConfig: MatchConfig = {
   ruleset: "moving",
   roundTimerMode: "none",
@@ -80,7 +82,7 @@ export function usePartyPanelState({
     } else {
       next.roundTimeLimitMs = Math.max(10000, Math.min(120000, next.roundTimeLimitMs || 45000));
     }
-    if ((next.pressureTimeLimitMs || 0) !== 15000) {
+    if (!pressureTimeLimitsMs.has(next.pressureTimeLimitMs || 0)) {
       next.pressureTimeLimitMs = undefined;
     }
     void updateSettings(next);

@@ -165,7 +165,9 @@ func NormalizeMatchConfig(cfg MatchConfig) MatchConfig {
 		cfg.RoundTimerMode = RoundTimerNone
 		cfg.RoundTimeLimitMS = 0
 	}
-	if cfg.PressureTimeLimitMS != DefaultPressureTimeMS {
+	switch cfg.PressureTimeLimitMS {
+	case 0, DefaultPressureTimeMS, 30_000, 60_000, 90_000:
+	default:
 		cfg.PressureTimeLimitMS = 0
 	}
 	return cfg

@@ -382,10 +382,10 @@ function PartySettings({
         <label className="grid gap-1.5">
           <LobbyFieldLabel>Pressure</LobbyFieldLabel>
           <LobbySelect
-            value={pressureOn ? "15" : "none"}
+            value={pressureOn ? String(pressureSeconds) : "none"}
             onChange={(event) => {
               const value = event.target.value;
-              saveConfig({ pressureTimeLimitMs: value === "15" ? 15000 : undefined });
+              saveConfig({ pressureTimeLimitMs: value === "none" ? undefined : Number(value) * 1000 });
             }}
             disabled={busy}
           >

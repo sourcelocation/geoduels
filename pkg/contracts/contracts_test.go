@@ -171,3 +171,21 @@ func TestNormalizeMatchConfigMigratesLegacyMapKey(t *testing.T) {
 		t.Fatalf("MapKey = %q, want empty after migration", config.MapKey)
 	}
 }
+
+func TestNormalizeMatchConfigKeepsAllowedPressureDurations(t *testing.T) {
+	for _, pressureTimeLimitMS := range []int64{15_000, 30_000, 60_000, 90_000} {
+		config := NormalizeMatchConfig(MatchConfig{PressureTimeLimitMS: pressureTimeLimitMS})
+
+		if config.PressureTimeLimitMS != pressureTimeLimitMS {
+			t.Fatalf("PressureTimeLimitMS = %d, want %d", config.PressureTimeLimitMS, pressureTimeLimitMS)
+		}
+	}
+}
+
+func TestNormalizeMatchConfigClearsUnsupportedPressureDurations(t *testing.T) {
+	config := NormalizeMatchConfig(MatchConfig{PressureTimeLimitMS: 45_000})
+
+	if config.PressureTimeLimitMS != 0 {
+		t.Fatalf("PressureTimeLimitMS = %d, want 0", config.PressureTimeLimitMS)
+	}
+}

@@ -119,14 +119,23 @@ func applyPlayRegionConfig(ctx context.Context, tx pgx.Tx, mapID string, cfg *co
 		Scan(&autoZoom, &minLat, &maxLat, &minLng, &maxLng); err != nil {
 		return
 	}
+	if bounds := buildPlayRegionBounds(autoZoom, minLat, maxLat, minLng, maxLng); bounds != nil {
+		cfg.AutoZoomPlayRegion = true
+		cfg.PlayRegionBounds = bounds
+	}
+}
+
+// buildPlayRegionBounds converts the stored e7 map bounds into a client-facing
+// PlayRegionBounds. It returns nil when auto-zoom is disabled or any bound is
+// missing, so the caller leaves the match config untouched in those cases.
+func buildPlayRegionBounds(autoZoom bool, minLat, maxLat, minLng, maxLng pgtype.Int4) *contracts.PlayRegionBounds {
 	if !autoZoom {
-		return
+		return nil
 	}
 	if !(minLat.Valid && maxLat.Valid && minLng.Valid && maxLng.Valid) {
-		return
+		return nil
 	}
-	cfg.AutoZoomPlayRegion = true
-	cfg.PlayRegionBounds = &contracts.PlayRegionBounds{
+	return &contracts.PlayRegionBounds{
 		MinLat: float64(minLat.Int32) / 1e7,
 		MaxLat: float64(maxLat.Int32) / 1e7,
 		MinLng: float64(minLng.Int32) / 1e7,

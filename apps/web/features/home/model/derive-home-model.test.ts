@@ -143,6 +143,49 @@ describe('deriveHomeModel', () => {
     expect(model.meta.appVersion).toBe('dev');
   });
 
+  it('exposes play-region bounds only when auto-zoom is enabled with bounds', () => {
+    const bounds = { minLat: 10, maxLat: 20, minLng: 30, maxLng: 40 };
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(createSnapshot({
+        config: { autoZoomPlayRegion: true, playRegionBounds: bounds }
+      })),
+      game: createGameState(),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.autoZoomBounds).toEqual(bounds);
+  });
+
+  it('omits play-region bounds when auto-zoom is disabled', () => {
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(createSnapshot({
+        config: { autoZoomPlayRegion: false, playRegionBounds: { minLat: 10, maxLat: 20, minLng: 30, maxLng: 40 } }
+      })),
+      game: createGameState(),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.autoZoomBounds).toBeUndefined();
+  });
+
+  it('omits play-region bounds when the config provides no bounds', () => {
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(createSnapshot({
+        config: { autoZoomPlayRegion: true }
+      })),
+      game: createGameState(),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.autoZoomBounds).toBeUndefined();
+  });
+
   it('uses a question mark avatar fallback for users without a linked account', () => {
     const snapshot = createSnapshot({
       players: {

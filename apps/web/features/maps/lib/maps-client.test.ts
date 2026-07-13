@@ -153,6 +153,7 @@ describe("updateMap", () => {
           difficulty: "hard",
           thumbnailKey: countryThumbnailRef,
           thumbnailVariant: 1,
+          autoZoomPlayRegion: false,
         }),
       }),
     );

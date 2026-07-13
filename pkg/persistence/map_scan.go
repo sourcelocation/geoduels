@@ -41,6 +41,7 @@ func scanCustomMap(row customMapScanner) (contracts.CustomMap, error) {
 		&item.TrendingScore,
 		&item.Favorited,
 		&item.OfficialRegion,
+		&item.AutoZoomPlayRegion,
 		&item.RankedMoving,
 		&item.RankedNMPZ,
 		&item.DefaultMoving,

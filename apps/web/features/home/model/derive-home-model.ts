@@ -493,6 +493,10 @@ export function deriveHomeModel({
             ? "No Move"
             : "Moving",
       mapName: match.snapshot?.config?.mapName || (ruleset === "nmpz" ? "A Location World" : "A Source World"),
+      autoZoomBounds:
+        matchConfig.autoZoomPlayRegion && matchConfig.playRegionBounds
+          ? matchConfig.playRegionBounds
+          : undefined,
       backLabel: match.sourcePartyInviteCode
         ? "Back to party"
         : "Back to lobby",

@@ -28,6 +28,7 @@ export type CustomMap = {
   trendingScore: number;
   favorited?: boolean;
   officialRegion?: string;
+  autoZoomPlayRegion?: boolean;
   rankedMoving?: boolean;
   rankedNmpz?: boolean;
   defaultMoving?: boolean;
@@ -64,6 +65,7 @@ export type MapUpdateInput = {
   difficulty: CustomMap["difficulty"];
   thumbnailKey: string;
   thumbnailVariant?: number;
+  autoZoomPlayRegion?: boolean;
 };
 export type MapUploadQuota = {
   tier: "base" | "trusted" | "established";
@@ -129,6 +131,7 @@ export async function updateMap(config: RuntimeConfig, accessToken: string, mapI
       difficulty: input.difficulty,
       thumbnailKey: input.thumbnailKey,
       thumbnailVariant: input.thumbnailVariant || 1,
+      autoZoomPlayRegion: input.autoZoomPlayRegion ?? false,
     }),
   }), "Map request failed");
 }

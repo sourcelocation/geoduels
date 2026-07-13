@@ -126,7 +126,15 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 	`, mapID, mapStorageID); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `update maps set status='ready',location_count=$2,updated_at=now() where id=$1`, mapID, len(parsed)); err != nil {
+	if _, err := tx.Exec(ctx, `
+		update maps set status='ready',location_count=$2,
+			bounds_min_lat_e7=(select min(lat_e7) from locations where map_storage_id=$3),
+			bounds_max_lat_e7=(select max(lat_e7) from locations where map_storage_id=$3),
+			bounds_min_lng_e7=(select min(lng_e7) from locations where map_storage_id=$3),
+			bounds_max_lng_e7=(select max(lng_e7) from locations where map_storage_id=$3),
+			updated_at=now()
+		where id=$1
+	`, mapID, len(parsed), mapStorageID); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
@@ -240,7 +248,15 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `update maps set status='ready',location_count=$2,content_hash=$3,rejected_location_count=$4,updated_at=now() where id=$1`, mapID, len(parsed), digestBytes, rejected); err != nil {
+	if _, err := tx.Exec(ctx, `
+		update maps set status='ready',location_count=$2,content_hash=$3,rejected_location_count=$4,
+			bounds_min_lat_e7=(select min(lat_e7) from locations where map_storage_id=$5),
+			bounds_max_lat_e7=(select max(lat_e7) from locations where map_storage_id=$5),
+			bounds_min_lng_e7=(select min(lng_e7) from locations where map_storage_id=$5),
+			bounds_max_lng_e7=(select max(lng_e7) from locations where map_storage_id=$5),
+			updated_at=now()
+		where id=$1
+	`, mapID, len(parsed), digestBytes, rejected, mapStorageID); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) select map_key,id from maps where id=$1 on conflict(alias) do update set map_id=excluded.map_id`, mapID); err != nil {
@@ -273,9 +289,9 @@ func (s *pgStore) UpdateCustomMap(userID, mapID string, update contracts.CustomM
 	mapID = canonicalID
 	tag, err := s.pool.Exec(ctx, `
 		update maps
-		set display_name=$3, description=$4, visibility=$5, difficulty=$6, thumbnail_variant=$7, thumbnail_key=$8, updated_at=now()
+		set display_name=$3, description=$4, visibility=$5, difficulty=$6, thumbnail_variant=$7, thumbnail_key=$8, auto_zoom_play_region=$9, updated_at=now()
 		where id=$1 and owner_user_id=$2 and archived_at is null
-	`, strings.TrimSpace(mapID), strings.TrimSpace(userID), name, strings.TrimSpace(update.Description), normalizeMapVisibility(update.Visibility), normalizeMapDifficulty(update.Difficulty), normalizeThumbnailVariant(update.ThumbnailVariant), normalizeThumbnailKey(update.ThumbnailKey, update.ThumbnailVariant))
+	`, strings.TrimSpace(mapID), strings.TrimSpace(userID), name, strings.TrimSpace(update.Description), normalizeMapVisibility(update.Visibility), normalizeMapDifficulty(update.Difficulty), normalizeThumbnailVariant(update.ThumbnailVariant), normalizeThumbnailKey(update.ThumbnailKey, update.ThumbnailVariant), update.AutoZoomPlayRegion)
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}

@@ -107,6 +107,17 @@ type MatchConfig struct {
 	RoundTimerMode      RoundTimerMode        `json:"roundTimerMode,omitempty"`
 	RoundTimeLimitMS    int64                 `json:"roundTimeLimitMs,omitempty"`
 	PressureTimeLimitMS int64                 `json:"pressureTimeLimitMs,omitempty"`
+	AutoZoomPlayRegion  bool                  `json:"autoZoomPlayRegion,omitempty"`
+	PlayRegionBounds    *PlayRegionBounds     `json:"playRegionBounds,omitempty"`
+}
+
+// PlayRegionBounds is the geographic extent of a map's locations, used to
+// auto-zoom the guess minimap to the play region when a round starts.
+type PlayRegionBounds struct {
+	MinLat float64 `json:"minLat"`
+	MaxLat float64 `json:"maxLat"`
+	MinLng float64 `json:"minLng"`
+	MaxLng float64 `json:"maxLng"`
 }
 
 func NormalizeRuleset(v GameRuleset) GameRuleset {
@@ -961,43 +972,45 @@ type MapPersonalBest struct {
 }
 
 type CustomMap struct {
-	ID               string           `json:"id"`
-	MapKey           string           `json:"mapKey"`
-	OwnerUserID      string           `json:"ownerUserId,omitempty"`
-	AuthorName       string           `json:"authorName,omitempty"`
-	DisplayName      string           `json:"displayName"`
-	Description      string           `json:"description,omitempty"`
-	Visibility       string           `json:"visibility"`
-	Status           string           `json:"status"`
-	Difficulty       string           `json:"difficulty"`
-	ThumbnailVariant int              `json:"thumbnailVariant"`
-	ThumbnailKey     string           `json:"thumbnailKey"`
-	LocationCount    int              `json:"locationCount"`
-	PersonalBest     *MapPersonalBest `json:"personalBest,omitempty"`
-	System           bool             `json:"system"`
-	Official         bool             `json:"official,omitempty"`
-	PublishedAt      *time.Time       `json:"publishedAt,omitempty"`
-	PlayCount        int              `json:"playCount"`
-	FavoriteCount    int              `json:"favoriteCount"`
-	CommentCount     int              `json:"commentCount"`
-	TrendingScore    float64          `json:"trendingScore"`
-	Favorited        bool             `json:"favorited,omitempty"`
-	OfficialRegion   string           `json:"officialRegion,omitempty"`
-	RankedMoving     bool             `json:"rankedMoving,omitempty"`
-	RankedNMPZ       bool             `json:"rankedNmpz,omitempty"`
-	DefaultMoving    bool             `json:"defaultMoving,omitempty"`
-	DefaultNMPZ      bool             `json:"defaultNmpz,omitempty"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
+	ID                 string           `json:"id"`
+	MapKey             string           `json:"mapKey"`
+	OwnerUserID        string           `json:"ownerUserId,omitempty"`
+	AuthorName         string           `json:"authorName,omitempty"`
+	DisplayName        string           `json:"displayName"`
+	Description        string           `json:"description,omitempty"`
+	Visibility         string           `json:"visibility"`
+	Status             string           `json:"status"`
+	Difficulty         string           `json:"difficulty"`
+	ThumbnailVariant   int              `json:"thumbnailVariant"`
+	ThumbnailKey       string           `json:"thumbnailKey"`
+	LocationCount      int              `json:"locationCount"`
+	PersonalBest       *MapPersonalBest `json:"personalBest,omitempty"`
+	System             bool             `json:"system"`
+	Official           bool             `json:"official,omitempty"`
+	PublishedAt        *time.Time       `json:"publishedAt,omitempty"`
+	PlayCount          int              `json:"playCount"`
+	FavoriteCount      int              `json:"favoriteCount"`
+	CommentCount       int              `json:"commentCount"`
+	TrendingScore      float64          `json:"trendingScore"`
+	Favorited          bool             `json:"favorited,omitempty"`
+	OfficialRegion     string           `json:"officialRegion,omitempty"`
+	AutoZoomPlayRegion bool             `json:"autoZoomPlayRegion,omitempty"`
+	RankedMoving       bool             `json:"rankedMoving,omitempty"`
+	RankedNMPZ         bool             `json:"rankedNmpz,omitempty"`
+	DefaultMoving      bool             `json:"defaultMoving,omitempty"`
+	DefaultNMPZ        bool             `json:"defaultNmpz,omitempty"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	UpdatedAt          time.Time        `json:"updatedAt"`
 }
 
 type CustomMapUpdate struct {
-	DisplayName      string `json:"displayName"`
-	Description      string `json:"description"`
-	Visibility       string `json:"visibility"`
-	Difficulty       string `json:"difficulty"`
-	ThumbnailVariant int    `json:"thumbnailVariant"`
-	ThumbnailKey     string `json:"thumbnailKey"`
+	DisplayName        string `json:"displayName"`
+	Description        string `json:"description"`
+	Visibility         string `json:"visibility"`
+	Difficulty         string `json:"difficulty"`
+	ThumbnailVariant   int    `json:"thumbnailVariant"`
+	ThumbnailKey       string `json:"thumbnailKey"`
+	AutoZoomPlayRegion bool   `json:"autoZoomPlayRegion"`
 }
 
 type MapListOptions struct {

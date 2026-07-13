@@ -16,10 +16,18 @@ type RoundResult = {
   players: Record<string, RoundPlayerResult>;
 };
 
+type PlayRegionBounds = {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+};
+
 type Props = {
   onGuess?: (lat: number, lng: number) => void;
   guess?: { lat: number; lng: number };
   mode?: 'guess' | 'result';
+  autoZoomBounds?: PlayRegionBounds;
   result?: RoundResult;
   results?: RoundResult[];
   interactiveInResult?: boolean;
@@ -137,6 +145,39 @@ function FitToResult({ result }: { result: RoundResult }) {
       window.clearTimeout(timer);
     };
   }, [fitKey, map, result]);
+  return null;
+}
+
+function FitToPlayRegion({ bounds }: { bounds: PlayRegionBounds }) {
+  const map = useMap();
+  const fittedRef = useRef(false);
+
+  useEffect(() => {
+    if (fittedRef.current) return;
+    const referenceLng = normalizeLng((bounds.minLng + bounds.maxLng) / 2);
+    const corners: [number, number][] = [
+      [bounds.minLat, closestWrappedLng(bounds.minLng, referenceLng)],
+      [bounds.maxLat, closestWrappedLng(bounds.maxLng, referenceLng)],
+    ];
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const container = map.getContainer();
+      if (!container || !container.isConnected) return;
+      try {
+        map.invalidateSize(false);
+        map.fitBounds(corners, { padding: [24, 24], maxZoom: 12, animate: false });
+        fittedRef.current = true;
+      } catch {
+        // Ignore transient map lifecycle races during UI transitions.
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [bounds, map]);
+
   return null;
 }
 
@@ -493,6 +534,7 @@ export default function GuessMap({
   onGuess,
   guess,
   mode = 'guess',
+  autoZoomBounds,
   result,
   results,
   interactiveInResult = false,
@@ -539,6 +581,7 @@ export default function GuessMap({
       />
       <SafeMapUnmount />
       <InvalidateOnResize />
+      {mode === 'guess' && autoZoomBounds ? <FitToPlayRegion bounds={autoZoomBounds} /> : null}
       {mode === 'guess' && onGuess ? <ClickCapture onGuess={onGuess} /> : null}
       {mode === 'guess' && guess ? <Marker position={[guess.lat, guess.lng]} icon={guessMarkerIcon} /> : null}
       {mode === 'result' && result ? <FitToResult result={result} /> : null}

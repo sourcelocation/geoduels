@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
 )
@@ -44,6 +45,7 @@ func (s *pgStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFo
 		_ = tx.QueryRow(ctx, `select display_name from maps where id=$1`, found.ResolvedMap.MapID).Scan(&found.ResolvedMap.DisplayName)
 		found.Config.MapID = found.ResolvedMap.MapID
 		found.Config.MapName = found.ResolvedMap.DisplayName
+		applyPlayRegionConfig(ctx, tx, found.ResolvedMap.MapID, &found.Config)
 		return tx.Commit(ctx)
 	}
 	cfg := contracts.NormalizeMatchConfig(found.Config)
@@ -97,10 +99,39 @@ func (s *pgStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFo
 	found.Config.MapID = mapID
 	found.Config.MapName = displayName
 	found.Config.MapKey = ""
+	applyPlayRegionConfig(ctx, tx, mapID, &found.Config)
 	if err := incrementMapPlayStats(ctx, tx, mapID, found.Players); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// applyPlayRegionConfig sets the auto-zoom flag and precomputed play-region
+// bounds on the match config so the client can zoom the minimap when the map
+// author opted in. Missing bounds simply leave the config untouched.
+func applyPlayRegionConfig(ctx context.Context, tx pgx.Tx, mapID string, cfg *contracts.MatchConfig) {
+	if cfg == nil || strings.TrimSpace(mapID) == "" {
+		return
+	}
+	var autoZoom bool
+	var minLat, maxLat, minLng, maxLng pgtype.Int4
+	if err := tx.QueryRow(ctx, `select auto_zoom_play_region,bounds_min_lat_e7,bounds_max_lat_e7,bounds_min_lng_e7,bounds_max_lng_e7 from maps where id=$1`, mapID).
+		Scan(&autoZoom, &minLat, &maxLat, &minLng, &maxLng); err != nil {
+		return
+	}
+	if !autoZoom {
+		return
+	}
+	if !(minLat.Valid && maxLat.Valid && minLng.Valid && maxLng.Valid) {
+		return
+	}
+	cfg.AutoZoomPlayRegion = true
+	cfg.PlayRegionBounds = &contracts.PlayRegionBounds{
+		MinLat: float64(minLat.Int32) / 1e7,
+		MaxLat: float64(maxLat.Int32) / 1e7,
+		MinLng: float64(minLng.Int32) / 1e7,
+		MaxLng: float64(maxLng.Int32) / 1e7,
+	}
 }
 
 func selectedMapAccessible(ownerUserID, accessUserID, visibility string) bool {

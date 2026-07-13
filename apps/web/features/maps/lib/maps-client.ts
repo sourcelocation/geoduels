@@ -65,7 +65,7 @@ export type MapUpdateInput = {
   difficulty: CustomMap["difficulty"];
   thumbnailKey: string;
   thumbnailVariant?: number;
-  autoZoomPlayRegion?: boolean;
+  autoZoomPlayRegion: boolean;
 };
 export type MapUploadQuota = {
   tier: "base" | "trusted" | "established";
@@ -131,7 +131,7 @@ export async function updateMap(config: RuntimeConfig, accessToken: string, mapI
       difficulty: input.difficulty,
       thumbnailKey: input.thumbnailKey,
       thumbnailVariant: input.thumbnailVariant || 1,
-      autoZoomPlayRegion: input.autoZoomPlayRegion ?? false,
+      autoZoomPlayRegion: input.autoZoomPlayRegion,
     }),
   }), "Map request failed");
 }

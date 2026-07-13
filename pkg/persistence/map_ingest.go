@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,60 @@ import (
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 )
+
+// fullCircleE7 is 360 degrees expressed in the e7 fixed-point scale.
+const fullCircleE7 = int64(3_600_000_000)
+
+// computePlayRegionBoundsE7 derives the play-region bounding box for a set of
+// parsed map locations. Latitude uses a plain min/max; longitude uses the
+// shortest circular interval so that antimeridian-crossing maps stay narrow.
+func computePlayRegionBoundsE7(rows []mapRow) (minLat, maxLat, minLng, maxLng int32) {
+	minLat, maxLat = rows[0].LatE7, rows[0].LatE7
+	lngs := make([]int32, 0, len(rows))
+	for _, row := range rows {
+		if row.LatE7 < minLat {
+			minLat = row.LatE7
+		}
+		if row.LatE7 > maxLat {
+			maxLat = row.LatE7
+		}
+		lngs = append(lngs, row.LngE7)
+	}
+	minLng, maxLng = wrappedLngBoundsE7(lngs)
+	return
+}
+
+// wrappedLngBoundsE7 returns the shortest circular longitude interval covering
+// all points, expressed as [start, end] traversed eastward. The interval is the
+// complement of the largest empty gap between adjacent longitudes. When it
+// crosses the antimeridian, start is numerically greater than end.
+func wrappedLngBoundsE7(lngs []int32) (start, end int32) {
+	sorted := append([]int32(nil), lngs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	uniq := sorted[:0]
+	for i, v := range sorted {
+		if i == 0 || v != uniq[len(uniq)-1] {
+			uniq = append(uniq, v)
+		}
+	}
+	if len(uniq) == 1 {
+		return uniq[0], uniq[0]
+	}
+	// Default to the non-crossing interval min..max, whose empty gap is the
+	// wrap-around segment across the antimeridian.
+	start, end = uniq[0], uniq[len(uniq)-1]
+	largestGap := (int64(uniq[0]) + fullCircleE7) - int64(uniq[len(uniq)-1])
+	for i := 0; i < len(uniq)-1; i++ {
+		gap := int64(uniq[i+1]) - int64(uniq[i])
+		if gap > largestGap {
+			largestGap = gap
+			// The empty region is (uniq[i], uniq[i+1]); the populated region
+			// wraps from uniq[i+1] eastward back to uniq[i].
+			start, end = uniq[i+1], uniq[i]
+		}
+	}
+	return start, end
+}
 
 func (s *pgStore) CreateCustomMap(userID, displayName, description, visibility, difficulty, thumbnailKey string, thumbnailVariant int, source io.Reader) (contracts.CustomMap, error) {
 	mapID := entityid.New()
@@ -126,15 +181,13 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 	`, mapID, mapStorageID); err != nil {
 		return contracts.CustomMap{}, err
 	}
+	boundsMinLat, boundsMaxLat, boundsMinLng, boundsMaxLng := computePlayRegionBoundsE7(parsed)
 	if _, err := tx.Exec(ctx, `
 		update maps set status='ready',location_count=$2,
-			bounds_min_lat_e7=(select min(lat_e7) from locations where map_storage_id=$3),
-			bounds_max_lat_e7=(select max(lat_e7) from locations where map_storage_id=$3),
-			bounds_min_lng_e7=(select min(lng_e7) from locations where map_storage_id=$3),
-			bounds_max_lng_e7=(select max(lng_e7) from locations where map_storage_id=$3),
+			bounds_min_lat_e7=$3,bounds_max_lat_e7=$4,bounds_min_lng_e7=$5,bounds_max_lng_e7=$6,
 			updated_at=now()
 		where id=$1
-	`, mapID, len(parsed), mapStorageID); err != nil {
+	`, mapID, len(parsed), boundsMinLat, boundsMaxLat, boundsMinLng, boundsMaxLng); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
@@ -248,15 +301,13 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
+	boundsMinLat, boundsMaxLat, boundsMinLng, boundsMaxLng := computePlayRegionBoundsE7(parsed)
 	if _, err := tx.Exec(ctx, `
 		update maps set status='ready',location_count=$2,content_hash=$3,rejected_location_count=$4,
-			bounds_min_lat_e7=(select min(lat_e7) from locations where map_storage_id=$5),
-			bounds_max_lat_e7=(select max(lat_e7) from locations where map_storage_id=$5),
-			bounds_min_lng_e7=(select min(lng_e7) from locations where map_storage_id=$5),
-			bounds_max_lng_e7=(select max(lng_e7) from locations where map_storage_id=$5),
+			bounds_min_lat_e7=$5,bounds_max_lat_e7=$6,bounds_min_lng_e7=$7,bounds_max_lng_e7=$8,
 			updated_at=now()
 		where id=$1
-	`, mapID, len(parsed), digestBytes, rejected, mapStorageID); err != nil {
+	`, mapID, len(parsed), digestBytes, rejected, boundsMinLat, boundsMaxLat, boundsMinLng, boundsMaxLng); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) select map_key,id from maps where id=$1 on conflict(alias) do update set map_id=excluded.map_id`, mapID); err != nil {

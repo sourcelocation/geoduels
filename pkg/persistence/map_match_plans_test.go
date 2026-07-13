@@ -56,11 +56,53 @@ func TestMapIngestComputesPlayRegionBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(body)
-	if got := strings.Count(source, "bounds_min_lat_e7=(select min(lat_e7)"); got != 2 {
+	if got := strings.Count(source, "computePlayRegionBoundsE7(parsed)"); got != 2 {
 		t.Fatalf("bounds computation on ingest = %d, want 2 (create/replace and official import)", got)
 	}
 	if !strings.Contains(source, "auto_zoom_play_region=$9") {
 		t.Fatal("UpdateCustomMap must persist auto_zoom_play_region")
+	}
+}
+
+func TestWrappedLngBoundsE7(t *testing.T) {
+	t.Run("single point", func(t *testing.T) {
+		start, end := wrappedLngBoundsE7([]int32{500})
+		if start != 500 || end != 500 {
+			t.Fatalf("single point bounds = %d..%d, want 500..500", start, end)
+		}
+	})
+
+	t.Run("non-crossing region keeps min<=max", func(t *testing.T) {
+		start, end := wrappedLngBoundsE7([]int32{300_000_000, 400_000_000, 350_000_000})
+		if start != 300_000_000 || end != 400_000_000 {
+			t.Fatalf("non-crossing bounds = %d..%d, want 300000000..400000000", start, end)
+		}
+	})
+
+	t.Run("antimeridian-crossing region wraps with start>end", func(t *testing.T) {
+		// Longitudes 177,178,179 and -179,-178 (a narrow band across +/-180).
+		start, end := wrappedLngBoundsE7([]int32{1_770_000_000, 1_790_000_000, -1_790_000_000, 1_780_000_000, -1_780_000_000})
+		if start != 1_770_000_000 || end != -1_780_000_000 {
+			t.Fatalf("crossing bounds = %d..%d, want 1770000000..-1780000000", start, end)
+		}
+		if start <= end {
+			t.Fatal("crossing interval must have start > end")
+		}
+	})
+}
+
+func TestComputePlayRegionBoundsE7(t *testing.T) {
+	rows := []mapRow{
+		{LatE7: 100, LngE7: 300_000_000},
+		{LatE7: -50, LngE7: 400_000_000},
+		{LatE7: 250, LngE7: 350_000_000},
+	}
+	minLat, maxLat, minLng, maxLng := computePlayRegionBoundsE7(rows)
+	if minLat != -50 || maxLat != 250 {
+		t.Fatalf("latitude bounds = %d..%d, want -50..250", minLat, maxLat)
+	}
+	if minLng != 300_000_000 || maxLng != 400_000_000 {
+		t.Fatalf("longitude bounds = %d..%d, want 300000000..400000000", minLng, maxLng)
 	}
 }
 

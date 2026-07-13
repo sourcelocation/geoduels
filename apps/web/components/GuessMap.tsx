@@ -1,6 +1,7 @@
 import { MapContainer, Marker, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
+import { playRegionCorners, type PlayRegionBounds } from './guess-map-bounds';
 
 type RoundPlayerResult = {
   userId: string;
@@ -14,13 +15,6 @@ type RoundResult = {
   roundId?: string;
   actualLocation: { lat: number; lng: number };
   players: Record<string, RoundPlayerResult>;
-};
-
-type PlayRegionBounds = {
-  minLat: number;
-  maxLat: number;
-  minLng: number;
-  maxLng: number;
 };
 
 type Props = {
@@ -148,17 +142,15 @@ function FitToResult({ result }: { result: RoundResult }) {
   return null;
 }
 
+// FitToPlayRegion zooms the guess minimap to the map's precomputed play-region
+// bounds once, when the map author enabled auto-zoom for the current round.
 function FitToPlayRegion({ bounds }: { bounds: PlayRegionBounds }) {
   const map = useMap();
   const fittedRef = useRef(false);
 
   useEffect(() => {
     if (fittedRef.current) return;
-    const referenceLng = normalizeLng((bounds.minLng + bounds.maxLng) / 2);
-    const corners: [number, number][] = [
-      [bounds.minLat, closestWrappedLng(bounds.minLng, referenceLng)],
-      [bounds.maxLat, closestWrappedLng(bounds.maxLng, referenceLng)],
-    ];
+    const corners = playRegionCorners(bounds);
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;

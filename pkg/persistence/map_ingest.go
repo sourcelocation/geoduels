@@ -126,12 +126,12 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 	mapID := entityid.Derive("map", mapKey)
 	if _, err := tx.Exec(ctx, `
 		insert into maps(
-			id,map_key,owner_user_id,display_name,description,visibility,status,difficulty,
+			id,owner_user_id,display_name,description,visibility,status,difficulty,
 			thumbnail_variant,thumbnail_key,location_count,content_hash,rejected_location_count,
 			published_at,official_at,official_by,official_region_type,official_region_code,created_at,updated_at
 		)
-		values($1,$2,null,$3,$4,$5,'processing',$6,$7,$8,0,$9,$10,case when $5='public' then now() else null end,now(),nullif($11,'')::uuid,$12,$13,now(),now())
-		on conflict(map_key) do update set
+		values($1,null,$2,$3,$4,'processing',$5,$6,$7,0,$8,$9,case when $4='public' then now() else null end,now(),nullif($10,'')::uuid,$11,$12,now(),now())
+		on conflict(id) do update set
 			owner_user_id=null,
 			display_name=excluded.display_name,
 			description=excluded.description,
@@ -149,11 +149,10 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 			official_region_code=excluded.official_region_code,
 			archived_at=null,
 			updated_at=now()
-	`, mapID, mapKey, displayName, strings.TrimSpace(input.Description), visibility, difficulty, thumbnailVariant, thumbnailKey, digestBytes, rejected, strings.TrimSpace(adminUserID), regionType, regionCode); err != nil {
+	`, mapID, displayName, strings.TrimSpace(input.Description), visibility, difficulty, thumbnailVariant, thumbnailKey, digestBytes, rejected, strings.TrimSpace(adminUserID), regionType, regionCode); err != nil {
 		return contracts.CustomMap{}, err
 	}
-
-	if err := tx.QueryRow(ctx, `select id::text from maps where map_key=$1 for update`, mapKey).Scan(&mapID); err != nil {
+	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	var mapStorageID int32
@@ -252,8 +251,8 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 	}
 	if create {
 		_, err = tx.Exec(ctx, `
-			insert into maps(id,map_key,owner_user_id,display_name,description,visibility,status,difficulty,thumbnail_variant,thumbnail_key,location_count,published_at,created_at,updated_at)
-			values($1,$1,$2,$3,$4,$5,'processing',$6,$7,$8,0,case when $5='public' then now() else null end,now(),now())
+			insert into maps(id,owner_user_id,display_name,description,visibility,status,difficulty,thumbnail_variant,thumbnail_key,location_count,published_at,created_at,updated_at)
+			values($1,$2,$3,$4,$5,'processing',$6,$7,$8,0,case when $5='public' then now() else null end,now(),now())
 		`, mapID, userID, displayName, strings.TrimSpace(description), visibility, difficulty, thumbnailVariant, thumbnailKey)
 	} else {
 		var owner string
@@ -308,9 +307,6 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 			updated_at=now()
 		where id=$1
 	`, mapID, len(parsed), digestBytes, rejected, boundsMinLat, boundsMaxLat, boundsMinLng, boundsMaxLng); err != nil {
-		return contracts.CustomMap{}, err
-	}
-	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) select map_key,id from maps where id=$1 on conflict(alias) do update set map_id=excluded.map_id`, mapID); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if _, err := tx.Exec(ctx, `insert into map_upload_events(user_id,map_id,location_count) values($1,$2,$3)`, userID, mapID, len(parsed)); err != nil {

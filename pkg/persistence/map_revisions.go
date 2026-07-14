@@ -41,14 +41,17 @@ func (s *pgStore) ReplaceMapLocations(mapKey, displayName string, dataset []byte
 
 	mapID := entityid.Derive("map", mapKey)
 	if _, err := tx.Exec(ctx, `
-		insert into maps(id,map_key,display_name,status,visibility,location_count,content_hash,created_at,updated_at)
-		values($1,$2,$3,'processing','public',0,$4,now(),now())
-		on conflict(map_key) do update set display_name=excluded.display_name,status='processing',updated_at=now()
-	`, mapID, mapKey, displayName, digest[:]); err != nil {
+		insert into maps(id,display_name,status,visibility,location_count,content_hash,created_at,updated_at)
+		values($1,$2,'processing','public',0,$3,now(),now())
+		on conflict(id) do update set display_name=excluded.display_name,status='processing',updated_at=now()
+	`, mapID, displayName, digest[:]); err != nil {
+		return MapImportSummary{}, err
+	}
+	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
 		return MapImportSummary{}, err
 	}
 	var mapStorageID int32
-	if err := tx.QueryRow(ctx, `select id::text,storage_id from maps where map_key=$1 for update`, mapKey).Scan(&mapID, &mapStorageID); err != nil {
+	if err := tx.QueryRow(ctx, `select storage_id from maps where id=$1 for update`, mapID).Scan(&mapStorageID); err != nil {
 		return MapImportSummary{}, err
 	}
 	if _, err := tx.Exec(ctx, `delete from locations where map_storage_id=$1`, mapStorageID); err != nil {
@@ -79,9 +82,6 @@ func (s *pgStore) ReplaceMapLocations(mapKey, displayName string, dataset []byte
 		set status='ready',location_count=$2,content_hash=$3,rejected_location_count=0,updated_at=now()
 		where id=$1
 	`, mapID, len(rows), digest[:]); err != nil {
-		return MapImportSummary{}, err
-	}
-	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
 		return MapImportSummary{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

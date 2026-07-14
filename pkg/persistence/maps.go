@@ -60,17 +60,17 @@ func (s *pgStore) ListMaps(userID string, opts contracts.MapListOptions) ([]cont
 	sortMode := normalizeMapSort(opts.Sort)
 	searchPattern := mapSearchPattern(opts.Search)
 	query := `
-		select m.id::text,m.map_key,coalesce(m.owner_user_id::text, ''), case when m.official_at is not null then 'GeoDuels' else coalesce(u.display_name, 'GeoDuels') end, m.display_name, m.description, m.visibility, m.status,
+		select m.id::text,coalesce((select a.alias from map_aliases a where a.map_id=m.id order by a.created_at,a.alias limit 1),m.id::text),coalesce(m.owner_user_id::text, ''), case when m.official_at is not null then 'GeoDuels' else coalesce(u.display_name, 'GeoDuels') end, m.display_name, m.description, m.visibility, m.status,
 		       m.difficulty, m.thumbnail_variant, coalesce(m.thumbnail_key, 'generic/variant-' || greatest(1, least(5, m.thumbnail_variant))::text), m.location_count, (m.owner_user_id is null or m.official_at is not null),
 		       m.official_at is not null,
 		       coalesce(m.published_at, '0001-01-01'::timestamptz), m.play_count, m.favorite_count, m.comment_count, m.trending_score,
 		       exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($1,'')::uuid),
 		       trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))),
 		       m.auto_zoom_play_region,
-		       coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
-		       coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
-		       coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
-		       coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
 		       m.created_at,m.updated_at,pb.best_score,coalesce(pb.match_id::text,''),pb.achieved_at
 		from maps m
 		left join users u on u.id = m.owner_user_id
@@ -96,7 +96,7 @@ func (s *pgStore) ListMaps(userID string, opts contracts.MapListOptions) ([]cont
 		query += fmt.Sprintf(` and (
 			m.display_name ilike $%[1]d escape '\'
 			or m.description ilike $%[1]d escape '\'
-			or m.map_key ilike $%[1]d escape '\'
+			or exists(select 1 from map_aliases a where a.map_id=m.id and a.alias ilike $%[1]d escape '\')
 			or coalesce(u.display_name, 'GeoDuels') ilike $%[1]d escape '\'
 			or trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))) ilike $%[1]d escape '\'
 		)`, searchArg)
@@ -130,22 +130,22 @@ func (s *pgStore) GetMap(userID, mapID string) (contracts.MapDetails, bool, erro
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	row := s.pool.QueryRow(ctx, `
-		select m.id::text,m.map_key,coalesce(m.owner_user_id::text, ''), case when m.official_at is not null then 'GeoDuels' else coalesce(u.display_name, 'GeoDuels') end, m.display_name, m.description, m.visibility, m.status,
+		select m.id::text,coalesce((select a.alias from map_aliases a where a.map_id=m.id order by a.created_at,a.alias limit 1),m.id::text),coalesce(m.owner_user_id::text, ''), case when m.official_at is not null then 'GeoDuels' else coalesce(u.display_name, 'GeoDuels') end, m.display_name, m.description, m.visibility, m.status,
 		       m.difficulty, m.thumbnail_variant, coalesce(m.thumbnail_key, 'generic/variant-' || greatest(1, least(5, m.thumbnail_variant))::text), m.location_count, (m.owner_user_id is null or m.official_at is not null),
 		       m.official_at is not null,
 		       coalesce(m.published_at, '0001-01-01'::timestamptz), m.play_count, m.favorite_count, m.comment_count, m.trending_score,
 		       exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($2,'')::uuid),
 		       trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))),
 		       m.auto_zoom_play_region,
-		       coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
-		       coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
-		       coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
-		       coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'), '') in (m.id::text,m.map_key),
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
+		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
 		       m.created_at,m.updated_at,pb.best_score,coalesce(pb.match_id::text,''),pb.achieved_at
 		from maps m
 		left join users u on u.id = m.owner_user_id
 		left join player_map_bests pb on pb.map_id=m.id and pb.user_id=nullif($2,'')::uuid and pb.ruleset=0
-		where (m.id::text=$1 or m.map_key=$1 or exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=$1)) and m.archived_at is null
+		where (m.id::text=$1 or exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=$1)) and m.archived_at is null
 		  and `+mapVisibleToUserSQL("m", 2, true)+`
 	`, strings.TrimSpace(mapID), strings.TrimSpace(userID))
 	item, err := scanCustomMap(row)

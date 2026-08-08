@@ -18,21 +18,79 @@ function fireKey(key: string, code = "KeyF") {
   );
 }
 
+const originalDescriptors = {
+  requestFullscreen: Object.getOwnPropertyDescriptor(
+    document.documentElement,
+    "requestFullscreen",
+  ),
+  exitFullscreen: Object.getOwnPropertyDescriptor(document, "exitFullscreen"),
+  fullscreenElement: Object.getOwnPropertyDescriptor(
+    document,
+    "fullscreenElement",
+  ),
+};
+
+function setFullscreenApi({
+  requestFullscreen,
+  exitFullscreen,
+  fullscreenElement,
+}: {
+  requestFullscreen?: unknown;
+  exitFullscreen?: unknown;
+  fullscreenElement?: unknown;
+}) {
+  if (requestFullscreen !== undefined) {
+    Object.defineProperty(document.documentElement, "requestFullscreen", {
+      configurable: true,
+      value: requestFullscreen,
+    });
+  }
+  if (exitFullscreen !== undefined) {
+    Object.defineProperty(document, "exitFullscreen", {
+      configurable: true,
+      value: exitFullscreen,
+    });
+  }
+  if (fullscreenElement !== undefined) {
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      value: fullscreenElement,
+    });
+  }
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  if (originalDescriptors.requestFullscreen) {
+    Object.defineProperty(
+      document.documentElement,
+      "requestFullscreen",
+      originalDescriptors.requestFullscreen,
+    );
+  }
+  if (originalDescriptors.exitFullscreen) {
+    Object.defineProperty(
+      document,
+      "exitFullscreen",
+      originalDescriptors.exitFullscreen,
+    );
+  }
+  if (originalDescriptors.fullscreenElement) {
+    Object.defineProperty(
+      document,
+      "fullscreenElement",
+      originalDescriptors.fullscreenElement,
+    );
+  }
 });
 
 describe("useFullscreenShortcut", () => {
   it("requests fullscreen on F key when not in fullscreen", () => {
     const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(document.documentElement, "requestFullscreen", {
-      configurable: true,
-      value: requestFullscreen,
-    });
-    Object.defineProperty(document, "fullscreenElement", {
-      configurable: true,
-      value: null,
+    setFullscreenApi({
+      requestFullscreen,
+      fullscreenElement: null,
     });
 
     render(<Harness />);
@@ -42,14 +100,12 @@ describe("useFullscreenShortcut", () => {
   });
 
   it("exits fullscreen on F key when already in fullscreen", () => {
+    const requestFullscreen = vi.fn().mockResolvedValue(undefined);
     const exitFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(document, "exitFullscreen", {
-      configurable: true,
-      value: exitFullscreen,
-    });
-    Object.defineProperty(document, "fullscreenElement", {
-      configurable: true,
-      value: document.documentElement,
+    setFullscreenApi({
+      requestFullscreen,
+      exitFullscreen,
+      fullscreenElement: document.documentElement,
     });
 
     render(<Harness />);
@@ -60,13 +116,9 @@ describe("useFullscreenShortcut", () => {
 
   it("ignores F key when typing in an input", () => {
     const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(document.documentElement, "requestFullscreen", {
-      configurable: true,
-      value: requestFullscreen,
-    });
-    Object.defineProperty(document, "fullscreenElement", {
-      configurable: true,
-      value: null,
+    setFullscreenApi({
+      requestFullscreen,
+      fullscreenElement: null,
     });
 
     render(<Harness />);
@@ -87,13 +139,9 @@ describe("useFullscreenShortcut", () => {
 
   it("ignores F key when Ctrl is held", () => {
     const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(document.documentElement, "requestFullscreen", {
-      configurable: true,
-      value: requestFullscreen,
-    });
-    Object.defineProperty(document, "fullscreenElement", {
-      configurable: true,
-      value: null,
+    setFullscreenApi({
+      requestFullscreen,
+      fullscreenElement: null,
     });
 
     render(<Harness />);
@@ -112,13 +160,9 @@ describe("useFullscreenShortcut", () => {
 
   it("triggers regardless of keyboard layout (physical key position)", () => {
     const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(document.documentElement, "requestFullscreen", {
-      configurable: true,
-      value: requestFullscreen,
-    });
-    Object.defineProperty(document, "fullscreenElement", {
-      configurable: true,
-      value: null,
+    setFullscreenApi({
+      requestFullscreen,
+      fullscreenElement: null,
     });
 
     render(<Harness />);
@@ -130,13 +174,9 @@ describe("useFullscreenShortcut", () => {
 
   it("ignores a different physical key even if it produces 'f'", () => {
     const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(document.documentElement, "requestFullscreen", {
-      configurable: true,
-      value: requestFullscreen,
-    });
-    Object.defineProperty(document, "fullscreenElement", {
-      configurable: true,
-      value: null,
+    setFullscreenApi({
+      requestFullscreen,
+      fullscreenElement: null,
     });
 
     render(<Harness />);
@@ -147,9 +187,8 @@ describe("useFullscreenShortcut", () => {
   });
 
   it("does nothing when fullscreen API is unsupported", () => {
-    Object.defineProperty(document.documentElement, "requestFullscreen", {
-      configurable: true,
-      value: undefined,
+    setFullscreenApi({
+      requestFullscreen: undefined,
     });
 
     render(<Harness />);

@@ -23,8 +23,8 @@ export function useFullscreenShortcut() {
     if (!isFullscreenSupported()) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== "KeyF") return;
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.code !== "KeyF" || event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
       if (isEditableTarget(event.target)) return;
 
       event.preventDefault();

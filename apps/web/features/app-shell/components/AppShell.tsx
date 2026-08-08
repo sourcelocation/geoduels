@@ -9,6 +9,7 @@ import PlayerBadge, { type PlayerBadgeInfo } from "../../../components/ui/Player
 import PlayerNameWithBadge from "../../../components/ui/PlayerNameWithBadge";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
+import { useFullscreenShortcut } from "../hooks/use-fullscreen-shortcut";
 import {
   APP_NAV_ITEMS,
   appNavRouteStorageKey,
@@ -84,6 +85,7 @@ export function AppShell({
   maintenanceBanner,
   contentClassName,
 }: AppShellProps) {
+  useFullscreenShortcut();
   const [highQualityBackgroundReady, setHighQualityBackgroundReady] =
     useState(backgroundLoaded);
 

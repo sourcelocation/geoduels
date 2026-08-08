@@ -2,6 +2,7 @@ import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useMemo } from "react";
+import { useFullscreenShortcut } from "../../features/app-shell/hooks/use-fullscreen-shortcut";
 import EndMatchOverlay from "../../components/ui/EndMatchOverlay";
 import type { Snapshot } from "../../components/ui/types";
 import { requestMatchReport } from "../../features/auth/lib/auth-client";
@@ -134,6 +135,7 @@ function matchSourcePartyInviteCode(
 }
 
 export default function MatchPage() {
+  useFullscreenShortcut();
   const router = useRouter();
   const routeMatchId = router.isReady
     ? normalizeRouteMatchId(router.query.id, router.asPath)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -25,56 +26,71 @@ local base_window = tonumber(ARGV[5])
 local expand_every_ms = tonumber(ARGV[6])
 local expand_step = tonumber(ARGV[7])
 local max_window = tonumber(ARGV[8])
+local self_mmr = tonumber(ARGV[9])
 local min_mutual_wait_ms = tonumber(ARGV[10])
-local self_ticket_raw = redis.call('GET', ticket_prefix .. self)
-local self_joined = now_ms
-if self_ticket_raw then
-  local decoded = cjson.decode(self_ticket_raw)
-  if decoded and decoded.joinedAtUnixMs then
-    self_joined = tonumber(decoded.joinedAtUnixMs)
-  end
+
+local self_joined_raw = redis.call('ZSCORE', joined_key, self)
+if not self_joined_raw then
+  return ''
 end
+local self_joined = tonumber(self_joined_raw)
+local self_wait = math.max(0, now_ms - self_joined)
+
+local self_allowed = base_window
+if expand_every_ms > 0 then
+  self_allowed = self_allowed + math.floor(self_wait / expand_every_ms) * expand_step
+end
+if self_allowed > max_window then
+  self_allowed = max_window
+end
+
 local candidates = redis.call('ZRANGEBYSCORE', zkey, min, max)
 local best = ''
-local best_ticket_raw = ''
 local best_diff = max_window + 1
+
 for _, c in ipairs(candidates) do
   if c ~= self then
     local candidate_score = redis.call('ZSCORE', zkey, c)
-    local candidate_ticket_raw = redis.call('GET', ticket_prefix .. c)
-    if candidate_score and not candidate_ticket_raw then
-      redis.call('ZREM', zkey, c)
-    elseif candidate_score and candidate_ticket_raw then
-      local candidate = cjson.decode(candidate_ticket_raw)
-      local candidate_joined = now_ms
-      if candidate and candidate.joinedAtUnixMs then
-        candidate_joined = tonumber(candidate.joinedAtUnixMs)
-      end
-      local self_wait = math.max(0, now_ms - self_joined)
-      local candidate_wait = math.max(0, now_ms - candidate_joined)
-      local wait_ms = math.max(self_wait, candidate_wait)
-      local allowed = base_window
-      if expand_every_ms > 0 then
-        allowed = allowed + math.floor(wait_ms / expand_every_ms) * expand_step
-      end
-      if allowed > max_window then
-        allowed = max_window
-      end
-      local diff = math.abs(tonumber(candidate_score) - tonumber(ARGV[9]))
-      if self_wait >= min_mutual_wait_ms and candidate_wait >= min_mutual_wait_ms and diff <= allowed and diff < best_diff then
-        best = c
-        best_ticket_raw = candidate_ticket_raw
-        best_diff = diff
+    if candidate_score then
+      local ticket_exists = redis.call('EXISTS', ticket_prefix .. c)
+      if ticket_exists == 0 then
+        redis.call('ZREM', zkey, c)
+        redis.call('ZREM', joined_key, c)
+      else
+        local candidate_joined_raw = redis.call('ZSCORE', joined_key, c)
+        if candidate_joined_raw then
+          local candidate_joined = tonumber(candidate_joined_raw)
+          local candidate_wait = math.max(0, now_ms - candidate_joined)
+          
+          local candidate_allowed = base_window
+          if expand_every_ms > 0 then
+            candidate_allowed = candidate_allowed + math.floor(candidate_wait / expand_every_ms) * expand_step
+          end
+          if candidate_allowed > max_window then
+            candidate_allowed = max_window
+          end
+          
+          local diff = math.abs(tonumber(candidate_score) - self_mmr)
+          
+          if self_wait >= min_mutual_wait_ms and candidate_wait >= min_mutual_wait_ms and diff <= self_allowed and diff <= candidate_allowed and diff < best_diff then
+            best = c
+            best_diff = diff
+          end
+        end
       end
     end
   end
 end
+
 if best ~= '' then
-  local removed = redis.call('ZREM', zkey, self, best)
-  if removed == 2 then
-    redis.call('DEL', ticket_prefix .. self, ticket_prefix .. best)
-    redis.call('ZREM', joined_key, self, best)
-    return best_ticket_raw
+  local best_ticket_raw = redis.call('GET', ticket_prefix .. best)
+  if best_ticket_raw then
+    local removed = redis.call('ZREM', zkey, self, best)
+    if removed == 2 then
+      redis.call('DEL', ticket_prefix .. self, ticket_prefix .. best)
+      redis.call('ZREM', joined_key, self, best)
+      return best_ticket_raw
+    end
   end
 end
 return ''
@@ -368,7 +384,7 @@ func (r *redisStore) Heartbeat(pool QueuePool, queues []QueueVariant, userID str
 			r.rdb,
 			[]string{queueMembersKey(pool, queue), queueTicketKey(pool, queue, userID), queueMatchKey(pool, queue, userID), queueJoinedKey(pool, queue)},
 			userID,
-			intStr(queueTicketTTL.Milliseconds()),
+			strconv.FormatInt(queueTicketTTL.Milliseconds(), 10),
 		).Result()
 		if err != nil {
 			return QueuePresenceMissing, err
@@ -438,75 +454,83 @@ func (r *redisStore) RunMatchmaking(pool QueuePool, queue QueueVariant, limit in
 	defer releaseMatcherLockScript.Run(ctx, r.rdb, []string{queueMatcherLockKey(pool, queue)}, owner)
 
 	users, err := r.rdb.ZRangeByScore(ctx, queueJoinedKey(pool, queue), &redis.ZRangeBy{
-		Min: "-inf",
-		Max: intStr(time.Now().UnixMilli() - mutualMatchWaitMS),
+		Min:    "-inf",
+		Max:    strconv.FormatInt(time.Now().UnixMilli()-mutualMatchWaitMS, 10),
+		Offset: 0,
+		Count:  int64(limit * 2),
 	}).Result()
 	if err != nil {
 		return 0, err
 	}
 	matched := 0
+	matchedUsers := make(map[string]bool)
 	for _, userID := range users {
 		if matched >= limit {
 			break
 		}
-		ok, err := r.tryMatch(ctx, pool, queue, userID)
+		if matchedUsers[userID] {
+			continue
+		}
+		oppID, err := r.tryMatch(ctx, pool, queue, userID)
 		if err != nil {
 			return matched, err
 		}
-		if ok {
+		if oppID != "" {
 			matched++
+			matchedUsers[userID] = true
+			matchedUsers[oppID] = true
 		}
 	}
 	return matched, nil
 }
 
-func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, queue QueueVariant, userID string) (bool, error) {
+func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, queue QueueVariant, userID string) (string, error) {
 	selfRaw, err := r.rdb.Get(ctx, queueTicketKey(pool, queue, userID)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, queue), userID).Result(); remErr != nil {
-				return false, remErr
+				return "", remErr
 			}
 			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, queue), userID).Result(); remErr != nil {
-				return false, remErr
+				return "", remErr
 			}
-			return false, nil
+			return "", nil
 		}
-		return false, err
+		return "", err
 	}
 	var selfTicket ticket
 	if err := json.Unmarshal(selfRaw, &selfTicket); err != nil {
-		return false, err
+		return "", err
 	}
 	rawOpp, err := atomicMatchScript.Run(
 		ctx,
 		r.rdb,
 		[]string{queueMembersKey(pool, queue), queueTicketPrefix(pool, queue), queueJoinedKey(pool, queue)},
 		userID,
-		intStr(int64(selfTicket.MMR-maxMatchWindowMMR)),
-		intStr(int64(selfTicket.MMR+maxMatchWindowMMR)),
-		intStr(time.Now().UnixMilli()),
-		intStr(baseMatchWindowMMR),
-		intStr(matchExpandEveryMS),
-		intStr(matchExpandStepMMR),
-		intStr(maxMatchWindowMMR),
-		intStr(int64(selfTicket.MMR)),
-		intStr(mutualMatchWaitMS),
+		strconv.FormatInt(int64(selfTicket.MMR-maxMatchWindowMMR), 10),
+		strconv.FormatInt(int64(selfTicket.MMR+maxMatchWindowMMR), 10),
+		strconv.FormatInt(time.Now().UnixMilli(), 10),
+		strconv.FormatInt(baseMatchWindowMMR, 10),
+		strconv.FormatInt(matchExpandEveryMS, 10),
+		strconv.FormatInt(matchExpandStepMMR, 10),
+		strconv.FormatInt(maxMatchWindowMMR, 10),
+		strconv.FormatInt(int64(selfTicket.MMR), 10),
+		strconv.FormatInt(mutualMatchWaitMS, 10),
 	).Result()
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	oppTicket := ticket{}
 	if rawOpp != nil {
 		oppRaw, _ := rawOpp.(string)
 		if oppRaw != "" {
 			if err := json.Unmarshal([]byte(oppRaw), &oppTicket); err != nil {
-				return false, err
+				return "", err
 			}
 		}
 	}
 	if oppTicket.UserID == "" {
-		return false, nil
+		return "", nil
 	}
 	match := matchFromTickets(oppTicket, selfTicket)
 	mb, _ := json.Marshal(match)
@@ -525,7 +549,10 @@ func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, queue QueueVa
 		}
 		return nil
 	})
-	return err == nil, err
+	if err != nil {
+		return "", err
+	}
+	return oppTicket.UserID, nil
 }
 
 func (r *redisStore) IsQueued(pool QueuePool, queues []QueueVariant, userID string) (bool, error) {
@@ -563,7 +590,7 @@ func (r *redisStore) IsQueued(pool QueuePool, queues []QueueVariant, userID stri
 }
 
 func ticketID(userID string) string {
-	return userID + "-" + intStr(time.Now().UnixMilli())
+	return userID + "-" + strconv.FormatInt(time.Now().UnixMilli(), 10)
 }
 
 func matchFromTickets(opponent, self ticket) contracts.MatchFound {
@@ -601,21 +628,4 @@ func profileFromTicket(t ticket) contracts.PlayerProfile {
 		IsAdmin:           t.IsAdmin,
 		SelectedBadge:     t.SelectedBadge,
 	}
-}
-
-func intStr(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	sign := ""
-	if v < 0 {
-		sign = "-"
-		v = -v
-	}
-	o := ""
-	for v > 0 {
-		o = string(rune('0'+(v%10))) + o
-		v /= 10
-	}
-	return sign + o
 }

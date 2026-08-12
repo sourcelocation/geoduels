@@ -617,7 +617,7 @@ function PartySettings({
                 />
               </label>
             </div>
-            
+
             <div className="mt-3 border-t border-white/10 pt-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -652,7 +652,7 @@ function PartySettings({
                   <span className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${perPlayerHpEnabled ? "translate-x-6" : "translate-x-1"}`} />
                 </button>
               </div>
-              
+
               {perPlayerHpEnabled && (
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {snapshot.members.map((member) => (

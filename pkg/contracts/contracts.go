@@ -99,17 +99,17 @@ const (
 )
 
 type MatchConfig struct {
-	Ruleset             GameRuleset           `json:"ruleset,omitempty"`
-	StreetNames         StreetNamesVisibility `json:"streetNames,omitempty"`
-	MapID               string                `json:"mapId,omitempty"`
-	MapName             string                `json:"mapName,omitempty"`
-	MapKey              string                `json:"mapKey,omitempty"` // Legacy read compatibility.
-	RoundTimerMode      RoundTimerMode        `json:"roundTimerMode,omitempty"`
-	RoundTimeLimitMS    int64                 `json:"roundTimeLimitMs,omitempty"`
-	PressureTimeLimitMS int64                 `json:"pressureTimeLimitMs,omitempty"`
-	RoundCount          int                   `json:"roundCount,omitempty"`
+	Ruleset              GameRuleset           `json:"ruleset,omitempty"`
+	StreetNames          StreetNamesVisibility `json:"streetNames,omitempty"`
+	MapID                string                `json:"mapId,omitempty"`
+	MapName              string                `json:"mapName,omitempty"`
+	MapKey               string                `json:"mapKey,omitempty"` // Legacy read compatibility.
+	RoundTimerMode       RoundTimerMode        `json:"roundTimerMode,omitempty"`
+	RoundTimeLimitMS     int64                 `json:"roundTimeLimitMs,omitempty"`
+	PressureTimeLimitMS  int64                 `json:"pressureTimeLimitMs,omitempty"`
+	RoundCount           int                   `json:"roundCount,omitempty"`
 	InitialHP            int                   `json:"initialHp,omitempty"`
-	PlayerHPOverrides    map[string]int       `json:"playerHpOverrides,omitempty"`
+	PlayerHPOverrides    map[string]int        `json:"playerHpOverrides,omitempty"`
 	MultiplierStartRound int                   `json:"multiplierStartRound,omitempty"`
 	MultiplierIncrement  float64               `json:"multiplierIncrement,omitempty"`
 }

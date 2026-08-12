@@ -51,7 +51,6 @@ export function usePartyPanelState({
   const activeMatchId = party.snapshot?.activeMatchId || party.snapshot?.startedMatchId || "";
   const matchInProgress =
     party.snapshot?.state === "in_match" || party.snapshot?.state === "started";
-  const currentMember = members.find((member) => member.userId === userId);
   const config = party.snapshot?.config ?? defaultPartyConfig;
   const mode = party.snapshot?.mode || "duel";
   const clockOn = config.roundTimerMode === "fixed";
@@ -60,13 +59,26 @@ export function usePartyPanelState({
     config.roundTimerMode === "pressure";
   const roundSeconds = Math.round((config.roundTimeLimitMs || 45000) / 1000);
   const pressureSeconds = pressureOn ? Math.round((config.pressureTimeLimitMs || 15000) / 1000) : 0;
-  const { missingMembers, teamACount, teamBCount } = useMemo(() => ({
-    missingMembers: members.filter(
-      (member) => (member.presenceStatus || (member.connected ? "online" : "offline")) !== "online",
-    ),
-    teamACount: members.filter((member) => (member.teamId || "a") === "a").length,
-    teamBCount: members.filter((member) => member.teamId === "b").length,
-  }), [members]);
+  const { currentMember, missingMembers, teamACount, teamBCount } = useMemo(() => {
+    const missingMembers = [] as typeof members;
+    let currentMember: (typeof members)[number] | undefined;
+    let teamACount = 0;
+    let teamBCount = 0;
+    for (const member of members) {
+      if (member.userId === userId) {
+        currentMember = member;
+      }
+      if ((member.presenceStatus || (member.connected ? "online" : "offline")) !== "online") {
+        missingMembers.push(member);
+      }
+      if ((member.teamId || "a") === "a") {
+        teamACount += 1;
+      } else if (member.teamId === "b") {
+        teamBCount += 1;
+      }
+    }
+    return { currentMember, missingMembers, teamACount, teamBCount };
+  }, [members, userId]);
   const canStart =
     party.isOwner &&
     party.snapshot?.state === "open" &&

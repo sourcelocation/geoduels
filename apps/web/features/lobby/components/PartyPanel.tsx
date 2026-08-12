@@ -1,4 +1,4 @@
-import { forwardRef, useState } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Copy, Crown, Loader2, LogOut, Map as MapIcon, Play, SlidersHorizontal, UserMinus, UserPlus, Users, Link2, Sparkles } from "lucide-react";
 import { motion } from "framer-motion";
 import { toPublicEntityId } from "../../../lib/entity-id";
@@ -446,6 +446,11 @@ function PartySettings({
   const [playerHpDraft, setPlayerHpDraft] = useState<Record<string, number>>(() => ({
     ...(config.playerHpOverrides || {}),
   }));
+  useEffect(() => {
+    const overrides = config.playerHpOverrides || {};
+    setPerPlayerHpEnabled(Object.keys(overrides).length > 0);
+    setPlayerHpDraft(overrides);
+  }, [config.playerHpOverrides]);
   const rulesetLabel =
     config.ruleset === "nmpz"
       ? "NMPZ"

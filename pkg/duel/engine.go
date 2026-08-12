@@ -22,7 +22,7 @@ const (
 	disconnectGrace = 30 * time.Second
 	staleGrace      = 3 * time.Minute
 	maxRounds       = 20
-	ffaRounds       = 5
+	ffaRounds       = 5 // Legacy test/config compatibility; FFA now honors MatchConfig.RoundCount.
 	maxDistanceKm   = math.Pi * 6371.0
 	maxScore        = gameplay.MaxScore
 	perfectGuessKm  = 0.15
@@ -131,6 +131,10 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 		if mode == contracts.ModeTeamDuel {
 			teamID = normalizeTeamID(opts.Teams[id])
 		}
+		initialHP := cfg.InitialHP
+		if override, ok := cfg.PlayerHPOverrides[id]; ok && override > 0 {
+			initialHP = override
+		}
 		players[id] = &contracts.PlayerState{
 			UserID:            id,
 			DisplayName:       name,
@@ -142,10 +146,10 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 			IsAdmin:           p.IsAdmin,
 			SelectedBadge:     p.SelectedBadge,
 			TeamID:            teamID,
-			HP:                startingHP,
+			HP:                initialHP,
 		}
 	}
-	teams := buildTeams(mode, playerIDs, players)
+	teams := buildTeams(mode, playerIDs, players, cfg.InitialHP)
 	if mode == contracts.ModeTeamDuel && len(teams) != 2 {
 		return nil, errors.New("team duel requires both teams")
 	}
@@ -447,10 +451,7 @@ func (e *Engine) resolveRound(m *Match) {
 			}
 		}
 	}
-	if m.Mode == contracts.ModeFreeForAll && result.RoundNumber >= ffaRounds {
-		m.State = contracts.MatchEnded
-	}
-	if result.RoundNumber >= maxRounds {
+	if result.RoundNumber >= m.Config.RoundCount || result.RoundNumber >= maxRounds {
 		m.State = contracts.MatchEnded
 	}
 	m.LastRoundResult = result
@@ -471,7 +472,7 @@ func resolveDuelDamage(m *Match, result *contracts.RoundResult, userIDs []string
 	if len(userIDs) == 2 {
 		a := result.Players[userIDs[0]]
 		b := result.Players[userIDs[1]]
-		multiplier := roundDamageMultiplier(result.RoundNumber)
+		multiplier := roundDamageMultiplier(result.RoundNumber, m.Config)
 		damage := int(math.Round(float64(absInt(a.Score-b.Score)) * multiplier))
 		switch {
 		case a.Score > b.Score:
@@ -523,7 +524,7 @@ func resolveTeamDuelDamage(m *Match, result *contracts.RoundResult) {
 	}
 	a := result.Teams["a"]
 	b := result.Teams["b"]
-	multiplier := roundDamageMultiplier(result.RoundNumber)
+	multiplier := roundDamageMultiplier(result.RoundNumber, m.Config)
 	damage := int(math.Round(float64(absInt(a.Score-b.Score)) * multiplier))
 	switch {
 	case a.Score > b.Score:
@@ -746,13 +747,16 @@ func copyRatingPreview(in map[string]contracts.RatingDeltaPreview) map[string]co
 	return out
 }
 
-func buildTeams(mode contracts.MatchMode, playerIDs []string, players map[string]*contracts.PlayerState) map[string]*contracts.TeamState {
+func buildTeams(mode contracts.MatchMode, playerIDs []string, players map[string]*contracts.PlayerState, initialHP int) map[string]*contracts.TeamState {
 	if mode != contracts.ModeTeamDuel {
 		return nil
 	}
+	if initialHP <= 0 {
+		initialHP = startingHP
+	}
 	teams := map[string]*contracts.TeamState{
-		"a": {TeamID: "a", Name: "Team Red", HP: startingHP, Players: []string{}},
-		"b": {TeamID: "b", Name: "Team Blue", HP: startingHP, Players: []string{}},
+		"a": {TeamID: "a", Name: "Team Red", HP: initialHP, Players: []string{}},
+		"b": {TeamID: "b", Name: "Team Blue", HP: initialHP, Players: []string{}},
 	}
 	for index, userID := range playerIDs {
 		player := players[userID]
@@ -843,9 +847,17 @@ func roundScore(distanceKm float64) int {
 	return gameplay.RoundScore(distanceKm)
 }
 
-func roundDamageMultiplier(roundNumber int) float64 {
-	if roundNumber <= 2 {
+func roundDamageMultiplier(roundNumber int, cfg contracts.MatchConfig) float64 {
+	startRound := cfg.MultiplierStartRound
+	if startRound <= 0 {
+		startRound = 3
+	}
+	increment := cfg.MultiplierIncrement
+	if increment <= 0 {
+		increment = 0.5
+	}
+	if roundNumber < startRound {
 		return 1.0
 	}
-	return 1.0 + (0.5 * float64(roundNumber-2))
+	return 1.0 + (increment * float64(roundNumber-startRound+1))
 }

@@ -19,6 +19,7 @@ import { PlayPanel } from "../../features/lobby/components/PlayPanel";
 import { LobbyTutorialSection } from "../../features/lobby/components/LobbyTutorialSection";
 import { DiscordProviderButton, GoogleProviderButton, SignInButton } from "../../features/lobby/components/LobbyAuthButtons";
 import { PartyPanel } from "../../features/lobby/components/PartyPanel";
+import { FriendsPagePanel } from "../../features/lobby/components/FriendsPagePanel";
 import { LeaderboardPanel } from "../../features/lobby/components/LeaderboardPanel";
 import {
   DonateCard,
@@ -596,9 +597,15 @@ export default function LobbyScreen({
                 <motion.div
                   key="friends"
                   {...tabPanelMotion}
-                  className="flex w-full max-w-[520px] flex-col gap-5 pointer-events-auto"
+                  className="flex w-full flex-col items-center gap-5 pointer-events-auto"
                 >
-                  {invitePartyCard}
+                  <FriendsPagePanel
+                    disabled={authLoading || nicknameSaving || playPaused || maintenanceIsActive}
+                    partyBusy={party.busy}
+                    authError={authError}
+                    createParty={createParty}
+                    joinParty={joinParty}
+                  />
                 </motion.div>
               )}
             </AnimatePresence>

@@ -22,6 +22,11 @@ export type MatchConfig = {
   roundTimerMode?: 'none' | 'pressure' | 'fixed';
   roundTimeLimitMs?: number;
   pressureTimeLimitMs?: number;
+  roundCount?: number;
+  initialHp?: number;
+  multiplierStartRound?: number;
+  multiplierIncrement?: number;
+  playerHpOverrides?: Record<string, number>;
 };
 
 export type QueueEvent =

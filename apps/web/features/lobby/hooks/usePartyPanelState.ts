@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MatchConfig } from "../../matchmaking/lib/queue-client";
 import type { PartyRuntimeStatus } from "../controllers/party-controller";
 import type { PartySnapshot, PartyMode } from "../lib/party-client";
@@ -25,6 +26,10 @@ const defaultPartyConfig: MatchConfig = {
   ruleset: "moving",
   roundTimerMode: "none",
   pressureTimeLimitMs: 15000,
+  roundCount: 5,
+  initialHp: 6000,
+  multiplierStartRound: 3,
+  multiplierIncrement: 0.5,
 };
 
 export function usePartyPanelState({
@@ -33,6 +38,7 @@ export function usePartyPanelState({
   updateSettings,
   setInviteCopied,
 }: UsePartyPanelStateInput) {
+  const inviteResetTimer = useRef<number | null>(null);
   const inviteURL =
     typeof window !== "undefined" && party.inviteCode
       ? `${window.location.origin}/party/${party.inviteCode}`
@@ -41,12 +47,12 @@ export function usePartyPanelState({
     !party.snapshot &&
     ["creating", "joining", "connecting", "reconnecting"].includes(party.status);
   const active = !!party.snapshot || party.status !== "idle";
-  const members = party.snapshot?.members || [];
+  const members = party.snapshot?.members ?? [];
   const activeMatchId = party.snapshot?.activeMatchId || party.snapshot?.startedMatchId || "";
   const matchInProgress =
     party.snapshot?.state === "in_match" || party.snapshot?.state === "started";
   const currentMember = members.find((member) => member.userId === userId);
-  const config = party.snapshot?.config || defaultPartyConfig;
+  const config = party.snapshot?.config ?? defaultPartyConfig;
   const mode = party.snapshot?.mode || "duel";
   const clockOn = config.roundTimerMode === "fixed";
   const pressureOn =
@@ -54,11 +60,13 @@ export function usePartyPanelState({
     config.roundTimerMode === "pressure";
   const roundSeconds = Math.round((config.roundTimeLimitMs || 45000) / 1000);
   const pressureSeconds = pressureOn ? Math.round((config.pressureTimeLimitMs || 15000) / 1000) : 0;
-  const missingMembers = members.filter(
-    (member) => (member.presenceStatus || (member.connected ? "online" : "offline")) !== "online",
-  );
-  const teamACount = members.filter((member) => (member.teamId || "a") === "a").length;
-  const teamBCount = members.filter((member) => member.teamId === "b").length;
+  const { missingMembers, teamACount, teamBCount } = useMemo(() => ({
+    missingMembers: members.filter(
+      (member) => (member.presenceStatus || (member.connected ? "online" : "offline")) !== "online",
+    ),
+    teamACount: members.filter((member) => (member.teamId || "a") === "a").length,
+    teamBCount: members.filter((member) => member.teamId === "b").length,
+  }), [members]);
   const canStart =
     party.isOwner &&
     party.snapshot?.state === "open" &&
@@ -71,7 +79,7 @@ export function usePartyPanelState({
       (mode === "free_for_all" && members.length >= 2 && members.length <= 8)) &&
     missingMembers.length === 0;
 
-  const saveConfig = (patch: MatchConfig) => {
+  const saveConfig = useCallback((patch: MatchConfig) => {
     const next: MatchConfig = {
       ...config,
       ...patch,
@@ -86,20 +94,32 @@ export function usePartyPanelState({
       next.pressureTimeLimitMs = undefined;
     }
     void updateSettings(next);
-  };
+  }, [config, updateSettings]);
 
-  const saveMode = (nextMode: PartyMode) => {
+  const saveMode = useCallback((nextMode: PartyMode) => {
     void updateSettings(config, nextMode);
-  };
+  }, [config, updateSettings]);
 
-  const copyInvite = () => {
+  const copyInvite = useCallback(() => {
     if (!inviteURL) return;
     void navigator.clipboard?.writeText(inviteURL);
     setInviteCopied(true);
-    if (typeof window !== "undefined") {
-      window.setTimeout(() => setInviteCopied(false), 1600);
+    if (inviteResetTimer.current !== null) {
+      window.clearTimeout(inviteResetTimer.current);
     }
-  };
+    if (typeof window !== "undefined") {
+      inviteResetTimer.current = window.setTimeout(() => {
+        inviteResetTimer.current = null;
+        setInviteCopied(false);
+      }, 1600);
+    }
+  }, [inviteURL, setInviteCopied]);
+
+  useEffect(() => () => {
+    if (inviteResetTimer.current !== null) {
+      window.clearTimeout(inviteResetTimer.current);
+    }
+  }, []);
 
   return {
     active,

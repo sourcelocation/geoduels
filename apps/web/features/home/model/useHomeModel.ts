@@ -15,7 +15,7 @@ import {
   requestUnlinkAuthProvider,
   requestUserNotifications,
   requestSupportDonation,
-  requestSession,
+	requestSession,
   requestRefreshSession,
   requestUpdateSelectedBadge,
   requestUpdateNickname,
@@ -231,7 +231,7 @@ export function useHomeModel(options?: {
   });
 
   async function bootstrapSession() {
-    const data = await sessionMutation.mutateAsync();
+    let data = await sessionMutation.mutateAsync();
     if (!data) {
       return null;
     }

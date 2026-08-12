@@ -444,22 +444,18 @@ describe('LobbyScreen', () => {
     const joinParty = vi.fn(async () => true);
     renderLobbyScreen({ joinParty });
 
-    expect(screen.queryByRole('button', { name: /Private Party/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create Party & Invite/i })).not.toBeInTheDocument();
 
     cleanup();
     renderLobbyScreen({ contentRoute: 'friends', joinParty });
 
-    expect(screen.getByText('CUSTOM')).toBeInTheDocument();
-    expect(screen.getByText('Create a party or join your friend')).toBeInTheDocument();
+    expect(screen.getByText('Play GeoDuels with Friends')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create Party & Invite/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Private Party/i }));
-
-    expect(screen.getByRole('dialog', { name: 'Private Party' })).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('Join With Code'), {
+    fireEvent.change(screen.getByPlaceholderText(/ENTER CODE/i), {
       target: { value: 'abcd12' }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Party' }));
 
     expect(joinParty).toHaveBeenCalledWith('ABCD12');
   });

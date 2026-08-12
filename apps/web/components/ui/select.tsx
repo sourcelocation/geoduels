@@ -17,7 +17,7 @@ export function Select({ className, variant = "operational", ...props }: SelectP
   return (
     <select
       className={cn(
-        "min-h-10 rounded-md border px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-50",
+        "min-h-10 rounded-md border px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-50 [&>option]:bg-black [&>option]:text-white",
         variantClass[variant],
         className,
       )}

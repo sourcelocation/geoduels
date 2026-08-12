@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,7 +61,7 @@ func (q *matchCoordinator) createParty(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "party unavailable", http.StatusInternalServerError)
 		return
 	}
-	if req.Config.Ruleset != "" || req.Config.MapID != "" || req.Config.MapKey != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 {
+	if req.Config.Ruleset != "" || req.Config.MapID != "" || req.Config.MapKey != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 || req.Config.RoundCount > 0 || req.Config.InitialHP > 0 || req.Config.MultiplierStartRound > 0 || req.Config.MultiplierIncrement > 0 {
 		if req.Config.MapID == "" && req.Config.MapKey == "" {
 			req.Config.MapID = snap.Config.MapID
 		}
@@ -834,7 +835,7 @@ func partyPatch(prev, next contracts.PartySnapshot, revision int64) contracts.Pa
 		v := next.Mode
 		patch.Mode = &v
 	}
-	if prev.Config != next.Config {
+	if !reflect.DeepEqual(prev.Config, next.Config) {
 		v := next.Config
 		patch.Config = &v
 	}

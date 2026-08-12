@@ -107,6 +107,11 @@ type MatchConfig struct {
 	RoundTimerMode      RoundTimerMode        `json:"roundTimerMode,omitempty"`
 	RoundTimeLimitMS    int64                 `json:"roundTimeLimitMs,omitempty"`
 	PressureTimeLimitMS int64                 `json:"pressureTimeLimitMs,omitempty"`
+	RoundCount          int                   `json:"roundCount,omitempty"`
+	InitialHP            int                   `json:"initialHp,omitempty"`
+	PlayerHPOverrides    map[string]int       `json:"playerHpOverrides,omitempty"`
+	MultiplierStartRound int                   `json:"multiplierStartRound,omitempty"`
+	MultiplierIncrement  float64               `json:"multiplierIncrement,omitempty"`
 }
 
 func NormalizeRuleset(v GameRuleset) GameRuleset {
@@ -169,6 +174,34 @@ func NormalizeMatchConfig(cfg MatchConfig) MatchConfig {
 	case 0, DefaultPressureTimeMS, 30_000, 60_000, 90_000:
 	default:
 		cfg.PressureTimeLimitMS = 0
+	}
+	if cfg.InitialHP <= 0 {
+		cfg.InitialHP = 6000
+	} else if cfg.InitialHP < 1 {
+		cfg.InitialHP = 1
+	} else if cfg.InitialHP > 100000 {
+		cfg.InitialHP = 100000
+	}
+	if cfg.RoundCount <= 0 {
+		cfg.RoundCount = 5
+	} else if cfg.RoundCount < 1 {
+		cfg.RoundCount = 1
+	} else if cfg.RoundCount > 10 {
+		cfg.RoundCount = 10
+	}
+	if cfg.MultiplierStartRound <= 0 {
+		cfg.MultiplierStartRound = 3
+	} else if cfg.MultiplierStartRound < 1 {
+		cfg.MultiplierStartRound = 1
+	} else if cfg.MultiplierStartRound > 20 {
+		cfg.MultiplierStartRound = 20
+	}
+	if cfg.MultiplierIncrement <= 0 {
+		cfg.MultiplierIncrement = 0.5
+	} else if cfg.MultiplierIncrement < 0.1 {
+		cfg.MultiplierIncrement = 0.1
+	} else if cfg.MultiplierIncrement > 10.0 {
+		cfg.MultiplierIncrement = 10.0
 	}
 	return cfg
 }

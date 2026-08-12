@@ -306,7 +306,7 @@ func TestRoundResultPhaseAndDamageFromScoreDelta(t *testing.T) {
 	if r1.Score <= r2.Score {
 		t.Fatalf("expected u1 to outscore u2")
 	}
-	wantDamage := int(float64(r1.Score-r2.Score) * roundDamageMultiplier(1))
+	wantDamage := int(float64(r1.Score-r2.Score) * roundDamageMultiplier(1, contracts.MatchConfig{}))
 	if r1.DamageDealt != wantDamage || r2.DamageTaken != wantDamage {
 		t.Fatalf("expected damage=%d got dealt=%d taken=%d", wantDamage, r1.DamageDealt, r2.DamageTaken)
 	}
@@ -368,10 +368,40 @@ func TestRoundDamageMultiplierSchedule(t *testing.T) {
 		{round: 10, want: 5.0},
 	}
 	for _, tc := range cases {
-		got := roundDamageMultiplier(tc.round)
+		got := roundDamageMultiplier(tc.round, contracts.MatchConfig{})
 		if got != tc.want {
 			t.Fatalf("round %d multiplier=%v want=%v", tc.round, got, tc.want)
 		}
+	}
+}
+
+func TestCustomMatchConfigHPAndMultipliers(t *testing.T) {
+	cfg := contracts.MatchConfig{
+		InitialHP:            1,
+		MultiplierStartRound: 2,
+		MultiplierIncrement:  1.0,
+	}
+	if got := roundDamageMultiplier(1, cfg); got != 1.0 {
+		t.Fatalf("round 1 multiplier=%v want 1.0", got)
+	}
+	if got := roundDamageMultiplier(2, cfg); got != 2.0 {
+		t.Fatalf("round 2 multiplier=%v want 2.0", got)
+	}
+	if got := roundDamageMultiplier(3, cfg); got != 3.0 {
+		t.Fatalf("round 3 multiplier=%v want 3.0", got)
+	}
+
+	rounds := []contracts.LocationPoint{{Lat: 0, Lng: 0, Country: "US"}}
+	e := New(func(_ string, _ int) (contracts.LocationPoint, error) { return rounds[0], nil })
+	snap, err := e.CreateMatchWithOptions("m1", []string{"u1", "u2"}, map[string]contracts.PlayerProfile{"u1": {DisplayName: "U1"}, "u2": {DisplayName: "U2"}}, MatchOptions{
+		Mode:   contracts.ModeDuel,
+		Config: cfg,
+	})
+	if err != nil {
+		t.Fatalf("CreateMatch error: %v", err)
+	}
+	if snap.Players["u1"].HP != 1 || snap.Players["u2"].HP != 1 {
+		t.Fatalf("expected initial HP 1, got u1=%d u2=%d", snap.Players["u1"].HP, snap.Players["u2"].HP)
 	}
 }
 

@@ -27,6 +27,8 @@ type MapMetadataFieldsProps = {
   setMapThumbnailCategory: (value: ThumbnailCategory) => void;
   mapThumbnailSearch: string;
   setMapThumbnailSearch: (value: string) => void;
+  autoZoomPlayRegion?: boolean;
+  setAutoZoomPlayRegion?: (value: boolean) => void;
 };
 
 export function thumbnailCategoryFromKey(key: string): ThumbnailCategory {
@@ -50,6 +52,8 @@ export function MapMetadataFields({
   setMapThumbnailCategory,
   mapThumbnailSearch,
   setMapThumbnailSearch,
+  autoZoomPlayRegion,
+  setAutoZoomPlayRegion,
 }: MapMetadataFieldsProps) {
   const [thumbnailPickerOpen, setThumbnailPickerOpen] = useState(false);
   const selectedThumbnail =
@@ -96,6 +100,22 @@ export function MapMetadataFields({
               className={disabled ? "pointer-events-none opacity-50" : undefined}
             />
           </div>
+
+          {setAutoZoomPlayRegion ? (
+            <label className={`flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 p-3 ${disabled ? "pointer-events-none opacity-50" : "cursor-pointer"}`}>
+              <input
+                type="checkbox"
+                checked={!!autoZoomPlayRegion}
+                disabled={disabled}
+                onChange={(event) => setAutoZoomPlayRegion(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-[#2ad18f]"
+              />
+              <span className="grid gap-1">
+                <span className="text-sm font-bold text-white">Auto-zoom minimap to play region</span>
+                <span className="text-xs font-semibold text-[#6b8b80]">Zooms the guess minimap to this map&apos;s location bounds when a round starts.</span>
+              </span>
+            </label>
+          ) : null}
         </div>
 
         <div className="grid content-start gap-2">

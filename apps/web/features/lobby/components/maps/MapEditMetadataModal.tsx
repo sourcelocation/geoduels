@@ -19,6 +19,7 @@ export function MapEditMetadataModal({ map, onClose, onSave }: MapEditMetadataMo
   const [mapThumbnailKey, setMapThumbnailKey] = useState(map.thumbnailKey);
   const [mapThumbnailCategory, setMapThumbnailCategory] = useState(thumbnailCategoryFromKey(map.thumbnailKey));
   const [mapThumbnailSearch, setMapThumbnailSearch] = useState("");
+  const [autoZoomPlayRegion, setAutoZoomPlayRegion] = useState(!!map.autoZoomPlayRegion);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const saveDisabled = saving || !mapName.trim();
@@ -35,6 +36,7 @@ export function MapEditMetadataModal({ map, onClose, onSave }: MapEditMetadataMo
         visibility: mapVisibility,
         thumbnailKey: mapThumbnailKey,
         thumbnailVariant: map.thumbnailVariant,
+        autoZoomPlayRegion,
       });
       onClose();
     } catch (err) {
@@ -74,6 +76,8 @@ export function MapEditMetadataModal({ map, onClose, onSave }: MapEditMetadataMo
         setMapThumbnailCategory={setMapThumbnailCategory}
         mapThumbnailSearch={mapThumbnailSearch}
         setMapThumbnailSearch={setMapThumbnailSearch}
+        autoZoomPlayRegion={autoZoomPlayRegion}
+        setAutoZoomPlayRegion={setAutoZoomPlayRegion}
       />
       {error ? <p className="text-xs font-semibold text-red-300">{error}</p> : null}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

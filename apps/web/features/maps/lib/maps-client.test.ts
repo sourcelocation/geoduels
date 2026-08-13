@@ -140,6 +140,7 @@ describe("updateMap", () => {
       difficulty: "hard",
       thumbnailKey: countryThumbnailRef,
       thumbnailVariant: 1,
+      autoZoomPlayRegion: false,
     })).resolves.toEqual(map);
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -153,6 +154,40 @@ describe("updateMap", () => {
           difficulty: "hard",
           thumbnailKey: countryThumbnailRef,
           thumbnailVariant: 1,
+          autoZoomPlayRegion: false,
+        }),
+      }),
+    );
+  });
+
+  it("sends autoZoomPlayRegion true when enabled", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    } as unknown as Response);
+
+    await updateMap(config, "token", "map-1", {
+      displayName: "Better Corners",
+      description: "Updated route notes",
+      visibility: "public",
+      difficulty: "hard",
+      thumbnailKey: countryThumbnailRef,
+      thumbnailVariant: 1,
+      autoZoomPlayRegion: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.test/v1/maps/map-1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          displayName: "Better Corners",
+          description: "Updated route notes",
+          visibility: "public",
+          difficulty: "hard",
+          thumbnailKey: countryThumbnailRef,
+          thumbnailVariant: 1,
+          autoZoomPlayRegion: true,
         }),
       }),
     );

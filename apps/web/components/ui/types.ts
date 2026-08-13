@@ -148,6 +148,13 @@ export type Snapshot = {
     roundTimerMode?: "none" | "pressure" | "fixed";
     roundTimeLimitMs?: number;
     pressureTimeLimitMs?: number;
+    autoZoomPlayRegion?: boolean;
+    playRegionBounds?: {
+      minLat: number;
+      maxLat: number;
+      minLng: number;
+      maxLng: number;
+    };
   };
   unranked?: boolean;
   state: string;

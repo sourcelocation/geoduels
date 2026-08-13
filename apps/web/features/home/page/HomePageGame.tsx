@@ -93,6 +93,7 @@ export default function HomePageGame({
           onGuess={actions.placeGuess}
           guess={game.guess}
           mode="guess"
+          autoZoomBounds={game.autoZoomBounds}
           guessAvatarUrl={game.userAvatar}
           guessAvatarFallback={
             game.participantsById[game.selfUserId]?.avatarFallback || "?"

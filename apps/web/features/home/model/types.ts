@@ -122,6 +122,7 @@ export type HomeGameView = {
   connectionIssue: string;
   modeName: string;
   mapName: string;
+  autoZoomBounds?: { minLat: number; maxLat: number; minLng: number; maxLng: number };
   backLabel?: "Back to lobby" | "Back to party";
   streetViewInteractive: boolean;
   ruleset: GameRuleset;

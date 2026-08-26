@@ -157,7 +157,7 @@ begin
     'role_granted', 'role_revoked', 'permanent_ban', 'temporary_ban',
     'warning', 'chat_mute', 'report_mute', 'report_unmute', 'unban',
     'refund', 'note', 'assign', 'status', 'dismiss', 'mark_inconclusive',
-    'abusive_reports'
+    'abusive_reports', 'signal_attached', 'verdict_submitted', 'badge_granted'
   );
 exception when duplicate_object then null;
 end $$;

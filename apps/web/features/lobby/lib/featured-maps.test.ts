@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CustomMap } from "../../maps/lib/maps-client";
-import { selectFeaturedOfficialMaps } from "./featured-maps";
+import { createSeededRandom, featuredMapDay, selectFeaturedOfficialMaps } from "./featured-maps";
 
 function map(id: string, overrides: Partial<CustomMap> = {}): CustomMap {
   return {
@@ -55,5 +55,14 @@ describe("selectFeaturedOfficialMaps", () => {
     expect(result).toHaveLength(2);
     expect(new Set(result.map((item) => item.id)).size).toBe(2);
     expect(result[0].id).toBe("large");
+  });
+
+  it("provides a stable random sequence for a UTC calendar day", () => {
+    const day = featuredMapDay(new Date("2026-08-27T23:59:59Z"));
+    const first = createSeededRandom(day);
+    const second = createSeededRandom(day);
+
+    expect([first(), first(), first()]).toEqual([second(), second(), second()]);
+    expect(featuredMapDay(new Date("2026-08-28T00:00:00Z"))).toBe("2026-08-28");
   });
 });

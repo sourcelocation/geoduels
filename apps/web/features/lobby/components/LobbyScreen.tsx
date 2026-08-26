@@ -31,7 +31,7 @@ import { LobbyScreenModals } from "./LobbyScreenModals";
 import { useLobbyScreenState, type LobbyPartyView } from "../hooks/useLobbyScreenState";
 import { useMapList } from "../../maps/lib/map-hooks";
 import { getRuntimeConfig } from "../../../lib/runtime-config";
-import { selectFeaturedOfficialMaps } from "../lib/featured-maps";
+import { createSeededRandom, featuredMapDay, selectFeaturedOfficialMaps } from "../lib/featured-maps";
 
 export type { LobbyContentRoute } from "../lib/lobby-ui";
 
@@ -173,9 +173,14 @@ export default function LobbyScreen({
     "",
     { enabled: contentRoute === "play" },
   );
+  const dailyFeaturedMapKey = featuredMapDay();
   const featuredOfficialMaps = React.useMemo(
-    () => selectFeaturedOfficialMaps(trendingMapsQuery.data || [], 10),
-    [trendingMapsQuery.data],
+    () => selectFeaturedOfficialMaps(
+      [...(trendingMapsQuery.data || [])].sort((left, right) => left.id.localeCompare(right.id)),
+      10,
+      createSeededRandom(`geoduels-featured-maps:${dailyFeaturedMapKey}`),
+    ),
+    [dailyFeaturedMapKey, trendingMapsQuery.data],
   );
 
   const newsPanel = (

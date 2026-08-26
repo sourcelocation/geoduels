@@ -161,9 +161,7 @@ export function MapCard({
         alt=""
         className="absolute inset-0 h-full w-full object-cover opacity-90 transition duration-emphasis group-hover:scale-105"
       />
-      <div className="absolute inset-0 bg-gradient-to-b from-status-success/10 via-surface-raised/25 to-surface-page/90" />
-      <div className="absolute inset-0 bg-gradient-to-r from-scrim via-transparent to-scrim" />
-      <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-scrim via-scrim to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-scrim via-transparent to-transparent" />
 
       <div className="absolute right-3 top-3 flex flex-wrap justify-end gap-2">
         {item.system || item.official ? (

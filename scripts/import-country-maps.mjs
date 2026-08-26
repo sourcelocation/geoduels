@@ -18,6 +18,7 @@ Options:
   --access-token <token>        Admin app access JWT (or GEODUELS_ADMIN_ACCESS_TOKEN)
   --import                      Write maps to the admin API; default is dry-run only
   --confirm-production          Required when --import targets a non-localhost API
+  --skip-errors                 Import ready maps while skipping blocked entries
   --concurrency <n>             Concurrent imports (default: ${DEFAULT_CONCURRENCY})
   --min-locations <n>           Minimum valid locations per map (default: ${DEFAULT_MIN_LOCATIONS})
   --report <file>               Write JSON validation/import report
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--import") options.import = true;
     else if (arg === "--confirm-production") options.confirmProduction = true;
+    else if (arg === "--skip-errors") options.skipErrors = true;
     else if (arg.startsWith("--")) {
       const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
       const value = argv[++i];
@@ -236,7 +238,12 @@ async function main() {
 
   const imports = [];
   if (options.import) {
-    if (failed.length > 0) throw new Error("Refusing to import while validation blockers remain");
+    if (failed.length > 0 && !options.skipErrors) {
+      throw new Error("Refusing to import while validation blockers remain (pass --skip-errors to continue with ready maps)");
+    }
+    if (failed.length > 0) {
+      console.log(`Skipping ${failed.length} blocked maps and importing ${ready.length} ready maps.`);
+    }
     await mapWithConcurrency(ready, options.concurrency, async (entry) => {
       console.log(`[import] ${entry.countryCode} ${entry.displayName} (${entry.counts.valid} locations)`);
       const result = await importEntry(entry, options);

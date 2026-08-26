@@ -60,6 +60,10 @@ npm run maps:country-import -- \
 
 Fix any `blocked` entries before importing.
 
+If some maps should be deferred while the ready maps are published, pass
+`--skip-errors` to import only validated entries. Blocked entries remain listed
+in the report and are not sent to the API.
+
 ## 4. Import To Production
 
 Use an admin app access token. Production writes require both `--import` and
@@ -71,6 +75,7 @@ npm run maps:country-import -- \
   --manifest datasets/generated/countries/country-maps.manifest.json \
   --api-base https://geoduels.io \
   --import \
+  --skip-errors \
   --confirm-production \
   --report datasets/generated/countries/import-report.prod.json
 ```

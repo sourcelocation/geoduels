@@ -201,12 +201,8 @@ const (
 
 var allQueuePools = []QueuePool{QueuePoolRegistered}
 var AllQueueVariants = []QueueVariant{
-	QueueMovingHidden,
-	QueueNoMoveHidden,
-	QueueNMPZHidden,
 	QueueMoving,
-	QueueNoMove,
-	QueueNMPZ,
+	QueueNoMoveHidden,
 }
 
 func NormalizeQueueVariant(value QueueVariant) QueueVariant {
@@ -218,11 +214,16 @@ func NormalizeQueueVariant(value QueueVariant) QueueVariant {
 	}
 }
 
+func IsRankedQueueVariant(value QueueVariant) bool {
+	return value == QueueMoving || value == QueueNoMoveHidden
+}
+
 func QueueVariantConfig(queue QueueVariant) contracts.MatchConfig {
 	queue = NormalizeQueueVariant(queue)
 	cfg := contracts.MatchConfig{
-		Ruleset:     contracts.RulesetMoving,
-		StreetNames: contracts.StreetNamesShown,
+		Ruleset:        contracts.RulesetMoving,
+		StreetNames:    contracts.StreetNamesShown,
+		MultiplierMode: contracts.MultiplierIndividual,
 	}
 	switch queue {
 	case QueueNoMove, QueueNoMoveHidden:
@@ -577,8 +578,9 @@ func matchFromTickets(opponent, self ticket) contracts.MatchFound {
 		Mode:     contracts.ModeDuel,
 		SeasonID: seasonID,
 		Config: contracts.NormalizeMatchConfig(contracts.MatchConfig{
-			Ruleset:     ruleset,
-			StreetNames: self.StreetNames,
+			Ruleset:        ruleset,
+			StreetNames:    self.StreetNames,
+			MultiplierMode: contracts.MultiplierIndividual,
 		}),
 		Players: []string{opponent.UserID, self.UserID},
 		Profiles: map[string]contracts.PlayerProfile{

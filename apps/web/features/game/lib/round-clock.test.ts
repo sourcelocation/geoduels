@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Snapshot } from '../../../components/ui/types';
+import type { Snapshot } from '../model/types';
 import { RoundClock } from './round-clock';
 
 function createLiveSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {

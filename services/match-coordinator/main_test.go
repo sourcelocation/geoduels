@@ -30,6 +30,14 @@ type recoverTestStore struct {
 	accountTypes   map[string]string
 }
 
+func (s *recoverTestStore) ListAdminGrantableBadges() []persistence.AdminBadgeDefinition {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.PlayerBadge, bool, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) UpsertIdentity(sub, email, googleName, avatarURL string) error {
 	panic("unexpected call")
 }
@@ -98,11 +106,23 @@ func (s *recoverTestStore) SearchPlayers(query string, limit int) ([]persistence
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) SetPlayerBan(userID, reason string, banned bool) error {
+func (s *recoverTestStore) SetPlayerBan(userID, reason, actorUserID string, banned bool) error {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) SetPlayerMute(userID, kind, reason, actorUserID string, until time.Time, muted bool) error {
 	panic("unexpected call")
 }
 
 func (s *recoverTestStore) BanPlayerForCheating(userID, reason, actorUserID string) (persistence.CheatingBanSummary, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) PreviewCommunityPardon(olderThan time.Duration) (persistence.CommunityPardonSummary, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) PardonBannedPlayers(olderThan time.Duration, actorUserID string) (persistence.CommunityPardonSummary, error) {
 	panic("unexpected call")
 }
 
@@ -168,10 +188,9 @@ func (s *recoverTestStore) ReplaceMapLocations(mapKey, displayName string, datas
 
 func (s *recoverTestStore) GetGameplayMapSettings() (contracts.GameplayMapSettings, error) {
 	return contracts.GameplayMapSettings{
-		RankedMovingMapID:       contracts.MapKeyMoving,
-		RankedNMPZMapID:         contracts.MapKeyNMPZ,
-		SingleplayerMovingMapID: contracts.MapKeyMoving,
-		SingleplayerNMPZMapID:   contracts.MapKeyNMPZ,
+		MovingMapID: contracts.MapKeyMoving,
+		NoMoveMapID: contracts.MapKeyNMPZ,
+		NMPZMapID:   contracts.MapKeyNMPZ,
 	}, nil
 }
 
@@ -179,10 +198,12 @@ func (s *recoverTestStore) ResolveGameplayMapID(mode contracts.MatchMode, rulese
 	if requestedMapID != "" {
 		return requestedMapID, nil
 	}
-	if contracts.NormalizeRuleset(ruleset) == contracts.RulesetNMPZ {
+	switch contracts.NormalizeRuleset(ruleset) {
+	case contracts.RulesetNoMove, contracts.RulesetNMPZ:
 		return contracts.MapKeyNMPZ, nil
+	default:
+		return contracts.MapKeyMoving, nil
 	}
-	return contracts.MapKeyMoving, nil
 }
 
 func (s *recoverTestStore) CreateAuthSession(userID, refreshTokenHash string, expiresAt time.Time, params persistence.AuthSessionParams) (persistence.RefreshTokenRecord, error) {
@@ -304,26 +325,6 @@ func (s *recoverTestStore) CreatePlayerReportSignal(params persistence.CreatePla
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) ListReviewTasks(view, actorUserID string, limit int) ([]persistence.ModerationReviewTaskSummary, error) {
-	panic("unexpected call")
-}
-
-func (s *recoverTestStore) GetIncidentDetail(incidentID int64) (persistence.ModerationIncidentDetail, error) {
-	panic("unexpected call")
-}
-
-func (s *recoverTestStore) ClaimReviewTask(taskID int64, actorUserID string) (persistence.ModerationIncidentDetail, error) {
-	panic("unexpected call")
-}
-
-func (s *recoverTestStore) ReleaseReviewTask(taskID int64, actorUserID string) (persistence.ModerationIncidentDetail, error) {
-	panic("unexpected call")
-}
-
-func (s *recoverTestStore) SubmitVerdict(incidentID int64, actorUserID string, input persistence.ModerationVerdictInput) (persistence.ModerationIncidentDetail, error) {
-	panic("unexpected call")
-}
-
 func (s *recoverTestStore) ListSubjectModerationProfile(userID string) (persistence.ModerationSubjectProfile, error) {
 	panic("unexpected call")
 }
@@ -332,7 +333,7 @@ func (s *recoverTestStore) ListModerationSignals(limit int) ([]persistence.Moder
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) ListEnforcementActions(limit int) ([]persistence.EnforcementActionSummary, error) {
+func (s *recoverTestStore) ListModerationLog(limit int) ([]persistence.ModerationAuditLogEntry, error) {
 	panic("unexpected call")
 }
 
@@ -388,12 +389,12 @@ func (s *recoverTestStore) IsSignupIPBanned(ipAddress string) (bool, error) {
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) GetRuntimeMatch(matchID string) (persistence.RuntimeMatch, bool, error) {
+func (s *recoverTestStore) GetRuntimeMatch(_ context.Context, matchID string) (persistence.RuntimeMatch, bool, error) {
 	rec, ok := s.runtimeMatches[matchID]
 	return rec, ok, nil
 }
 
-func (s *recoverTestStore) RecordRuntimeMatch(matchID, state string, ownerEpoch int64, terminal bool) error {
+func (s *recoverTestStore) RecordRuntimeMatch(_ context.Context, matchID, state string, ownerEpoch int64, terminal bool) error {
 	if s.runtimeMatches == nil {
 		s.runtimeMatches = map[string]persistence.RuntimeMatch{}
 	}
@@ -419,11 +420,23 @@ func (s *recoverTestStore) ListChatMessages(conversationID string, limit int) ([
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) ListChatMessagesForUser(conversationID, userID string, limit int) ([]persistence.ChatMessage, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) ActivePartyChatTeam(partyID, userID string) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
+func (s *recoverTestStore) ChatTeamForMatch(matchID, userID string) (string, bool, error) {
+	return "", false, nil
+}
+
 func (s *recoverTestStore) GetActiveChatRestriction(userID string) (persistence.ChatRestriction, bool, error) {
 	return persistence.ChatRestriction{}, false, nil
 }
 
-func (s *recoverTestStore) ExpireStaleRuntimeMatches(prefix string, olderThan time.Duration) error {
+func (s *recoverTestStore) ExpireStaleRuntimeMatches(_ context.Context, prefix string, olderThan time.Duration) error {
 	return nil
 }
 
@@ -431,7 +444,7 @@ func (s *recoverTestStore) ExpireOpenParties() error {
 	return nil
 }
 
-func (s *recoverTestStore) UpsertMatchSession(params persistence.MatchSessionUpsert) error {
+func (s *recoverTestStore) UpsertMatchSession(_ context.Context, params persistence.MatchSessionUpsert) error {
 	return nil
 }
 
@@ -463,7 +476,7 @@ func (s *recoverTestStore) GetPartyByInviteCode(inviteCode string) (contracts.Pa
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) MatchSessionSourceParty(matchID string) (string, string, bool, error) {
+func (s *recoverTestStore) MatchSessionSourceParty(_ context.Context, matchID string) (string, string, bool, error) {
 	if s.parties == nil {
 		return "", "", false, nil
 	}
@@ -813,20 +826,18 @@ func queueWSURL(serverURL string) string {
 	return "ws" + strings.TrimPrefix(serverURL, "http")
 }
 
-func TestParseQueueVariantsSupportsSixQueuesAndLegacyRulesets(t *testing.T) {
+func TestParseQueueVariantsSupportsRankedQueuesAndMigratesLegacyRulesets(t *testing.T) {
 	got := parseQueueVariants(
 		"moving_hidden,no_move_hidden,nmpz_hidden,moving,no_move,nmpz",
 		"",
 	)
-	if !reflect.DeepEqual(got, matchstore.AllQueueVariants) {
-		t.Fatalf("queues = %#v, want %#v", got, matchstore.AllQueueVariants)
+	want := []matchstore.QueueVariant{matchstore.QueueNoMoveHidden, matchstore.QueueMoving}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("queues = %#v, want %#v", got, want)
 	}
 
 	legacy := parseQueueVariants("", "moving,nmpz")
-	wantLegacy := []matchstore.QueueVariant{
-		matchstore.QueueMoving,
-		matchstore.QueueNMPZ,
-	}
+	wantLegacy := []matchstore.QueueVariant{matchstore.QueueMoving}
 	if !reflect.DeepEqual(legacy, wantLegacy) {
 		t.Fatalf("legacy queues = %#v, want %#v", legacy, wantLegacy)
 	}

@@ -1,4 +1,4 @@
-import type { Snapshot, UIPhase } from '../components/ui/types';
+import type { Snapshot, UIPhase } from '../features/game/model/types';
 
 type Params = {
   snapshot: Snapshot | null;

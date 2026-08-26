@@ -34,6 +34,7 @@ type Session struct {
 	EventSeq        int64
 	CreatedAt       time.Time
 	LastActivity    time.Time
+	now             func() time.Time
 }
 
 type RoundProvider func(matchID string, roundIndex int) (contracts.LocationPoint, error)
@@ -42,12 +43,23 @@ type Engine struct {
 	mu            sync.RWMutex
 	sessions      map[string]*Session
 	roundProvider RoundProvider
+	now           func() time.Time
 }
 
 func New(roundProvider RoundProvider) *Engine {
+	return NewWithClock(roundProvider, time.Now)
+}
+
+// NewWithClock gives replay and parity tests a deterministic authoritative
+// time source without forcing solo and competitive modes into one state type.
+func NewWithClock(roundProvider RoundProvider, now func() time.Time) *Engine {
+	if now == nil {
+		now = time.Now
+	}
 	return &Engine{
 		sessions:      map[string]*Session{},
 		roundProvider: roundProvider,
+		now:           now,
 	}
 }
 
@@ -72,7 +84,7 @@ func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profi
 	if name == "" {
 		name = playerID
 	}
-	now := time.Now()
+	now := e.now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, ok := e.sessions[matchID]; ok {
@@ -91,6 +103,7 @@ func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profi
 		EventSeq:        1,
 		CreatedAt:       now,
 		LastActivity:    now,
+		now:             e.now,
 	}
 	e.sessions[matchID] = session
 	return session, nil
@@ -125,7 +138,7 @@ func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot
 	if session.AwaitingAdvance {
 		return session.snapshot(), nil
 	}
-	now := time.Now()
+	now := e.now()
 	session.Guess = &Guess{Lat: g.Lat, Lng: g.Lng, Finalized: g.Finalize, Ts: now}
 	session.Player.LastGuessLat = g.Lat
 	session.Player.LastGuessLng = g.Lng
@@ -160,7 +173,7 @@ func (e *Engine) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot,
 	if session.CurrentIndex+1 >= maxRounds {
 		session.State = contracts.MatchEnded
 		session.AwaitingAdvance = false
-		session.LastActivity = time.Now()
+		session.LastActivity = e.now()
 		session.EventSeq++
 		return session.snapshot(), nil
 	}
@@ -172,7 +185,7 @@ func (e *Engine) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot,
 	session.CurrentIndex = nextIndex
 	session.CurrentLocation = nextLoc
 	session.RoundID = roundID(matchID, nextIndex+1)
-	session.RoundStartedAt = time.Now()
+	session.RoundStartedAt = e.now()
 	session.Guess = nil
 	session.LastRoundResult = nil
 	session.AwaitingAdvance = false
@@ -180,7 +193,7 @@ func (e *Engine) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot,
 	session.Player.LastGuessLat = 0
 	session.Player.LastGuessLng = 0
 	session.Player.HasGuess = false
-	session.LastActivity = time.Now()
+	session.LastActivity = e.now()
 	session.EventSeq++
 	return session.snapshot(), nil
 }
@@ -198,7 +211,7 @@ func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, erro
 	session.State = contracts.MatchEnded
 	session.AwaitingAdvance = false
 	session.Player.Finalized = false
-	session.LastActivity = time.Now()
+	session.LastActivity = e.now()
 	session.EventSeq++
 	return session.snapshot(), nil
 }
@@ -216,7 +229,7 @@ func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnaps
 		return nil, errors.New("player not in match")
 	}
 	session.Player.Disconnected = true
-	session.LastActivity = time.Now()
+	session.LastActivity = e.now()
 	session.EventSeq++
 	return session.snapshot(), nil
 }
@@ -232,7 +245,7 @@ func (e *Engine) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, 
 		return nil, errors.New("player not in match")
 	}
 	session.Player.Disconnected = false
-	session.LastActivity = time.Now()
+	session.LastActivity = e.now()
 	session.EventSeq++
 	return session.snapshot(), nil
 }
@@ -265,7 +278,7 @@ func (e *Engine) resolveRound(session *Session) {
 	session.RoundResults = append(session.RoundResults, session.LastRoundResult)
 	session.Guess = nil
 	session.AwaitingAdvance = true
-	session.LastActivity = time.Now()
+	session.LastActivity = e.now()
 	session.EventSeq++
 }
 
@@ -291,7 +304,7 @@ func (s *Session) snapshot() *contracts.MatchSnapshot {
 	players := map[string]contracts.PlayerState{
 		s.Player.UserID: *s.Player,
 	}
-	now := time.Now().UnixMilli()
+	now := s.now().UnixMilli()
 	phase := contracts.PhaseLive
 	roundPhase := contracts.RoundPhaseLive
 	currentRound := &contracts.RoundState{

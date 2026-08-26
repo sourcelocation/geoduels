@@ -120,6 +120,22 @@ func TestMapSearchPatternCapsLongTermsByRune(t *testing.T) {
 	}
 }
 
+func TestMapCommentsQueryCastsUUIDsForStringScanning(t *testing.T) {
+	body, err := os.ReadFile("map_comments.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(body)
+	for _, expression := range []string{"c.id::text", "c.map_id::text", "c.user_id::text"} {
+		if !strings.Contains(source, expression) {
+			t.Fatalf("map comments query must cast %s before scanning into strings", expression)
+		}
+	}
+	if !strings.Contains(source, "coalesce(c.user_id=nullif($2,'')::uuid or $3, false)") {
+		t.Fatal("map comments query must normalize anonymous can-delete results to false")
+	}
+}
+
 func TestArchiveCustomMapAdminOverrideIncludesOwnerlessMaps(t *testing.T) {
 	body, err := os.ReadFile("map_ingest.go")
 	if err != nil {

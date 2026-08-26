@@ -46,7 +46,7 @@ func (l Launcher) ValidateAssignment(ctx context.Context, assigned coordinator.A
 		_ = l.clearEnded(context.Background(), assigned)
 		return AssignmentInvalid
 	}
-	if l.matchEnded(assigned.MatchID) {
+	if l.matchEnded(ctx, assigned.MatchID) {
 		_ = l.Coord.ClearAssignment(context.Background(), assigned)
 		return AssignmentInvalid
 	}
@@ -95,6 +95,7 @@ func (l Launcher) ValidateAssignment(ctx context.Context, assigned coordinator.A
 func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFound) (coordinator.Assignment, error) {
 	found.Mode = sessionpolicy.NormalizeMode(found.Mode, found.MatchID)
 	found.Config = contracts.NormalizeMatchConfig(found.Config)
+	found.ReturnTarget = contracts.NormalizeMatchReturnTarget(found.ReturnTarget)
 	if assigned, ok, err := l.Coord.GetAssignmentByMatch(ctx, found.MatchID); err == nil && ok {
 		return assigned, nil
 	}
@@ -175,9 +176,10 @@ func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFou
 		Players:               append([]string(nil), found.Players...),
 		SourcePartyID:         found.SourcePartyID,
 		SourcePartyInviteCode: found.SourcePartyInviteCode,
+		ReturnTarget:          found.ReturnTarget,
 	}
 	if l.Persist != nil {
-		if err := l.Persist.UpsertMatchSession(persistence.MatchSessionUpsert{
+		if err := l.Persist.UpsertMatchSession(ctx, persistence.MatchSessionUpsert{
 			Found:       found,
 			NodeID:      target.NodeID,
 			NodeEpoch:   target.OwnerEpoch,
@@ -217,6 +219,14 @@ func (l Launcher) AssignedPayload(userID string, assigned coordinator.Assignment
 	if err != nil {
 		return contracts.MatchAssignedPayload{}, false, err
 	}
+	returnTarget := contracts.NormalizeMatchReturnTarget(assigned.ReturnTarget)
+	if returnTarget.Kind == contracts.MatchReturnParty {
+		// The durable target stores the stable party ID. Assignment delivery is
+		// already scoped to an authenticated participant, so decorate the live
+		// payload with the current route code without making that code durable
+		// navigation identity.
+		returnTarget.PartyInviteCode = assigned.SourcePartyInviteCode
+	}
 	return contracts.MatchAssignedPayload{
 		MatchID:               assigned.MatchID,
 		Mode:                  string(sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)),
@@ -226,22 +236,23 @@ func (l Launcher) AssignedPayload(userID string, assigned coordinator.Assignment
 		WSPath:                "/ws/" + assigned.PublicRoute,
 		SourcePartyID:         assigned.SourcePartyID,
 		SourcePartyInviteCode: assigned.SourcePartyInviteCode,
+		ReturnTarget:          returnTarget,
 	}, true, nil
 }
 
 func (l Launcher) clearEnded(ctx context.Context, assigned coordinator.Assignment) error {
 	_ = l.Coord.ClearAssignment(ctx, assigned)
 	if l.Persist != nil {
-		_ = l.Persist.RecordRuntimeMatch(assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
+		_ = l.Persist.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 	}
 	return nil
 }
 
-func (l Launcher) matchEnded(matchID string) bool {
+func (l Launcher) matchEnded(ctx context.Context, matchID string) bool {
 	if matchID == "" || l.Persist == nil {
 		return false
 	}
-	rec, ok, err := l.Persist.GetRuntimeMatch(matchID)
+	rec, ok, err := l.Persist.GetRuntimeMatch(ctx, matchID)
 	return err == nil && ok && rec.State == string(contracts.MatchEnded)
 }
 

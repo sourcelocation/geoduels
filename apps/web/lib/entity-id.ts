@@ -43,5 +43,5 @@ export function fromPublicEntityId(value: string): string | null {
 }
 
 export function normalizeEntityRouteId(value: string): string {
-  return fromPublicEntityId(value) || value.trim();
+  return fromPublicEntityId(value) || "";
 }

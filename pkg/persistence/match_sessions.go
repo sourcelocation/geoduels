@@ -15,14 +15,15 @@ import (
 
 const defaultMatchLeaseTTL = 45 * time.Second
 
-func (s *pgStore) UpsertMatchSession(params MatchSessionUpsert) error {
+func (s *pgStore) UpsertMatchSession(ctx context.Context, params MatchSessionUpsert) error {
 	found := params.Found
 	found.Mode = sessionpolicy.NormalizeMode(found.Mode, found.MatchID)
 	found.Config = contracts.NormalizeMatchConfig(found.Config)
+	found.ReturnTarget = contracts.NormalizeMatchReturnTarget(found.ReturnTarget)
 	if strings.TrimSpace(found.MatchID) == "" || len(found.Players) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -38,15 +39,18 @@ func (s *pgStore) UpsertMatchSession(params MatchSessionUpsert) error {
 		sourceKind = "solo"
 	}
 	cfgJSON, _ := json.Marshal(found.Config)
+	returnTarget := found.ReturnTarget
 	ranked := !found.Unranked && found.Mode == contracts.ModeDuel && found.SourcePartyID == ""
 	if _, err := tx.Exec(ctx, `
 		insert into match_sessions(
 			match_id, preset_id, mode, state, ranked, source_kind, source_party_id, source_party_invite_code,
-			node_id, node_epoch, public_route, config_json, map_id, lease_expires_at, updated_at
+			node_id, node_epoch, public_route, config_json, map_id, return_target_kind, return_target_map_id,
+			return_target_party_id, lease_expires_at, updated_at
 		)
 		values(
 			$1,$2,$3,'live',$4,$5,nullif($6,'')::uuid,nullif($7,''),
-			$8,$9,$10,$11::jsonb,nullif($12,'')::uuid,now()+$13::interval,now()
+			$8,$9,$10,$11::jsonb,nullif($12,'')::uuid,nullif($13,''),nullif($14,'')::uuid,
+			nullif($15,'')::uuid,now()+$16::interval,now()
 		)
 		on conflict (match_id) do update set
 			preset_id = excluded.preset_id,
@@ -61,12 +65,16 @@ func (s *pgStore) UpsertMatchSession(params MatchSessionUpsert) error {
 			public_route = excluded.public_route,
 			config_json = excluded.config_json,
 			map_id = excluded.map_id,
+			return_target_kind = excluded.return_target_kind,
+			return_target_map_id = excluded.return_target_map_id,
+			return_target_party_id = excluded.return_target_party_id,
 			lease_expires_at = case when match_sessions.state='ended'
 				then match_sessions.lease_expires_at else excluded.lease_expires_at end,
 			updated_at = now()
 	`, found.MatchID, string(presetID), string(found.Mode), ranked, sourceKind,
 		found.SourcePartyID, found.SourcePartyInviteCode, params.NodeID, params.NodeEpoch,
-		params.PublicRoute, string(cfgJSON), resolvedMapID(found), defaultMatchLeaseTTL.String()); err != nil {
+		params.PublicRoute, string(cfgJSON), resolvedMapID(found), string(returnTarget.Kind), returnTarget.MapID,
+		returnTarget.PartyID, defaultMatchLeaseTTL.String()); err != nil {
 		return err
 	}
 	for _, userID := range found.Players {
@@ -108,12 +116,12 @@ func (s *pgStore) UpsertMatchSession(params MatchSessionUpsert) error {
 	return tx.Commit(ctx)
 }
 
-func (s *pgStore) MatchSessionSourceParty(matchID string) (string, string, bool, error) {
+func (s *pgStore) MatchSessionSourceParty(ctx context.Context, matchID string) (string, string, bool, error) {
 	matchID = strings.TrimSpace(matchID)
 	if matchID == "" {
 		return "", "", false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	var partyID, inviteCode string
 	err := s.pool.QueryRow(ctx, `
@@ -128,6 +136,34 @@ func (s *pgStore) MatchSessionSourceParty(matchID string) (string, string, bool,
 		return "", "", false, err
 	}
 	return partyID, inviteCode, partyID != "", nil
+}
+
+// MatchSessionReturnTarget returns the persisted navigation intent. It is an
+// optional repository capability so older in-memory repositories can continue
+// serving match history while they are migrated.
+func (s *pgStore) MatchSessionReturnTarget(ctx context.Context, matchID string) (*contracts.MatchReturnTarget, bool, error) {
+	matchID = strings.TrimSpace(matchID)
+	if matchID == "" {
+		return nil, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	var kind, mapID, partyID string
+	err := s.pool.QueryRow(ctx, `
+		select coalesce(return_target_kind, 'home'), coalesce(return_target_map_id::text, ''),
+		       coalesce(return_target_party_id::text, '')
+		from match_sessions where match_id = $1
+	`, matchID).Scan(&kind, &mapID, &partyID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	target := contracts.NormalizeMatchReturnTarget(&contracts.MatchReturnTarget{
+		Kind: contracts.MatchReturnTargetKind(kind), MapID: mapID, PartyID: partyID,
+	})
+	return target, true, nil
 }
 
 func (s *pgStore) RenewMatchSessionLeases(nodeID string, ownerEpoch int64, matchIDs []string, ttl time.Duration) error {

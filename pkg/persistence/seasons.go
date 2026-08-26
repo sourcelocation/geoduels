@@ -119,6 +119,41 @@ func advanceRankedSeasonTx(ctx context.Context, tx pgx.Tx, previousSeasonID, nex
 	if previousSeasonID == nextSeasonID {
 		return 0, errors.New("season is already active")
 	}
+	// Finalize the outgoing season once, while the season settings row is locked.
+	// This is the authoritative trigger for the repeatable top-finish badge.
+	rows, err := tx.Query(ctx, `
+		with ranked as (
+			select r.user_id,
+				row_number() over (order by r.mmr desc, r.updated_at asc, r.user_id asc)::int as rank
+			from ranks r join users u on u.id = r.user_id
+			where r.mode = $1 and r.season_id = $2
+				and coalesce(u.account_type, 'registered') <> 'guest'
+				and not coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false)
+		)
+		select user_id from ranked where rank between 1 and 100
+	`, modeDuel, previousSeasonID)
+	if err != nil {
+		return 0, err
+	}
+	var finishers []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		finishers = append(finishers, userID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	for _, userID := range finishers {
+		if _, err := awardTopFinishTx(ctx, tx, userID); err != nil {
+			return 0, err
+		}
+	}
 	seedTag, err := tx.Exec(ctx, `
 		insert into ranks(user_id, mode, season_id, mmr, rd)
 		select u.id, $1, $2, $3, $4

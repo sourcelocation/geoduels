@@ -1,22 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { RESULT_ANIMATION_CONFIG } from "../../../components/ui/round-result-animation-config";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { RESULT_ANIMATION_CONFIG } from "../../game/lib/round-result-animation-config";
 import { getRuntimeConfig } from "../../../lib/runtime-config";
 import type { AuthSessionSnapshot } from "../../auth/session";
 import { selectActiveChatConversationId } from "../../chat/lib/chat-scope";
 import {
   requestDeleteAccount,
-  requestDiscordStart,
-  requestGoogleStart,
-  requestGuestSession,
-  requestLogout,
   requestMe,
   requestMatchReport,
-  requestUnlinkAuthProvider,
   requestUserNotifications,
   requestSupportDonation,
-  requestSession,
-  requestRefreshSession,
   requestUpdateSelectedBadge,
   requestUpdateNickname,
   markUserNotificationRead,
@@ -29,17 +22,17 @@ import {
 import { getHomeRuntime, startHomeRuntime } from "../state/home-runtime";
 import { deriveHomeModel } from "./derive-home-model";
 import type { HomeModel } from "./types";
-import type { ChatEmote } from "../../../components/ui/types";
+import type { ChatEmote } from "../../chat/model/types";
 import { useLobbyData } from "./useLobbyData";
 import {
   fetchResumableSession,
   type MatchConfig,
 } from "../../matchmaking/lib/queue-client";
+import { useHotkey } from "../../hotkeys/hooks/use-hotkey";
+import { getAuthGateway } from "../../auth/auth-gateway";
 
 import {
   buildSessionFromAuthResponse,
-  clearGoogleAuthParams,
-  currentReturnTo,
   getErrorMessage,
   type AuthResponse,
   type GuestVerificationView,
@@ -68,6 +61,7 @@ export function useHomeModel(options?: {
   onPartyLeft?: () => void;
 }): HomeModel {
   const config = getRuntimeConfig();
+  const authGateway = getAuthGateway(config);
   const runtimeRef = useRef(getHomeRuntime(config));
   const { sessionController, matchController, matchRouteController, gameController, partyController, chatController, sfxController } =
     runtimeRef.current;
@@ -162,16 +156,6 @@ export function useHomeModel(options?: {
     staleTime: 60_000,
   });
 
-  const refreshSessionMutation = useMutation({
-    mutationFn: () => requestRefreshSession(config),
-  });
-  const sessionMutation = useMutation({
-    mutationFn: () => requestSession(config),
-  });
-  const guestSessionMutation = useMutation({
-    mutationFn: ({ turnstileToken }: { turnstileToken?: string }) =>
-      requestGuestSession(config, turnstileToken),
-  });
   const updateNicknameMutation = useMutation({
     mutationFn: ({
       accessToken,
@@ -190,37 +174,6 @@ export function useHomeModel(options?: {
       badgeId: string;
     }) => requestUpdateSelectedBadge(config, accessToken, badgeId),
   });
-  const googleStartMutation = useMutation({
-    mutationFn: ({
-      accessToken,
-      intent,
-      returnTo,
-    }: {
-      accessToken?: string;
-      intent?: "signin" | "link" | "upgrade_guest";
-      returnTo?: string;
-    }) => requestGoogleStart(config, { accessToken, intent, returnTo }),
-  });
-  const discordStartMutation = useMutation({
-    mutationFn: ({
-      accessToken,
-      intent,
-      returnTo,
-    }: {
-      accessToken?: string;
-      intent?: "signin" | "link" | "upgrade_guest";
-      returnTo?: string;
-    }) => requestDiscordStart(config, { accessToken, intent, returnTo }),
-  });
-  const unlinkAuthProviderMutation = useMutation({
-    mutationFn: ({
-      accessToken,
-      provider,
-    }: {
-      accessToken: string;
-      provider: "google" | "discord";
-    }) => requestUnlinkAuthProvider(config, accessToken, provider),
-  });
   const deleteAccountMutation = useMutation({
     mutationFn: ({ accessToken }: { accessToken: string }) =>
       requestDeleteAccount(config, accessToken),
@@ -230,89 +183,7 @@ export function useHomeModel(options?: {
       requestSupportDonation(config, accessToken),
   });
 
-  async function bootstrapSession() {
-    const data = await sessionMutation.mutateAsync();
-    if (!data) {
-      return null;
-    }
-    const current = sessionController.getState();
-    const nextSession = buildSessionFromAuthResponse(data, {
-      userId: current.userId,
-      nicknameInput: current.nicknameInput,
-    });
-    sessionController.applySessionSnapshot(nextSession, {
-      userEmail:
-        typeof data.user?.email === "string"
-          ? data.user.email
-          : current.userEmail,
-      displayName:
-        typeof data.user?.display_name === "string" && data.user.display_name
-          ? data.user.display_name
-          : current.displayName,
-      userAvatar:
-        typeof data.user?.avatar_url === "string"
-          ? data.user.avatar_url
-          : current.userAvatar,
-      isGuest:
-        typeof data.user?.isGuest === "boolean"
-          ? data.user.isGuest
-          : current.isGuest,
-      isAdmin:
-        typeof data.user?.isAdmin === "boolean"
-          ? data.user.isAdmin
-          : current.isAdmin,
-      isModerator:
-        typeof data.user?.isModerator === "boolean"
-          ? data.user.isModerator
-          : current.isModerator,
-      leaderboard: current.leaderboard,
-      authLoading: false,
-      authError: "",
-    });
-    return nextSession;
-  }
-
-  async function refreshSession() {
-    const current = sessionController.getState();
-    const data = await refreshSessionMutation.mutateAsync();
-    if (!data) {
-      return null;
-    }
-    const nextSession = buildSessionFromAuthResponse(data, {
-      userId: current.userId,
-      nicknameInput: current.nicknameInput,
-    });
-    sessionController.applySessionSnapshot(nextSession, {
-      userEmail:
-        typeof data.user?.email === "string"
-          ? data.user.email
-          : current.userEmail,
-      displayName:
-        typeof data.user?.display_name === "string" && data.user.display_name
-          ? data.user.display_name
-          : current.displayName,
-      userAvatar:
-        typeof data.user?.avatar_url === "string"
-          ? data.user.avatar_url
-          : current.userAvatar,
-      isGuest:
-        typeof data.user?.isGuest === "boolean"
-          ? data.user.isGuest
-          : current.isGuest,
-      isAdmin:
-        typeof data.user?.isAdmin === "boolean"
-          ? data.user.isAdmin
-          : current.isAdmin,
-      isModerator:
-        typeof data.user?.isModerator === "boolean"
-          ? data.user.isModerator
-          : current.isModerator,
-      leaderboard: current.leaderboard,
-    });
-    return nextSession;
-  }
-
-  function requestGuestVerificationToken(): Promise<string> {
+  const requestGuestVerificationToken = useCallback((): Promise<string> => {
     if (!config.turnstileSiteKey) {
       return Promise.resolve("");
     }
@@ -329,7 +200,7 @@ export function useHomeModel(options?: {
         resetKey: current.resetKey + 1,
       }));
     });
-  }
+  }, [config.turnstileSiteKey]);
 
   function submitGuestVerificationToken(token: string) {
     const resolver = guestVerificationResolverRef.current;
@@ -368,49 +239,15 @@ export function useHomeModel(options?: {
   }
 
   async function ensurePlayableSession() {
-    const currentSession = sessionController.getSessionSnapshot();
-    if (currentSession) {
-      return currentSession;
-    }
-    const current = sessionController.getState();
-    if (current.nicknameRequired) {
-      return null;
-    }
     sessionController.setAuthPending({
       authLoading: true,
       authError: "",
       nicknameError: "",
     });
     try {
-      const bootstrapped = await sessionController.bootstrapSession();
-      if (bootstrapped) {
-        sessionController.setAuthPending({ authLoading: false, authError: "" });
-        return bootstrapped;
-      }
-      const turnstileToken = await requestGuestVerificationToken();
-      const data = await guestSessionMutation.mutateAsync({ turnstileToken });
-      const name = data.suggestedNickname || "Guest";
-      const nextSession: AuthSessionSnapshot = {
-        userId: data.user?.id || "",
-        accessToken: data.accessToken || "",
-        nicknameRequired: !!data.nicknameRequired,
-        nicknameInput: data.suggestedNickname || name,
-      };
-      sessionController.applySessionSnapshot(nextSession, {
-        displayName: name,
-        isGuest:
-          typeof data.user?.isGuest === "boolean" ? data.user.isGuest : true,
-        isAdmin:
-          typeof data.user?.isAdmin === "boolean" ? data.user.isAdmin : false,
-        isModerator:
-          typeof data.user?.isModerator === "boolean"
-            ? data.user.isModerator
-            : false,
-        leaderboard: null,
-        nicknameError: "",
-        authLoading: false,
-        authError: "",
-      });
+      const nextSession = await sessionController.getPlayableSession();
+      if (!nextSession) throw new Error("Could not start a playable session.");
+      sessionController.setAuthPending({ authLoading: false, authError: "" });
       setGuestVerification((current) => ({
         ...current,
         open: false,
@@ -445,81 +282,16 @@ export function useHomeModel(options?: {
   }, []);
 
   useEffect(() => {
-    sessionController.setNetworkHandlers({
-      bootstrapSession,
-      refreshSession,
-      getPlayableSession: ensurePlayableSession,
-    });
-  }, [sessionController]);
-
-  useEffect(() => {
-    if (isMatchRoute) {
-      sessionController.setAuthPending({ authLoading: false });
-      return;
-    }
-    let cancelled = false;
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      const googleAuth = url.searchParams.get("googleAuth");
-      const genericAuth = url.searchParams.get("auth");
-      if (googleAuth === "success" || genericAuth === "success") {
-        clearGoogleAuthParams(url);
-        window.history.replaceState({}, "", url.toString());
-        sessionController.setAuthPending({ authLoading: true, authError: "" });
-        void (async () => {
-          try {
-            await sessionController.bootstrapSession();
-          } catch {
-            if (cancelled) return;
-            sessionController.setAuthPending({
-              authLoading: false,
-              authError:
-                "Sign-in completed, but restoring the session failed. Please try again.",
-            });
-          }
-        })();
-        return () => {
-          cancelled = true;
-        };
-      }
-      if (googleAuth === "error" || genericAuth === "error") {
-        const errorMessage =
-          url.searchParams.get("googleAuthError") ||
-          url.searchParams.get("authError") ||
-          "Login failed";
-        clearGoogleAuthParams(url);
-        window.history.replaceState({}, "", url.toString());
-        sessionController.setAuthPending({
-          authLoading: false,
-          authError: errorMessage,
-        });
-      }
-    }
-    if (sessionController.getState().userId) {
-      return;
-    }
-    sessionController.setAuthPending({ authLoading: true, authError: "" });
-    void (async () => {
-      try {
-        const bootstrapped = await sessionController.bootstrapSession();
-        if (!bootstrapped) {
-          sessionController.setAuthPending({ authLoading: false });
-        }
-      } catch {
-        if (cancelled) return;
-        sessionController.setAuthPending({ authLoading: false });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isMatchRoute, sessionController]);
+    const gateway = getAuthGateway(config);
+    gateway.setGuestVerification(requestGuestVerificationToken);
+    return () => gateway.setGuestVerification(null);
+  }, [config, requestGuestVerificationToken]);
 
   useEffect(() => {
     if (isMatchRoute || !partyInviteCode) {
       return;
     }
-    void partyController.ensureParty(partyInviteCode);
+    void partyController.admitParty(partyInviteCode);
   }, [
     auth.accessToken,
     auth.userId,
@@ -630,19 +402,14 @@ export function useHomeModel(options?: {
     changelogSlug: lobbyData.changelogSlug,
     changelogUpdatedAt: lobbyData.changelogUpdatedAt,
   });
-  const partyMember = partyState.snapshot?.members.find(
-    (member) => member.userId === auth.userId,
-  );
   const partyBusy = [
-    "creating",
-    "joining",
-    "connecting",
+    "admitting",
     "reconnecting",
     "leaving",
   ].includes(partyState.status);
   const partyStatus =
     partyInviteCode && !isMatchRoute && partyState.status === "idle"
-      ? "connecting"
+      ? "admitting"
       : partyState.status;
   const view = {
     ...baseView,
@@ -661,8 +428,9 @@ export function useHomeModel(options?: {
           partyState.snapshot?.inviteCode ||
           partyInviteCode ||
           "",
-        isMember: !!partyMember,
-        isOwner: !!partyState.snapshot && partyState.snapshot.ownerUserId === auth.userId,
+        isOwner:
+          partyState.self?.role === "owner" ||
+          (!!partyState.self && partyState.snapshot?.ownerUserId === partyState.self.userId),
         busy: partyBusy,
         error: partyState.error,
       },
@@ -672,6 +440,10 @@ export function useHomeModel(options?: {
       messages: chatState.messages,
       selfUserId: auth.userId,
       error: chatState.error,
+      teamId:
+        match.snapshot?.mode === "team_duel" && baseView.game.uiPhase !== "match_end"
+          ? match.snapshot.players[auth.userId]?.teamId || ""
+          : "",
     },
   };
 
@@ -694,30 +466,15 @@ export function useHomeModel(options?: {
     config,
   ]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== "Space" || event.repeat) return;
-      const target = event.target as HTMLElement | null;
-      const isTyping =
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT" ||
-          target.isContentEditable);
-      if (isTyping) return;
-      if (!view.game.canFinalizeGuess && !view.game.canAdvanceRound) return;
-      event.preventDefault();
-      if (view.game.canFinalizeGuess) {
-        gameController.finalizeGuess();
-        return;
-      }
-      if (view.game.canAdvanceRound) {
-        gameController.advanceRound();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [view.game.canFinalizeGuess, view.game.canAdvanceRound, gameController]);
+  useHotkey({
+    action: "gameplay.primary",
+    scope: "gameplay",
+    enabled: view.game.canFinalizeGuess || view.game.canAdvanceRound,
+    run: () => {
+      if (view.game.canFinalizeGuess) gameController.finalizeGuess();
+      else if (view.game.canAdvanceRound) gameController.advanceRound();
+    },
+  });
 
   const submitRequiredNickname = async () => {
     const nick = sessionController.getState().nicknameInput.trim();
@@ -847,11 +604,8 @@ export function useHomeModel(options?: {
     }
   };
 
-  const devLogin = () => ensurePlayableSession();
-
   const logout = () => {
-    void requestLogout(config);
-    sessionController.clearAuthSession();
+    void authGateway.logout();
   };
 
   const deleteAccount = async () => {
@@ -871,164 +625,13 @@ export function useHomeModel(options?: {
         throw new Error("Please sign in again.");
       }
       await deleteAccountMutation.mutateAsync({ accessToken: session.accessToken });
-      sessionController.clearAuthSession();
+      authGateway.clear();
     } catch (error) {
       sessionController.setAuthPending({
         authLoading: false,
         authError: getErrorMessage(error, "Failed to delete account"),
       });
       throw error;
-    }
-  };
-
-  const triggerGoogleSignIn = async () => {
-    if (typeof window === "undefined") return;
-    if (
-      !config.googleClientId ||
-      !sessionController.getState().googleSignInEnabled
-    ) {
-      return;
-    }
-    sessionController.setAuthPending({ authLoading: true, authError: "" });
-    try {
-      const data = await googleStartMutation.mutateAsync({
-        intent: "signin",
-        returnTo: currentReturnTo(),
-      });
-      if (!data.authURL) {
-        throw new Error("Missing Google auth URL");
-      }
-      window.location.assign(data.authURL);
-    } catch (error) {
-      sessionController.setAuthPending({
-        authLoading: false,
-        authError: getErrorMessage(error, "Failed to start Google sign-in"),
-      });
-    }
-  };
-
-  const triggerDiscordSignIn = async () => {
-    if (typeof window === "undefined") return;
-    if (!config.discordClientId) {
-      return;
-    }
-    sessionController.setAuthPending({ authLoading: true, authError: "" });
-    try {
-      const data = await discordStartMutation.mutateAsync({
-        intent: "signin",
-        returnTo: currentReturnTo(),
-      });
-      if (!data.authURL) {
-        throw new Error("Missing Discord auth URL");
-      }
-      window.location.assign(data.authURL);
-    } catch (error) {
-      sessionController.setAuthPending({
-        authLoading: false,
-        authError: getErrorMessage(error, "Failed to start Discord sign-in"),
-      });
-    }
-  };
-
-  const startProviderIntent = async (
-    provider: "google" | "discord",
-    intent: "link" | "upgrade_guest",
-  ) => {
-    if (typeof window === "undefined") return;
-    if (provider === "google" && !config.googleClientId) return;
-    if (provider === "discord" && !config.discordClientId) return;
-    sessionController.setAuthPending({ authLoading: true, authError: "" });
-    try {
-      const session = await sessionController.ensureFreshSession(60_000, {
-        allowNicknameRequired: true,
-      });
-      if (!session?.accessToken) {
-        throw new Error(
-          intent === "link"
-            ? "Sign in before linking another method."
-            : "Sign in as a guest before saving progress.",
-        );
-      }
-      const mutation =
-        provider === "google" ? googleStartMutation : discordStartMutation;
-      const data = await mutation.mutateAsync({
-        accessToken: session.accessToken,
-        intent,
-        returnTo: currentReturnTo(),
-      });
-      if (!data.authURL) {
-        throw new Error(`Missing ${provider} auth URL`);
-      }
-      window.location.assign(data.authURL);
-    } catch (error) {
-      sessionController.setAuthPending({
-        authLoading: false,
-        authError: getErrorMessage(
-          error,
-          intent === "link"
-            ? "Failed to link sign-in method"
-            : "Failed to save progress",
-        ),
-      });
-    }
-  };
-
-  const linkAuthProvider = (provider: "google" | "discord") =>
-    startProviderIntent(provider, "link");
-
-  const upgradeGuestWithProvider = (provider: "google" | "discord") =>
-    startProviderIntent(provider, "upgrade_guest");
-
-  const unlinkAuthProvider = async (provider: "google" | "discord") => {
-    const current = sessionController.getState();
-    if (!current.accessToken) {
-      sessionController.setAuthPending({
-        authError: "Please sign in again.",
-      });
-      return;
-    }
-    sessionController.setAuthPending({ authLoading: true, authError: "" });
-    try {
-      const session = await sessionController.ensureFreshSession(60_000, {
-        allowNicknameRequired: true,
-      });
-      if (!session?.accessToken) {
-        throw new Error("Please sign in again.");
-      }
-      const data = await unlinkAuthProviderMutation.mutateAsync({
-        accessToken: session.accessToken,
-        provider,
-      });
-      const latest = sessionController.getState();
-      const nextSession = buildSessionFromAuthResponse(data, {
-        userId: latest.userId,
-        nicknameInput: latest.nicknameInput,
-      });
-      sessionController.applySessionSnapshot(nextSession, {
-        userEmail:
-          typeof data.user?.email === "string" ? data.user.email : latest.userEmail,
-        displayName:
-          typeof data.user?.display_name === "string" && data.user.display_name
-            ? data.user.display_name
-            : latest.displayName,
-        userAvatar:
-          typeof data.user?.avatar_url === "string" ? data.user.avatar_url : latest.userAvatar,
-        isGuest:
-          typeof data.user?.isGuest === "boolean" ? data.user.isGuest : latest.isGuest,
-        isAdmin:
-          typeof data.user?.isAdmin === "boolean" ? data.user.isAdmin : latest.isAdmin,
-        isModerator:
-          typeof data.user?.isModerator === "boolean"
-            ? data.user.isModerator
-            : latest.isModerator,
-        authLoading: false,
-        authError: "",
-      });
-    } catch (error) {
-      sessionController.setAuthPending({
-        authLoading: false,
-        authError: getErrorMessage(error, "Failed to unlink sign-in method"),
-      });
     }
   };
 
@@ -1148,12 +751,12 @@ export function useHomeModel(options?: {
     }
   };
 
-  const sendChatMessage = (body: string) => {
-    return chatController.sendMessage(body);
+  const sendChatMessage = (body: string, audience: "all" | "team" = "all") => {
+    return chatController.sendMessage(body, audience);
   };
 
-  const sendChatEmote = (emote: ChatEmote) => {
-    return chatController.sendEmote(emote);
+  const sendChatEmote = (emote: ChatEmote, audience: "all" | "team" = "all") => {
+    return chatController.sendEmote(emote, audience);
   };
 
   return {
@@ -1161,6 +764,7 @@ export function useHomeModel(options?: {
     actions: {
       joinQueue: matchController.joinQueue,
       startSingleplayer: matchController.startSingleplayer,
+      clearSingleplayerError: matchController.clearSingleplayerError,
       cancelQueue: matchController.cancelQueue,
       createParty,
       joinParty,
@@ -1171,6 +775,7 @@ export function useHomeModel(options?: {
       updatePartySettings,
       switchPartyTeam,
       placeGuess: gameController.placeGuess,
+      pingTeam: gameController.pingTeam,
       finalizeGuess: gameController.finalizeGuess,
       advanceRound: gameController.advanceRound,
       forfeitMatch: gameController.forfeitMatch,
@@ -1178,12 +783,6 @@ export function useHomeModel(options?: {
       sendChatMessage,
       sendChatEmote,
       reportPlayer,
-      devLogin,
-      triggerGoogleSignIn,
-      triggerDiscordSignIn,
-      linkAuthProvider,
-      upgradeGuestWithProvider,
-      unlinkAuthProvider,
       loadLeaderboard: lobbyData.loadLeaderboard,
       clearAuthSession: logout,
       deleteAccount,

@@ -1,4 +1,4 @@
-import type { Snapshot } from '../../../components/ui/types';
+import type { Snapshot } from '../model/types';
 
 type RoundClockState = {
   roundMSLeft: number;

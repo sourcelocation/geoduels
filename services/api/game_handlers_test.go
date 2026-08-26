@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,8 @@ type matchAccessTestStore struct {
 	persistence.Store
 	snapshot []byte
 }
+
+const testMatchID = "00000000-0000-7000-8000-000000000101"
 
 type leaderboardTestStore struct {
 	persistence.Store
@@ -44,7 +47,7 @@ func (s *leaderboardTestStore) GetLeaderboardOverview(userID, mode, seasonID str
 }
 
 func (s *matchAccessTestStore) GetFinalMatchSnapshot(matchID string) ([]byte, bool, error) {
-	if matchID != "match-1" || len(s.snapshot) == 0 {
+	if matchID != testMatchID || len(s.snapshot) == 0 {
 		return nil, false, nil
 	}
 	return s.snapshot, true, nil
@@ -54,11 +57,11 @@ func (s *matchAccessTestStore) GetIdentity(sub string) (persistence.Identity, er
 	return persistence.Identity{Sub: sub}, nil
 }
 
-func (s *matchAccessTestStore) GetRuntimeMatch(matchID string) (persistence.RuntimeMatch, bool, error) {
+func (s *matchAccessTestStore) GetRuntimeMatch(_ context.Context, matchID string) (persistence.RuntimeMatch, bool, error) {
 	return persistence.RuntimeMatch{}, false, nil
 }
 
-func (s *matchAccessTestStore) MatchSessionSourceParty(matchID string) (string, string, bool, error) {
+func (s *matchAccessTestStore) MatchSessionSourceParty(_ context.Context, matchID string) (string, string, bool, error) {
 	return "", "", false, nil
 }
 
@@ -96,7 +99,7 @@ func TestLeaderboardIncludesActiveSeasonResetTime(t *testing.T) {
 
 func TestPublicFinalMatchSnapshotIsAvailableToAnyViewer(t *testing.T) {
 	raw, err := json.Marshal(contracts.MatchSnapshot{
-		MatchID: "match-1",
+		MatchID: testMatchID,
 		State:   contracts.MatchEnded,
 		Players: map[string]contracts.PlayerState{
 			"player-1": {UserID: "player-1"},
@@ -108,7 +111,7 @@ func TestPublicFinalMatchSnapshotIsAvailableToAnyViewer(t *testing.T) {
 	}
 
 	a := &api{store: &matchAccessTestStore{snapshot: raw}}
-	snapshot, found, err := a.getPublicFinalMatchSnapshot("match-1")
+	snapshot, found, err := a.getPublicFinalMatchSnapshot(testMatchID)
 	if err != nil {
 		t.Fatalf("get snapshot: %v", err)
 	}
@@ -118,8 +121,9 @@ func TestPublicFinalMatchSnapshotIsAvailableToAnyViewer(t *testing.T) {
 }
 
 func TestMatchRouteReturnsPublicHistoryWithoutAuth(t *testing.T) {
+	const matchID = testMatchID
 	raw, err := json.Marshal(contracts.MatchSnapshot{
-		MatchID: "match-1",
+		MatchID: matchID,
 		State:   contracts.MatchEnded,
 		Phase:   contracts.PhaseEnded,
 		Players: map[string]contracts.PlayerState{
@@ -132,8 +136,8 @@ func TestMatchRouteReturnsPublicHistoryWithoutAuth(t *testing.T) {
 	}
 
 	a := &api{store: &matchAccessTestStore{snapshot: raw}}
-	req := httptest.NewRequest(http.MethodGet, "/v1/matches/match-1/route", nil)
-	req = mux.SetURLVars(req, map[string]string{"id": "match-1"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/matches/"+matchID+"/route", nil)
+	req = mux.SetURLVars(req, map[string]string{"id": matchID})
 	rec := httptest.NewRecorder()
 
 	a.matchRoute(rec, req)
@@ -154,7 +158,7 @@ func TestMatchRouteReturnsPublicHistoryWithoutAuth(t *testing.T) {
 }
 
 func TestMatchSessionAllowsGuestAssignedToLiveMatch(t *testing.T) {
-	const matchID = "match-1"
+	const matchID = testMatchID
 	appSecret := []byte("01234567890123456789012345678901")
 	ticketSecret := []byte("abcdefghijklmnopqrstuvwxyz012345")
 

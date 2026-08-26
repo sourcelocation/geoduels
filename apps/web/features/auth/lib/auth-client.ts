@@ -4,15 +4,38 @@ import type { LeaderboardSummary } from "../controllers/session-controller";
 
 export type OAuthIntent = "signin" | "link" | "upgrade_guest";
 
-export async function requestSession(config: RuntimeConfig) {
+export type AuthSessionPayload = {
+  accessToken?: string;
+  nicknameRequired?: boolean;
+  authMigrationRequired?: boolean;
+  recoveryAvailable?: boolean;
+  linkedProviders?: string[];
+  canPlay?: boolean;
+  suggestedNickname?: string;
+  user?: {
+    id?: string;
+    email?: string;
+    display_name?: string;
+    avatar_url?: string;
+    isGuest?: boolean;
+    isAdmin?: boolean;
+    isModerator?: boolean;
+  };
+};
+
+export class AuthSessionError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); }
+}
+
+export async function requestSession(config: RuntimeConfig): Promise<AuthSessionPayload | null> {
   const resp = await apiFetch(config, "/v1/auth/session", {
     credentials: "include",
   });
-  if (resp.status === 204) {
+  if (resp.status === 401) {
     return null;
   }
   if (!resp.ok) {
-    return null;
+    throw new AuthSessionError(resp.status, await readError(resp, "Session restore failed"));
   }
   return resp.json();
 }
@@ -20,7 +43,7 @@ export async function requestSession(config: RuntimeConfig) {
 export async function requestGuestSession(
   config: RuntimeConfig,
   turnstileToken?: string,
-) {
+): Promise<AuthSessionPayload> {
   const resp = await apiFetch(config, "/v1/auth/guest", {
     method: "POST",
     credentials: "include",
@@ -37,13 +60,14 @@ export async function requestGuestSession(
   return resp.json();
 }
 
-export async function requestRefreshSession(config: RuntimeConfig) {
+export async function requestRefreshSession(config: RuntimeConfig): Promise<AuthSessionPayload | null> {
   const resp = await apiFetch(config, "/v1/auth/refresh", {
     method: "POST",
     credentials: "include",
   });
+  if (resp.status === 401) return null;
   if (!resp.ok) {
-    return null;
+    throw new AuthSessionError(resp.status, await readError(resp, "Session refresh failed"));
   }
   return resp.json();
 }
@@ -73,24 +97,45 @@ export type UserNotification = {
     };
     refundDelta?: number;
     matchId?: string;
+    requestId?: string;
+    invitationId?: string;
+    actorUserId?: string;
     cheaterUserId?: string;
     mmrBefore?: number;
     mmrAfter?: number;
   };
+  readAt?: string;
   createdAt: string;
 };
 
 export async function requestUserNotifications(
   config: RuntimeConfig,
   accessToken: string,
+  filter: "unread" | "all" = "unread",
+  options?: { limit?: number; beforeId?: number },
 ): Promise<{ notifications: UserNotification[] }> {
-  const resp = await apiFetch(config, "/v1/me/notifications", {
+  const query = new URLSearchParams();
+  if (filter === "all") query.set("filter", "all");
+  if (options?.limit) query.set("limit", String(options.limit));
+  if (options?.beforeId) query.set("beforeId", String(options.beforeId));
+  const suffix = query.size ? `?${query.toString()}` : "";
+  const resp = await apiFetch(config, `/v1/me/notifications${suffix}`, {
     headers: authHeaders(accessToken),
   });
   if (!resp.ok) {
     return { notifications: [] };
   }
   return resp.json();
+}
+
+export async function markAllUserNotificationsRead(
+  config: RuntimeConfig,
+  accessToken: string,
+) {
+  await apiFetch(config, "/v1/me/notifications/read-all", {
+    method: "POST",
+    headers: authHeaders(accessToken),
+  });
 }
 
 export async function markUserNotificationRead(

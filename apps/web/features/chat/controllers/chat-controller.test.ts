@@ -74,6 +74,17 @@ describe("ChatController", () => {
     );
   });
 
+  it("includes the team audience when requested", () => {
+    const controller = new ChatController({ config: runtimeConfig });
+    controller.setConversation("party:party-1", "token-1");
+    MockWebSocket.instances[0]?.open();
+
+    expect(controller.sendMessage("north", "team")).toBe(true);
+    expect(MockWebSocket.instances[0]?.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "chat.send", payload: { body: "north", audience: "team" } }),
+    );
+  });
+
   it("caches messages by conversation across temporary conversation changes", () => {
     const controller = new ChatController({ config: runtimeConfig });
     controller.setConversation("party:party-1", "token-1");

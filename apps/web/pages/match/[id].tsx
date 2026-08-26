@@ -1,16 +1,20 @@
 import Head from "next/head";
-import Link from "next/link";
 import { useRouter } from "next/router";
 import { useMemo } from "react";
-import EndMatchOverlay from "../../components/ui/EndMatchOverlay";
-import type { Snapshot } from "../../components/ui/types";
+import EndMatchOverlay from "../../features/game/components/overlays/EndMatchOverlay";
+import { Button, ButtonLink } from "../../components/ui/button";
+import { AppPanel } from "../../components/ui/compositions";
+import { Spinner } from "../../components/ui/Spinner";
+import type { Snapshot } from "../../features/game/model/types";
 import { requestMatchReport } from "../../features/auth/lib/auth-client";
 import { deriveMatchSides } from "../../features/game/model/match-sides";
+import { deriveDuelRatingDeltas } from "../../features/game/model/match-rating";
 import HomePageChatDock from "../../features/home/page/HomePageChatDock";
 import HomePageGame from "../../features/home/page/HomePageGame";
 import HomePageOverlays from "../../features/home/page/HomePageOverlays";
 import { useHomeModel } from "../../features/home/model/useHomeModel";
 import { useMatchRouteSession } from "../../features/matchmaking/hooks/use-match-route-session";
+import { getMatchReturnDestination } from "../../features/matchmaking/lib/match-return";
 import { getRuntimeConfig } from "../../lib/runtime-config";
 import { getSiteURL } from "../../lib/site";
 import { getTeamPresentation } from "../../lib/team-presentation";
@@ -20,7 +24,6 @@ import {
 } from "../../lib/entity-id";
 import type {
   MatchConfig,
-  MatchSessionResponse,
 } from "../../features/matchmaking/lib/queue-client";
 
 export function normalizeRouteMatchId(
@@ -54,7 +57,7 @@ function buildHistoryOverlay(
   const selfPlayer =
     snapshot.players[userId] || snapshot.players[playerIds[0] || ""];
   const mode = snapshot.mode || "duel";
-  const derivedSides = deriveMatchSides({
+  const baseDerivedSides = deriveMatchSides({
     snapshot,
     selfUserId: selfPlayer?.userId || userId,
     fallbackSelf: {
@@ -93,8 +96,8 @@ function buildHistoryOverlay(
       .slice(0, 1)
       .toUpperCase();
   });
-  const selfHP = derivedSides.sides.self.hp ?? 0;
-  const oppHP = derivedSides.sides.opponent.hp ?? 0;
+  const selfHP = baseDerivedSides.sides.self.hp ?? 0;
+  const oppHP = baseDerivedSides.sides.opponent.hp ?? 0;
   const outcome: "win" | "lose" | "draw" | undefined =
     mode === "singleplayer" || mode === "free_for_all"
       ? undefined
@@ -103,6 +106,31 @@ function buildHistoryOverlay(
         : selfHP > oppHP
           ? "win"
           : "lose";
+  const { selfRatingDelta, opponentRatingDelta } = deriveDuelRatingDeltas({
+    snapshot,
+    selfUserId: baseDerivedSides.selfPlayerId,
+    opponentUserId: baseDerivedSides.opponentPlayerId,
+    outcome: outcome || "draw",
+  });
+  const derivedSides = deriveMatchSides({
+    snapshot,
+    selfUserId: baseDerivedSides.selfPlayerId,
+    fallbackSelf: {
+      id: userId || "self",
+      name: selfPlayer?.displayName || displayName || "You",
+      avatarUrl: selfPlayer?.avatarUrl || userAvatar,
+      avatarFallback: (
+        selfPlayer?.displayName ||
+        displayName ||
+        "Y"
+      ).slice(0, 1).toUpperCase(),
+      isAdmin: selfPlayer?.isAdmin,
+      isGuest: selfPlayer?.isGuest,
+      selectedBadge: selfPlayer?.selectedBadge,
+      rating: selfPlayer?.mmr,
+    },
+    competitive: { selfRatingDelta, opponentRatingDelta },
+  });
 
   return {
     mode,
@@ -117,20 +145,6 @@ function buildHistoryOverlay(
     resultPlayerBorderColors,
     participantsById: derivedSides.playersById,
   };
-}
-
-function matchSourcePartyInviteCode(
-  response: MatchSessionResponse | null,
-): string {
-  if (!response) return "";
-  if (
-    response.status === "live_connectable" ||
-    response.status === "history" ||
-    response.status === "replaced"
-  ) {
-    return response.sourcePartyInviteCode || "";
-  }
-  return "";
 }
 
 export default function MatchPage() {
@@ -148,22 +162,23 @@ export default function MatchPage() {
   const canonicalURL = routeMatchId
     ? `${siteURL}/match/${encodeURIComponent(toPublicEntityId(routeMatchId))}`
     : `${siteURL}/`;
-  const sourcePartyInviteCode =
-    model.view.meta.sourcePartyInviteCode ||
-    matchSourcePartyInviteCode(routeSession.replacement) ||
-    "";
-  const backHref = sourcePartyInviteCode
-    ? `/party/${encodeURIComponent(sourcePartyInviteCode)}`
-    : "/";
-  const backLabel = sourcePartyInviteCode
-    ? "Back to party"
-    : "Back to lobby";
+  const replacementReturnTarget =
+    routeSession.replacement && "returnTarget" in routeSession.replacement
+      ? routeSession.replacement.returnTarget
+      : undefined;
+  const returnTarget =
+    model.view.meta.returnTarget || replacementReturnTarget;
+  const { href: backHref, label: backLabel } =
+    getMatchReturnDestination(returnTarget);
   const handleLeaveToParty = () => {
     model.actions.leaveGame();
     void router.push(backHref);
   };
   const handlePlayAgain = async (matchConfig?: MatchConfig) => {
-    const nextMatchId = await model.actions.startSingleplayer(matchConfig);
+    const nextMatchId = await model.actions.startSingleplayer(
+      matchConfig,
+      returnTarget,
+    );
     if (nextMatchId) {
       void router.push(
         `/match/${encodeURIComponent(toPublicEntityId(nextMatchId))}`,
@@ -237,10 +252,11 @@ export default function MatchPage() {
         <meta name="robots" content="noindex,nofollow" />
         <link rel="canonical" href={canonicalURL} />
       </Head>
-      <main className="relative min-h-screen overflow-hidden bg-[#08111b] text-ink">
+      <main className="relative min-h-screen overflow-hidden bg-surface-page text-content-primary">
         <HomePageOverlays
           auth={model.view.auth}
           overlays={model.view.overlays}
+          maxHP={model.view.meta.maxHP}
           actions={{
             ...model.actions,
             leaveGame: handleLeaveToParty,
@@ -264,6 +280,7 @@ export default function MatchPage() {
               sides={historyOverlay.sides}
               selfUserId={historyOverlay.selfUserId}
               totalScore={historyOverlay.totalScore}
+              maxHP={model.view.meta.maxHP}
               roundResults={historyOverlay.roundResults}
               resultPlayerNames={historyOverlay.resultPlayerNames}
               resultPlayerAvatars={historyOverlay.resultPlayerAvatars}
@@ -283,43 +300,45 @@ export default function MatchPage() {
           !model.view.overlays.endMatch.open &&
           !historyOverlay && (
             <div className="flex min-h-screen items-center justify-center p-6">
-              <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-white/5 p-8 text-center text-white shadow-[0_24px_60px_rgba(0,0,0,0.38)] backdrop-blur-xl">
+              <AppPanel className="w-full max-w-md p-8 text-center">
                 {routeSession.status === "bootstrapping_auth" ||
                 routeSession.status === "resolving" ||
                 routeSession.status === "awaiting_first_snapshot" ? (
                   <div className="flex flex-col items-center py-6">
-                    <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/15 border-t-[#7fb3d8]" />
+                    <Spinner size="lg" />
                   </div>
                 ) : (
-                  <p className="text-[12px] font-bold uppercase tracking-[0.16em] text-[#7fb3d8]">
+                  <p className="text-label font-strong uppercase text-status-info">
                     Match Session
                   </p>
                 )}
-                <h1 className="mt-3 text-[28px] font-black tracking-tight">
+                <h1 className="mt-3 text-heading-lg font-strong tracking-heading">
                   {loadingLabel}
                 </h1>
                 {routeSession.status === "replaced" &&
                 routeSession.replacement?.status === "replaced" &&
                 routeSession.replacement.replacement ? (
-                  <button
+                  <Button
                     type="button"
                     onClick={() =>
                       void router.replace(
                         `/match/${encodeURIComponent(toPublicEntityId(replacementMatchId))}`,
                       )
                     }
-                    className="mt-6 inline-flex rounded-full border border-[#2ad18f]/40 bg-[#2ad18f]/10 px-5 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-[#2ad18f]/20"
+                    variant="primary"
+                    className="mt-6"
                   >
                     Resume Current Match
-                  </button>
+                  </Button>
                 ) : null}
-                <Link
+                <ButtonLink
                   href={backHref}
-                  className="mt-4 inline-flex rounded-full border border-white/10 bg-white/10 px-5 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-white/15"
+                  variant="secondary"
+                  className="mt-4"
                 >
                   {backLabel}
-                </Link>
-              </div>
+                </ButtonLink>
+              </AppPanel>
             </div>
           )}
       </main>

@@ -1,4 +1,4 @@
-import type { ChatEmote, ChatMessage } from "../../../components/ui/types";
+import type { ChatAudience, ChatEmote, ChatMessage } from "../model/types";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { normalizeWSBase } from "../../../lib/runtime-config";
 
@@ -8,8 +8,8 @@ export type ChatEvent =
   | { type: "chat.error"; message: string };
 
 export type ChatConnection = {
-  sendMessage: (body: string) => boolean;
-  sendEmote: (emote: ChatEmote) => boolean;
+  sendMessage: (body: string, audience?: ChatAudience) => boolean;
+  sendEmote: (emote: ChatEmote, audience?: ChatAudience) => boolean;
   close: () => void;
 };
 
@@ -56,8 +56,10 @@ export function connectChat(
   };
   ws.onerror = () => onEvent({ type: "chat.error", message: "Chat connection failed" });
   return {
-    sendMessage: (body: string) => send("chat.send", { body }),
-    sendEmote: (emote: ChatEmote) => send("chat.emote", { emote }),
+    sendMessage: (body: string, audience = "all") =>
+      send("chat.send", audience === "team" ? { body, audience } : { body }),
+    sendEmote: (emote: ChatEmote, audience = "all") =>
+      send("chat.emote", audience === "team" ? { emote, audience } : { emote }),
     close: () => ws.close(),
   };
 }

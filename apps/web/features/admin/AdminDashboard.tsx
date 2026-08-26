@@ -3,20 +3,28 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Ban, ChevronRight, ExternalLink, Gavel, LineChart, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Ban, ChevronRight, ExternalLink, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "../../components/ui/button";
+import { AlertDialog } from "../../components/ui/Dialog";
+import { Badge } from "../../components/ui/Badge";
 import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
+import { Checkbox } from "../../components/ui/Switch";
+import { CenteredSpinner } from "../../components/ui/Spinner";
+import { Table, TableHead } from "../../components/ui/Table";
+import { Heading, Text } from "../../components/ui/typography";
 import { toPublicEntityId } from "../../lib/entity-id";
 import { AdminDetailRow as DetailRow, AdminMetric as Metric, AdminPanel as Panel } from "./components/admin-primitives";
-import { ModeratorIncidentRoute } from "./components/ModeratorIncidentRoute";
 import { SignalsRoute } from "./components/SignalsRoute";
+import { BadgeGrantsRoute } from "./components/BadgeGrantsRoute";
 import { formatAdminDate, fromLocalDateTime, localDateTime, sanitizeSlugInput, slugify } from "./lib/admin-format";
 import {
   requestAdminAddIPSignupBan,
   requestAdminBanPlayer,
+  requestAdminCommunityPardon,
+  requestAdminCommunityPardonPreview,
   requestAdminClearMaintenance,
   requestAdminDiscordIntegrationSettings,
   requestAdminGrantRole,
@@ -39,14 +47,13 @@ import {
   requestAdminUpdateChangelogPost,
 } from "./lib/admin-client";
 import {
-  requestModeratorEnforcementActions,
+  requestModeratorLog,
+  requestModeratorSubjectMute,
   requestModeratorSubjectUnban,
   requestModeratorSubject,
-  requestModeratorTasks,
 } from "./lib/moderator-client";
-import { requestPlayerMatches } from "../players/lib/player-client";
-import { adminNav, isModerationReviewSection, moderationTitleForRoute, moderationViewForRoute, moderatorNav, moderatorPathFromRouter, pathFromRouter } from "./lib/admin-navigation";
-import type { EnforcementAction, IPBan, MatchHistory, ModerationSubjectProfile, ModerationTask, Player, PlayerDetail, UserRoleGrant } from "./types";
+import { adminNav, moderatorNav, moderatorPathFromRouter, pathFromRouter } from "./lib/admin-navigation";
+import type { IPBan, ModerationSubjectProfile, ModerationTimelineItem, Player, PlayerDetail, UserRoleGrant } from "./types";
 import type { ChangelogPost, ChangelogPostInput } from "../changelog/types";
 import { useHomeModel } from "../home/model/useHomeModel";
 import type { MaintenanceStatus } from "../matchmaking/lib/queue-client";
@@ -73,7 +80,7 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
   const { view } = useHomeModel({ routeContext: "home", backgroundDataEnabled: false });
   const moderatorSurface = surface === "moderator";
   const path = moderatorSurface ? moderatorPathFromRouter(router) : pathFromRouter(router);
-  const section = path[0] || (moderatorSurface ? "queue" : "operations");
+  const section = path[0] || (moderatorSurface ? "subjects" : "operations");
   const leaf = path[1] || "";
   const accessToken = view.auth.accessToken;
   const canViewReports = !!view.auth.isAdmin || !!view.auth.isModerator;
@@ -88,24 +95,21 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
       void router.replace("/admin/operations/maintenance");
     }
     if (router.pathname === "/moderator" && router.isReady) {
-      void router.replace("/moderator/queue");
+      void router.replace("/moderator/subjects");
     }
   }, [leaf, moderatorSurface, router, section]);
 
   const refreshAdminData = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["admin-players"] }), queryClient.invalidateQueries({ queryKey: ["moderator-tasks"] }),
-      queryClient.invalidateQueries({ queryKey: ["moderator-incident"] }), queryClient.invalidateQueries({ queryKey: ["moderator-signals"] }),
+	  queryClient.invalidateQueries({ queryKey: ["admin-players"] }), queryClient.invalidateQueries({ queryKey: ["moderator-signals"] }),
       queryClient.invalidateQueries({ queryKey: ["moderator-subject"] }), queryClient.invalidateQueries({ queryKey: ["admin-player-matches"] }),
       queryClient.invalidateQueries({ queryKey: ["admin-player-detail"] }), queryClient.invalidateQueries({ queryKey: ["admin-ip-signup-bans"] }),
       queryClient.invalidateQueries({ queryKey: ["admin-changelog"] }), queryClient.invalidateQueries({ queryKey: ["admin-maintenance"] }),
       queryClient.invalidateQueries({ queryKey: ["admin-moderation-settings"] }), queryClient.invalidateQueries({ queryKey: ["admin-discord-integration-settings"] }),
-      queryClient.invalidateQueries({ queryKey: ["admin-ranked-season"] }), queryClient.invalidateQueries({ queryKey: ["admin-enforcement-actions"] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-ranked-season"] }), queryClient.invalidateQueries({ queryKey: ["moderator-log"] }),
       queryClient.invalidateQueries({ queryKey: ["admin-roles"] }),
     ]);
   };
-
-  const activeView = moderationViewForRoute(section, leaf);
 
   return (
     <>
@@ -113,21 +117,21 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
         <title>GeoDuels | {moderatorSurface ? "Moderator" : "Admin"}</title>
         <meta name="robots" content="noindex,nofollow" />
       </Head>
-      <main className="min-h-screen bg-slate-950 text-slate-100">
+      <main data-ui-theme="operational" className="min-h-screen bg-surface-page text-content-primary">
         <div className="grid min-h-screen lg:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="border-r border-slate-800 bg-slate-950 px-4 py-5">
-            <Link href="/" className="mb-5 block rounded-lg border border-slate-800 bg-slate-900/70 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">
+          <aside className="border-r border-border-default bg-surface-page px-4 py-5">
+            <Link href="/" className="mb-5 block rounded-lg border border-border-default bg-surface-panel p-4">
+              <Text as="p" variant="label" className="text-status-success">
                 GeoDuels {consoleEyebrow}
-              </p>
-              <h1 className="mt-1 text-xl font-black text-white">{consoleTitle}</h1>
+              </Text>
+              <Heading as="h1" variant="heading-md" className="mt-1">{consoleTitle}</Heading>
             </Link>
             <nav className="space-y-5">
               {navGroups.map((group) => (
                 <div key={group.title}>
-                  <p className="mb-2 px-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                  <Text as="p" variant="caption" className="mb-2 px-2">
                     {group.title}
-                  </p>
+                  </Text>
                   <div className="space-y-1">
                     {group.items.map((item) => {
                       const selected = router.asPath.split("?")[0] === item.href;
@@ -136,10 +140,10 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                         <Link
                           key={item.href}
                           href={item.href}
-                          className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-semibold transition ${
+                          className={`flex items-center gap-3 rounded-md px-3 py-2 text-body-sm font-semibold transition ${
                             selected
-                              ? "bg-emerald-400 text-slate-950"
-                              : "text-slate-300 hover:bg-slate-900 hover:text-white"
+                              ? "bg-action-primary text-content-on-action"
+                              : "text-content-secondary hover:bg-surface-panel hover:text-content-primary"
                           }`}
                         >
                           <Icon className="h-4 w-4" />
@@ -155,29 +159,20 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
           </aside>
           <div className="min-w-0 px-4 py-5 sm:px-6 lg:px-8">
             {!view.auth.userId ? (
-              <Panel className="p-5 text-slate-300">Sign in first to access the admin console.</Panel>
+              <Panel className="p-5 text-body-sm text-content-secondary">Sign in first to access the admin console.</Panel>
             ) : null}
             {view.auth.userId && !canViewReports ? (
-              <Panel className="border-amber-500/40 bg-amber-500/10 p-5 text-amber-100">
+              <Panel className="border-status-warning/40 bg-status-warning/10 p-5 text-body-sm text-status-warning">
                 This account does not have {moderatorSurface ? "moderator" : "admin"} access.
               </Panel>
             ) : null}
             {view.auth.userId && canViewReports && !hasSurfaceAccess ? (
-              <Panel className="border-amber-500/40 bg-amber-500/10 p-5 text-amber-100">
+              <Panel className="border-status-warning/40 bg-status-warning/10 p-5 text-body-sm text-status-warning">
                 This surface is admin-only. Use the moderator workbench for review tools.
               </Panel>
             ) : null}
             {hasSurfaceAccess ? (
               <>
-                {moderatorSurface && isModerationReviewSection(section) ? (
-                  <ModerationRoute
-                    config={config}
-                    accessToken={accessToken}
-                    view={activeView}
-                    title={moderationTitleForRoute(section, leaf)}
-                    refreshAdminData={refreshAdminData}
-                  />
-                ) : null}
                 {moderatorSurface && section === "subjects" && !leaf ? (
                   <PlayersRoute
                     config={config}
@@ -200,15 +195,7 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                     refreshAdminData={refreshAdminData}
                   />
                 ) : null}
-                {moderatorSurface && section === "incidents" && leaf ? (
-                  <ModeratorIncidentRoute
-                    config={config}
-                    accessToken={accessToken}
-                    incidentId={Number(leaf) || 0}
-                    refreshAdminData={refreshAdminData}
-                  />
-                ) : null}
-                {moderatorSurface && section === "enforcement" ? (
+                {moderatorSurface && section === "log" ? (
                   <EnforcementRoute config={config} accessToken={accessToken} canViewEnforcement={canViewReports} />
                 ) : null}
                 {moderatorSurface && section === "signals" ? (
@@ -224,12 +211,16 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                   />
                 ) : null}
                 {!moderatorSurface && section === "access" ? (
-                  <AccessRoute
-                    config={config}
-                    accessToken={accessToken}
-                    canManageAdmin={canManageAdmin}
-                    refreshAdminData={refreshAdminData}
-                  />
+                  leaf === "badges" ? (
+                    <BadgeGrantsRoute config={config} accessToken={accessToken} canManageAdmin={canManageAdmin} />
+                  ) : (
+                    <AccessRoute
+                      config={config}
+                      accessToken={accessToken}
+                      canManageAdmin={canManageAdmin}
+                      refreshAdminData={refreshAdminData}
+                    />
+                  )
                 ) : null}
               </>
             ) : null}
@@ -237,77 +228,6 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
         </div>
       </main>
     </>
-  );
-}
-
-function ModerationRoute(props: {
-  config: ReturnType<typeof getRuntimeConfig>;
-  accessToken: string;
-  view: string;
-  title?: string;
-  refreshAdminData: () => Promise<void>;
-}) {
-  const tasksQuery = useQuery({
-    queryKey: ["moderator-tasks", props.view, props.accessToken],
-    enabled: !!props.accessToken,
-    queryFn: () => requestModeratorTasks(props.config, props.accessToken, props.view),
-    staleTime: 5_000,
-  });
-  const tasks = (tasksQuery.data?.tasks || []) as ModerationTask[];
-  const title = props.title || props.view
-    .split("-")
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
-
-  return (
-    <div className="space-y-4">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">Moderation</p>
-          <h2 className="mt-1 text-3xl font-black text-white">{title}</h2>
-          <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Work the queue from oldest/highest-risk incidents. Open an incident for evidence, context, and verdicts.
-          </p>
-        </div>
-        <p className="text-sm text-slate-400">{tasks.length} tasks</p>
-      </header>
-
-      <Panel className="overflow-hidden">
-        <div className="grid gap-0 divide-y divide-slate-900">
-          {tasks.map((task) => (
-            <Link
-              key={task.id}
-              href={`/moderator/incidents/${task.incidentId}`}
-              className="grid gap-3 px-4 py-4 transition hover:bg-slate-900 md:grid-cols-[minmax(0,1fr)_160px_120px] md:items-center"
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="truncate font-bold text-white">{task.incident.subjectName || task.incident.subjectUserId}</p>
-                  <span className="rounded bg-slate-800 px-2 py-0.5 text-[11px] font-bold uppercase text-slate-300">{task.incident.severity}</span>
-                  <span className="rounded bg-slate-800 px-2 py-0.5 text-[11px] font-bold uppercase text-slate-300">{task.incident.evidenceStrength}</span>
-                </div>
-                <p className="mt-1 text-sm text-slate-400">{task.incident.reasonCode} · {task.incident.signalCount} signals · {task.incident.uniqueReporterCount} reporters</p>
-                <p className="mt-1 text-xs text-slate-500">Incident #{task.incidentId} · Task #{task.id}</p>
-              </div>
-              <div className="text-sm text-slate-400">
-                <p className="font-semibold text-slate-200">{task.assignedTo ? "Claimed" : task.status}</p>
-                <p className="text-xs text-slate-500">{new Date(task.updatedAt || task.createdAt).toLocaleString()}</p>
-              </div>
-              <div className="justify-self-start md:justify-self-end">
-                <span className="inline-flex min-h-9 items-center rounded-md border border-slate-700 px-3 text-sm font-semibold text-sky-300">
-                  Open
-                  <ChevronRight className="ml-1 h-4 w-4" />
-                </span>
-              </div>
-            </Link>
-          ))}
-          {!tasksQuery.isLoading && tasks.length === 0 ? (
-            <p className="p-4 text-sm text-slate-400">No tasks in this view.</p>
-          ) : null}
-          {tasksQuery.isLoading ? <p className="p-4 text-sm text-slate-400">Loading tasks...</p> : null}
-        </div>
-      </Panel>
-    </div>
   );
 }
 
@@ -333,8 +253,8 @@ function PlayersRoute(props: {
   return (
     <div className="space-y-4">
       <header>
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">{props.eyebrow || "Players"}</p>
-        <h2 className="mt-1 text-3xl font-black text-white">{props.title || "Player Search"}</h2>
+        <Text as="p" variant="label" className="text-status-success">{props.eyebrow || "Players"}</Text>
+        <Heading as="h2" variant="display-md" className="mt-1">{props.title || "Player Search"}</Heading>
       </header>
       <Panel className="p-4">
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -342,8 +262,8 @@ function PlayersRoute(props: {
         </div>
       </Panel>
       <Panel className="overflow-x-auto">
-        <table className="w-full min-w-[840px] text-left text-sm">
-          <thead className="border-b border-slate-800 text-xs uppercase tracking-[0.12em] text-slate-500">
+        <Table className="w-full min-w-[840px] text-left text-body-sm">
+          <TableHead className="border-b border-border-default text-label uppercase text-content-secondary">
             <tr>
               <th className="px-4 py-3">Player</th>
               <th className="px-4 py-3">MMR</th>
@@ -351,21 +271,21 @@ function PlayersRoute(props: {
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right">Open</th>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-900">
+          </TableHead>
+          <tbody className="divide-y divide-border-default">
             {players.map((player) => (
               <tr key={player.userId}>
                 <td className="px-4 py-3">
-                  <Link className="text-left font-bold text-white hover:text-emerald-300" href={`${basePath}/${encodeURIComponent(toPublicEntityId(player.userId))}`}>
+                  <Link className="text-left text-body-sm font-strong text-content-primary hover:text-status-success" href={`${basePath}/${encodeURIComponent(toPublicEntityId(player.userId))}`}>
                     {player.displayName || player.userId}
                   </Link>
-                  <p className="mt-1 text-xs text-slate-500">{props.canManageAdmin ? player.email || player.userId : player.userId}</p>
+                  <p className="mt-1 text-body-sm text-content-secondary">{props.canManageAdmin ? player.email || player.userId : player.userId}</p>
                 </td>
                 <td className="px-4 py-3">{player.mmr}</td>
-                <td className="px-4 py-3 text-slate-400">{player.wins}W / {player.gamesPlayed}G</td>
+                <td className="px-4 py-3 text-body-sm text-content-secondary">{player.wins}W / {player.gamesPlayed}G</td>
                 <td className="px-4 py-3">{player.isBanned ? "Banned" : "Active"}</td>
                 <td className="px-4 py-3 text-right">
-                  <Link className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 font-semibold text-slate-100 hover:border-emerald-400 hover:text-emerald-200" href={`${basePath}/${encodeURIComponent(toPublicEntityId(player.userId))}`}>
+                  <Link className="inline-flex items-center gap-2 rounded-md border border-border-strong px-3 py-2 text-body-sm font-semibold text-content-primary hover:border-status-success hover:text-status-success" href={`${basePath}/${encodeURIComponent(toPublicEntityId(player.userId))}`}>
                     Details
                     <ChevronRight className="h-4 w-4" />
                   </Link>
@@ -373,8 +293,8 @@ function PlayersRoute(props: {
               </tr>
             ))}
           </tbody>
-        </table>
-        {!players.length ? <p className="p-4 text-sm text-slate-400">No players found.</p> : null}
+        </Table>
+        {!players.length ? <p className="p-4 text-body-sm text-content-secondary">No players found.</p> : null}
       </Panel>
     </div>
   );
@@ -401,13 +321,6 @@ function PlayerDetailRoute(props: {
     refetchOnMount: false,
     staleTime: 30_000,
   });
-  const matchesQuery = useQuery({
-    queryKey: ["admin-player-matches", props.userId, props.accessToken],
-    enabled: !!props.accessToken && !!props.userId,
-    queryFn: () => requestPlayerMatches(props.config, props.userId, 25),
-    refetchOnMount: false,
-    staleTime: 30_000,
-  });
   const banMutation = useMutation({
     mutationFn: () => requestAdminBanPlayer(props.config, props.accessToken, props.userId, banReason),
     onSuccess: props.refreshAdminData,
@@ -419,40 +332,46 @@ function PlayerDetailRoute(props: {
         : requestAdminUnbanPlayer(props.config, props.accessToken, props.userId),
     onSuccess: props.refreshAdminData,
   });
+  const muteMutation = useMutation({
+	mutationFn: ({ kind, muted }: { kind: "chat" | "report"; muted: boolean }) =>
+	  requestModeratorSubjectMute(props.config, props.accessToken, props.userId, kind, banReason, muted),
+	onSuccess: props.refreshAdminData,
+  });
   const detail = detailQuery.data as (PlayerDetail & Partial<ModerationSubjectProfile>) | undefined;
   const player = detail?.player;
-  const matches = (matchesQuery.data?.matches || []) as MatchHistory[];
   const winRate = player?.gamesPlayed ? Math.round((player.wins / player.gamesPlayed) * 100) : 0;
+	const chatMuted = !!player?.chatMutedAt && (!player.chatMutedUntil || new Date(player.chatMutedUntil).getTime() > Date.now());
+	const reportMuted = !!player?.reportMutedAt && (!player.reportMutedUntil || new Date(player.reportMutedUntil).getTime() > Date.now());
   const basePath = props.basePath || "/admin/players";
 
   if (detailQuery.isLoading) {
-    return <Panel className="p-5 text-slate-300">Loading player details...</Panel>;
+    return <Panel><CenteredSpinner label="Loading player details" /></Panel>;
   }
   if (!player) {
-    return <Panel className="p-5 text-slate-300">Player detail unavailable.</Panel>;
+    return <Panel className="p-5 text-body-sm text-content-secondary">Player detail unavailable.</Panel>;
   }
 
   return (
     <div className="space-y-4">
       <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <Link href={basePath} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-400 hover:text-white">
+          <Link href={basePath} className="inline-flex items-center gap-2 text-body-sm font-semibold text-content-secondary hover:text-content-primary">
             <ArrowLeft className="h-4 w-4" />
             Subjects
           </Link>
           <div className="mt-4 flex items-center gap-4">
-            <div className="grid h-16 w-16 place-items-center rounded-md border border-slate-700 bg-slate-900 text-2xl font-black text-emerald-200">
+            <div className="grid h-16 w-16 place-items-center rounded-md border border-border-strong bg-surface-panel text-heading-lg font-strong text-status-success">
               {(player.displayName || player.userId || "?").slice(0, 1).toUpperCase()}
             </div>
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">{props.titleEyebrow || "Player Detail"}</p>
-              <h2 className="mt-1 break-all text-3xl font-black text-white">{player.displayName || player.userId}</h2>
-              <p className="mt-1 break-all text-sm text-slate-400">{props.canManageAdmin ? player.email || player.userId : player.userId}</p>
+              <Text as="p" variant="label" className="text-status-success">{props.titleEyebrow || "Player Detail"}</Text>
+              <Heading as="h2" variant="display-md" className="mt-1 break-all">{player.displayName || player.userId}</Heading>
+              <p className="mt-1 break-all text-body-sm text-content-secondary">{props.canManageAdmin ? player.email || player.userId : player.userId}</p>
             </div>
           </div>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <Link href={`/players/${encodeURIComponent(player.displayName || player.userId)}`} className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-sky-300 hover:border-sky-400 hover:text-white">
+          <Link href={`/players/${encodeURIComponent(player.displayName || player.userId)}`} className="inline-flex items-center justify-center gap-2 rounded-md border border-border-strong px-4 py-2 text-body-sm font-semibold text-status-info hover:border-status-info hover:text-content-primary">
             Public profile
             <ExternalLink className="h-4 w-4" />
           </Link>
@@ -460,7 +379,7 @@ function PlayerDetailRoute(props: {
           {player.isBanned ? (
             <Button onClick={() => void unbanMutation.mutateAsync()}>Unban</Button>
           ) : (
-            <Button className="border-red-500/50 bg-red-500/15 text-red-100" onClick={() => void banMutation.mutateAsync()}>
+            <Button variant="danger" onClick={() => void banMutation.mutateAsync()}>
               <Ban className="h-4 w-4" />
               Ban
             </Button>
@@ -476,58 +395,40 @@ function PlayerDetailRoute(props: {
         <Metric label="Status" value={player.isBanned ? "Banned" : "Active"} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
-        <Panel className="p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Past 7 Days</p>
-              <h3 className="mt-1 font-black text-white">ELO History</h3>
-            </div>
-            <LineChart className="h-5 w-5 text-emerald-300" />
-          </div>
-          <EloHistoryChart points={detail.eloHistory || []} fallbackMmr={player.mmr} />
-        </Panel>
+      <div className="grid gap-4 xl:grid-cols-2">
         <Panel className="p-4">
           <div className="flex items-center gap-2">
-            <ShieldAlert className={`h-5 w-5 ${player.isBanned ? "text-red-300" : "text-emerald-300"}`} />
-            <h3 className="font-black text-white">Account Signals</h3>
+            <ShieldAlert className={`h-5 w-5 ${player.isBanned ? "text-status-danger" : "text-status-success"}`} />
+            <Heading as="h3" variant="heading-sm">Account Signals</Heading>
           </div>
-          <div className="mt-4 space-y-3 text-sm">
+          <div className="mt-4 space-y-3 text-body-sm">
             <DetailRow label="User ID" value={player.userId} />
             <DetailRow label="Account" value={player.isGuest ? "Guest" : "Registered"} />
             <DetailRow label="Role" value={player.isAdmin ? "Admin" : player.isModerator ? "Moderator" : "Player"} />
-            <DetailRow label="Ban Reason" value={player.banReason || "None"} />
-            <DetailRow label="Report Mute" value={player.reportMutedUntil ? formatDate(player.reportMutedUntil) : "None"} />
+            <DetailRow label="Ban" value={player.isBanned ? `${player.banReason || "No reason"}${player.banExpiresAt ? ` · until ${formatDate(player.banExpiresAt)}` : " · permanent"}` : "None"} />
+            <DetailRow label="Chat Mute" value={chatMuted ? `${player.chatMuteReason || "No reason"}${player.chatMutedUntil ? ` · until ${formatDate(player.chatMutedUntil)}` : " · permanent"}` : "None"} />
+            <DetailRow label="Report Mute" value={reportMuted ? `${player.reportMuteReason || "No reason"}${player.reportMutedUntil ? ` · until ${formatDate(player.reportMutedUntil)}` : " · permanent"}` : "None"} />
             {props.canManageAdmin ? <DetailRow label="Last IP" value={player.lastIpAddress || "Unknown"} /> : null}
           </div>
+		  {moderatorSubject ? (
+			<div className="mt-4 flex flex-wrap gap-2">
+			  <Button onClick={() => void muteMutation.mutateAsync({ kind: "chat", muted: !chatMuted })}>{chatMuted ? "Unmute chat" : "Mute chat 7d"}</Button>
+			  <Button onClick={() => void muteMutation.mutateAsync({ kind: "report", muted: !reportMuted })}>{reportMuted ? "Unmute reports" : "Mute reports 7d"}</Button>
+			</div>
+		  ) : null}
         </Panel>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+      <div className="grid gap-4">
         <Panel className="p-4">
-          <h3 className="font-black text-white">Stats</h3>
+          <Heading as="h3" variant="heading-sm">Stats</Heading>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Metric label="Tracked Matches" value={`${detail.stats?.totalMatches || player.gamesPlayed}`} />
-            <Metric label="Ranked Matches" value={`${detail.stats?.rankedMatches || player.rankedGamesPlayed}`} />
-            <Metric label="Duels" value={`${detail.stats?.duelMatches || 0}`} />
-            <Metric label="Singleplayer" value={`${detail.stats?.singleplayerRuns || 0}`} />
-            <Metric label="Wins" value={`${detail.stats?.wins || player.wins}`} />
-            <Metric label="Losses" value={`${detail.stats?.losses || 0}`} />
-          </div>
-        </Panel>
-        <Panel className="p-4">
-          <h3 className="font-black text-white">Recent Matches</h3>
-          <div className="mt-3 space-y-2">
-            {matches.map((match) => (
-              <Link key={match.matchId} href={`/match/${encodeURIComponent(toPublicEntityId(match.matchId))}`} className="flex items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-sm hover:bg-slate-900">
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-white">{match.matchId}</p>
-                  <p className="mt-1 text-slate-500">{match.mode} · {formatDate(match.endedAt)}</p>
-                </div>
-                <ExternalLink className="h-4 w-4 shrink-0 text-slate-500" />
-              </Link>
-            ))}
-            {!matches.length ? <p className="text-sm text-slate-400">No persisted match history yet.</p> : null}
+			<Metric label="Tracked Matches" value={`${player.trackedMatches || player.gamesPlayed}`} />
+			<Metric label="Ranked Matches" value={`${player.rankedMatches || player.rankedGamesPlayed}`} />
+			<Metric label="Duels" value={`${player.duelMatches || 0}`} />
+			<Metric label="Singleplayer" value={`${player.singleplayerRuns || 0}`} />
+			<Metric label="Wins" value={`${player.wins}`} />
+			<Metric label="Losses" value={`${player.losses || 0}`} />
           </div>
         </Panel>
       </div>
@@ -535,27 +436,28 @@ function PlayerDetailRoute(props: {
       {moderatorSubject ? (
         <div className="grid gap-4 xl:grid-cols-2">
           <Panel className="p-4">
-            <h3 className="font-black text-white">Moderation Incidents</h3>
+            <Heading as="h3" variant="heading-sm">Moderator Log</Heading>
             <div className="mt-3 space-y-2">
-              {(detail.incidents || []).map((incident) => (
-                <Link key={incident.id} href={`/moderator/incidents/${incident.id}`} className="block rounded-md border border-slate-800 bg-slate-900/60 p-3 text-sm hover:bg-slate-900">
-                  <p className="font-semibold text-white">#{incident.id} · {incident.reasonCode}</p>
-                  <p className="mt-1 text-slate-400">{incident.status} · {incident.severity} · {incident.signalCount} signals</p>
-                </Link>
+              {(detail.log || []).map((entry) => (
+                <div key={entry.id} className="rounded-md border border-border-default bg-surface-grouped p-3 text-body-sm">
+                  <p className="font-semibold text-content-primary">{entry.action}</p>
+                  <p className="mt-1 text-content-secondary">{entry.reason || "No reason"} · {entry.actorName || entry.actorUserId || "system"}</p>
+                  <p className="mt-1 text-body-sm text-content-secondary">{formatDate(entry.createdAt)}</p>
+                </div>
               ))}
-              {!detail.incidents?.length ? <p className="text-sm text-slate-400">No moderation incidents for this subject.</p> : null}
+              {!detail.log?.length ? <p className="text-body-sm text-content-secondary">No moderator actions for this subject.</p> : null}
             </div>
           </Panel>
           <Panel className="p-4">
-            <h3 className="font-black text-white">Recent Signals</h3>
+            <Heading as="h3" variant="heading-sm">Recent Signals</Heading>
             <div className="mt-3 space-y-2">
               {(detail.signals || []).map((signal) => (
-                <div key={signal.id} className="rounded-md border border-slate-800 bg-slate-900/60 p-3 text-sm">
-                  <p className="font-semibold text-white">{signal.reasonCode}</p>
-                  <p className="mt-1 text-slate-400">{signal.source} · {signal.severity} / {signal.evidenceStrength}</p>
+                <div key={signal.id} className="rounded-md border border-border-default bg-surface-grouped p-3 text-body-sm">
+                  <p className="font-semibold text-content-primary">{signal.reasonCode}</p>
+                  <p className="mt-1 text-content-secondary">{signal.source} · {signal.severity} / {signal.evidenceStrength}</p>
                 </div>
               ))}
-              {!detail.signals?.length ? <p className="text-sm text-slate-400">No moderation signals for this subject.</p> : null}
+              {!detail.signals?.length ? <p className="text-body-sm text-content-secondary">No moderation signals for this subject.</p> : null}
             </div>
           </Panel>
         </div>
@@ -563,10 +465,10 @@ function PlayerDetailRoute(props: {
 
       {props.canManageAdmin ? (
         <Panel className="p-4">
-          <h3 className="font-black text-white">Linked Identity History</h3>
+          <Heading as="h3" variant="heading-sm">Linked Identity History</Heading>
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="border-b border-slate-800 text-xs uppercase tracking-[0.12em] text-slate-500">
+            <Table className="w-full min-w-[760px] text-left text-body-sm">
+              <TableHead className="border-b border-border-default text-label uppercase text-content-secondary">
                 <tr>
                   <th className="px-3 py-2">Provider</th>
                   <th className="px-3 py-2">Provider User</th>
@@ -574,20 +476,20 @@ function PlayerDetailRoute(props: {
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Last Seen</th>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900">
+              </TableHead>
+              <tbody className="divide-y divide-border-default">
                 {(player.identities || []).map((identity) => (
                   <tr key={`${identity.provider}:${identity.providerUserId}:${identity.lastSeenAt || ""}`}>
-                    <td className="px-3 py-2 text-white">{identity.provider}</td>
-                    <td className="px-3 py-2 text-slate-400">{identity.providerUserId}</td>
-                    <td className="px-3 py-2 text-slate-400">{identity.email || "None"}</td>
-                    <td className="px-3 py-2 text-slate-400">{identity.providerName || "None"}</td>
-                    <td className="px-3 py-2 text-slate-400">{formatDate(identity.lastSeenAt)}</td>
+                    <td className="px-3 py-2 text-content-primary">{identity.provider}</td>
+                    <td className="px-3 py-2 text-content-secondary">{identity.providerUserId}</td>
+                    <td className="px-3 py-2 text-content-secondary">{identity.email || "None"}</td>
+                    <td className="px-3 py-2 text-content-secondary">{identity.providerName || "None"}</td>
+                    <td className="px-3 py-2 text-content-secondary">{formatDate(identity.lastSeenAt)}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
-            {!player.identities?.length ? <p className="mt-3 text-sm text-slate-400">No linked identity history.</p> : null}
+            </Table>
+            {!player.identities?.length ? <p className="mt-3 text-body-sm text-content-secondary">No linked identity history.</p> : null}
           </div>
         </Panel>
       ) : null}
@@ -607,62 +509,6 @@ function formatUTCDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
   return date.toLocaleString(undefined, { timeZone: "UTC", timeZoneName: "short" });
-}
-
-function EloHistoryChart(props: { points: PlayerDetail["eloHistory"]; fallbackMmr: number }) {
-  const points = props.points || [];
-  if (!points.length) {
-    return (
-      <div className="grid h-64 place-items-center rounded-md border border-slate-800 bg-slate-900/40 text-sm text-slate-400">
-        No ranked ELO changes in the last 7 days.
-      </div>
-    );
-  }
-  const width = 720;
-  const height = 260;
-  const padX = 42;
-  const padY = 28;
-  const values = points.map((point) => point.mmr);
-  const min = Math.min(...values, props.fallbackMmr);
-  const max = Math.max(...values, props.fallbackMmr);
-  const spread = Math.max(1, max - min);
-  const xStep = points.length === 1 ? 0 : (width - padX * 2) / (points.length - 1);
-  const coords = points.map((point, index) => {
-    const x = points.length === 1 ? width / 2 : padX + index * xStep;
-    const y = height - padY - ((point.mmr - min) / spread) * (height - padY * 2);
-    return { x, y, point };
-  });
-  const polyline = coords.map((coord) => `${coord.x},${coord.y}`).join(" ");
-
-  return (
-    <div className="overflow-hidden rounded-md border border-slate-800 bg-slate-900/40">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Seven day ELO history" className="h-64 w-full">
-        <line x1={padX} y1={padY} x2={padX} y2={height - padY} stroke="#334155" strokeWidth="1" />
-        <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="#334155" strokeWidth="1" />
-        <text x={padX} y={18} fill="#94a3b8" fontSize="12">{max}</text>
-        <text x={padX} y={height - 8} fill="#94a3b8" fontSize="12">{min}</text>
-        <polyline fill="none" stroke="#34d399" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" points={polyline} />
-        {coords.map(({ x, y, point }) => (
-          <g key={point.date}>
-            <circle cx={x} cy={y} r="5" fill="#34d399" />
-            <text x={x} y={height - 10} textAnchor="middle" fill="#94a3b8" fontSize="11">
-              {new Date(point.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-            </text>
-          </g>
-        ))}
-      </svg>
-      <div className="grid divide-y divide-slate-800 border-t border-slate-800 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        {points.slice(-3).map((point) => (
-          <div key={point.date} className="p-3 text-sm">
-            <p className="font-bold text-white">{point.mmr} MMR</p>
-            <p className={point.delta >= 0 ? "text-emerald-300" : "text-red-300"}>
-              {point.delta >= 0 ? "+" : ""}{point.delta} across {point.played} ranked
-            </p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function OperationsRoute(props: {
@@ -697,6 +543,8 @@ function OperationsRoute(props: {
   const [ipAddress, setIPAddress] = useState("");
   const [ipReason, setIPReason] = useState("");
   const [monthlyResetDay, setMonthlyResetDay] = useState("1");
+  const [pardonDialogOpen, setPardonDialogOpen] = useState(false);
+  const [pardonResult, setPardonResult] = useState<{ eligible: number; pardoned: number } | null>(null);
 
   const maintenanceQuery = useQuery({
     queryKey: ["admin-maintenance", props.accessToken],
@@ -727,6 +575,11 @@ function OperationsRoute(props: {
     queryKey: ["admin-ranked-season", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
     queryFn: () => requestAdminRankedSeason(props.config, props.accessToken),
+  });
+  const pardonQuery = useQuery({
+    queryKey: ["admin-community-pardon", props.accessToken],
+    enabled: props.canManageAdmin && !!props.accessToken,
+    queryFn: () => requestAdminCommunityPardonPreview(props.config, props.accessToken),
   });
 
   useEffect(() => {
@@ -850,9 +703,18 @@ function OperationsRoute(props: {
     mutationFn: () => requestAdminSetRankedSeasonResetRule(props.config, props.accessToken, Number(monthlyResetDay)),
     onSuccess: props.refreshAdminData,
   });
+  const pardonMutation = useMutation({
+    mutationFn: () => requestAdminCommunityPardon(props.config, props.accessToken),
+    onSuccess: async (result) => {
+      setPardonDialogOpen(false);
+      setPardonResult(result);
+      await props.refreshAdminData();
+      await pardonQuery.refetch();
+    },
+  });
 
   if (!props.canManageAdmin) {
-    return <Panel className="p-5 text-slate-400">Admin access is required for operations.</Panel>;
+    return <Panel className="p-5 text-body-sm text-content-secondary">Admin access is required for operations.</Panel>;
   }
 
   const ipBans = (ipBansQuery.data?.bans || []) as IPBan[];
@@ -865,13 +727,46 @@ function OperationsRoute(props: {
   return (
     <div className="space-y-4">
       <header>
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">Operations</p>
-        <h2 className="mt-1 text-3xl font-black text-white">Admin Operations</h2>
+        <Text as="p" variant="label" className="text-status-success">Operations</Text>
+        <Heading as="h2" variant="display-md" className="mt-1">Admin Operations</Heading>
       </header>
+      {props.leaf === "maintenance" || props.leaf === "" ? (
+        <Panel className="p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <Heading as="h3" variant="heading-sm">v2 Community Pardon</Heading>
+              <p className="mt-2 max-w-2xl text-body-sm text-content-secondary">
+                Unban every currently banned player whose latest ban is more than seven days old. This includes cheating bans and preserves the moderation history.
+              </p>
+              <p className="mt-2 text-body-sm text-content-secondary">
+                Eligible now: <span className="font-semibold text-content-primary">{pardonQuery.data?.eligible ?? "…"}</span>
+              </p>
+              {pardonResult ? <p className="mt-2 text-body-sm text-status-success">Pardoned {pardonResult.pardoned} player(s).</p> : null}
+              {pardonMutation.isError ? <p className="mt-2 text-body-sm text-status-danger">{pardonMutation.error instanceof Error ? pardonMutation.error.message : "Pardon failed."}</p> : null}
+            </div>
+            <Button variant="danger" type="button" disabled={!pardonQuery.data?.eligible || pardonMutation.isPending} onClick={() => setPardonDialogOpen(true)}>
+              Pardon banned players
+            </Button>
+          </div>
+        </Panel>
+      ) : null}
+      {pardonDialogOpen ? (
+        <AlertDialog
+          title="Pardon banned players?"
+          description={`This will unban ${pardonQuery.data?.eligible ?? 0} player(s) whose active ban is older than seven days, including cheating bans. This cannot be automatically undone.`}
+          onClose={() => setPardonDialogOpen(false)}
+          placement="center"
+        >
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setPardonDialogOpen(false)}>Cancel</Button>
+            <Button type="button" variant="danger" loading={pardonMutation.isPending} loadingLabel="Pardoning" onClick={() => void pardonMutation.mutateAsync()}>Confirm pardon</Button>
+          </div>
+        </AlertDialog>
+      ) : null}
       <div className="grid gap-4 xl:grid-cols-2">
         {(props.leaf === "maintenance" || props.leaf === "") ? (
           <Panel className="p-4">
-            <h3 className="font-black text-white">Maintenance</h3>
+            <Heading as="h3" variant="heading-sm">Maintenance</Heading>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <Select value={phase} onChange={(event) => setPhase(event.target.value as MaintenanceStatus["phase"])}>
                 <option value="normal">Normal</option>
@@ -883,8 +778,8 @@ function OperationsRoute(props: {
             </div>
             <Textarea className="mt-3 min-h-24 w-full" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Maintenance message" />
             <div className="mt-3 grid gap-2 md:grid-cols-2">
-              <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={queuePaused} onChange={(event) => setQueuePaused(event.target.checked)} /> Pause queue</label>
-              <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={playPaused} onChange={(event) => setPlayPaused(event.target.checked)} /> Pause play</label>
+              <label className="flex items-center gap-2 text-body-sm text-content-secondary"><Checkbox checked={queuePaused} onChange={(event) => setQueuePaused(event.target.checked)} /> Pause queue</label>
+              <label className="flex items-center gap-2 text-body-sm text-content-secondary"><Checkbox checked={playPaused} onChange={(event) => setPlayPaused(event.target.checked)} /> Pause play</label>
             </div>
             <div className="mt-4 flex gap-2">
               <Button onClick={() => void saveMaintenance.mutateAsync()}>Save</Button>
@@ -895,7 +790,7 @@ function OperationsRoute(props: {
 
         {props.leaf === "notifications" ? (
           <Panel className="p-4">
-            <h3 className="font-black text-white">Report Notifications</h3>
+            <Heading as="h3" variant="heading-sm">Report Notifications</Heading>
             <Input className="mt-4 w-full" type="password" value={webhook} onChange={(event) => setWebhook(event.target.value)} placeholder="Discord webhook URL" />
             <Button className="mt-3" onClick={() => void saveSettings.mutateAsync()}>Save Webhook</Button>
           </Panel>
@@ -903,8 +798,8 @@ function OperationsRoute(props: {
 
         {props.leaf === "discord" ? (
           <Panel className="p-4 xl:col-span-2">
-            <h3 className="font-black text-white">Discord Integration</h3>
-            <p className="mt-2 text-sm text-slate-400">
+            <Heading as="h3" variant="heading-sm">Discord Integration</Heading>
+            <p className="mt-2 text-body-sm text-content-secondary">
               The bot token remains a deployment secret. These IDs refresh in the worker automatically.
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -957,15 +852,15 @@ function OperationsRoute(props: {
               Save Discord Settings
             </Button>
             {saveDiscordSettings.error ? (
-              <p className="mt-3 text-sm text-red-300">{saveDiscordSettings.error.message}</p>
+              <p className="mt-3 text-body-sm text-status-danger">{saveDiscordSettings.error.message}</p>
             ) : null}
           </Panel>
         ) : null}
 
         {props.leaf === "seasons" ? (
           <Panel className="p-4">
-            <h3 className="font-black text-white">Ranked Season</h3>
-            <p className="mt-2 text-sm text-slate-400">Active: {seasonQuery.data?.activeSeasonId || "loading"}</p>
+            <Heading as="h3" variant="heading-sm">Ranked Season</Heading>
+            <p className="mt-2 text-body-sm text-content-secondary">Active: {seasonQuery.data?.activeSeasonId || "loading"}</p>
             <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr]">
               <Input
                 type="number"
@@ -975,9 +870,9 @@ function OperationsRoute(props: {
                 onChange={(event) => setMonthlyResetDay(event.target.value)}
                 placeholder="Reset day"
               />
-              <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-300">
+              <div className="rounded-lg border border-border-default bg-surface-inset px-3 py-2 text-body-sm text-content-secondary">
                 <p>Monthly on day {seasonQuery.data?.monthlyResetDay || "--"} at 21:00 UTC</p>
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1 text-body-sm text-content-secondary">
                   Next reset: {seasonQuery.data?.nextResetAt ? formatUTCDate(seasonQuery.data.nextResetAt) : "Not scheduled"}
                 </p>
               </div>
@@ -992,8 +887,8 @@ function OperationsRoute(props: {
           <Panel className="p-4 xl:col-span-2">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-black text-white">Changelog</h3>
-                <p className="mt-1 text-sm text-slate-400">
+                <Heading as="h3" variant="heading-sm">Changelog</Heading>
+                <p className="mt-1 text-body-sm text-content-secondary">
                   Write release notes as Markdown. Saving a post updates its modified date automatically.
                 </p>
               </div>
@@ -1003,36 +898,35 @@ function OperationsRoute(props: {
             <div className="mt-5 grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
               <div className="space-y-2">
                 {changelogPosts.length === 0 ? (
-                  <div className="rounded-md border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-400">
+                  <div className="rounded-md border border-border-default bg-surface-grouped p-3 text-body-sm text-content-secondary">
                     No changelog posts yet.
                   </div>
                 ) : null}
                 {changelogPosts.map((post) => {
                   const selected = selectedChangelogId === post.id;
                   return (
-                    <button
+                    <Button
+                      variant="ghost"
                       key={post.id}
                       type="button"
                       onClick={() => selectChangelogPost(post)}
                       className={`w-full rounded-md border p-3 text-left transition ${
                         selected
-                          ? "border-emerald-400 bg-emerald-400/10"
-                          : "border-slate-800 bg-slate-900/60 hover:border-slate-600"
+                          ? "border-status-success bg-status-success/10"
+                          : "border-border-default bg-surface-grouped hover:border-border-strong"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <p className="line-clamp-2 font-bold text-white">{post.title}</p>
-                        <span className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
-                          post.published ? "bg-emerald-400/15 text-emerald-200" : "bg-amber-400/15 text-amber-200"
-                        }`}>
+                        <p className="line-clamp-2 font-strong text-content-primary">{post.title}</p>
+                        <Badge tone={post.published ? "success" : "warning"}>
                           {post.published ? "Live" : "Draft"}
-                        </span>
+                        </Badge>
                       </div>
-                      <p className="mt-1 truncate text-xs text-slate-500">/{post.slug}</p>
-                      <p className="mt-2 text-xs text-slate-500">
+                      <p className="mt-1 truncate text-body-sm text-content-secondary">/{post.slug}</p>
+                      <p className="mt-2 text-body-sm text-content-secondary">
                         Modified {formatAdminDate(post.updatedAt)}
                       </p>
-                    </button>
+                    </Button>
                   );
                 })}
               </div>
@@ -1061,7 +955,7 @@ function OperationsRoute(props: {
                     placeholder="url-slug"
                   />
                 </div>
-                <div className="admin-markdown-editor overflow-hidden rounded-lg border border-slate-800">
+                <div className="admin-markdown-editor overflow-hidden rounded-lg border border-border-default">
                   <SimpleMDE
                     value={changelogDraft.markdown}
                     onChange={(value) =>
@@ -1071,8 +965,8 @@ function OperationsRoute(props: {
                   />
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-300">
-                    <input
+                  <label className="flex items-center gap-2 text-body-sm font-semibold text-content-secondary">
+                    <Checkbox
                       type="checkbox"
                       checked={changelogDraft.published}
                       onChange={(event) =>
@@ -1085,7 +979,7 @@ function OperationsRoute(props: {
                     {selectedChangelogPost ? (
                       <Link
                         href={`/changelog/${encodeURIComponent(selectedChangelogPost.slug)}`}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 hover:border-emerald-400 hover:text-emerald-200"
+                        className="inline-flex items-center gap-2 rounded-md border border-border-strong px-3 py-2 text-body-sm font-semibold text-content-primary hover:border-status-success hover:text-status-success"
                       >
                         View Post
                         <ExternalLink className="h-4 w-4" />
@@ -1100,7 +994,7 @@ function OperationsRoute(props: {
                   </div>
                 </div>
                 {saveChangelogPost.error ? (
-                  <p className="text-sm font-semibold text-red-300">
+                  <p className="text-body-sm font-semibold text-status-danger">
                     {saveChangelogPost.error instanceof Error ? saveChangelogPost.error.message : "Failed to save changelog post"}
                   </p>
                 ) : null}
@@ -1111,7 +1005,7 @@ function OperationsRoute(props: {
 
         {props.leaf === "ip-signup-blocks" ? (
           <Panel className="p-4">
-            <h3 className="font-black text-white">IP Signup Blocks</h3>
+            <Heading as="h3" variant="heading-sm">IP Signup Blocks</Heading>
             <div className="mt-4 grid gap-2 md:grid-cols-[1fr_1fr_auto]">
               <Input value={ipAddress} onChange={(event) => setIPAddress(event.target.value)} placeholder="IP address" />
               <Input value={ipReason} onChange={(event) => setIPReason(event.target.value)} placeholder="Reason" />
@@ -1119,10 +1013,10 @@ function OperationsRoute(props: {
             </div>
             <div className="mt-4 space-y-2">
               {ipBans.map((ban) => (
-                <div key={ban.id} className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-900/60 p-3">
+                <div key={ban.id} className="flex items-center justify-between rounded-md border border-border-default bg-surface-grouped p-3">
                   <div>
-                    <p className="font-semibold text-white">{ban.ipAddress}</p>
-                    <p className="text-sm text-slate-500">{ban.reason || "No reason"}</p>
+                    <p className="font-semibold text-content-primary">{ban.ipAddress}</p>
+                    <p className="text-body-sm text-content-secondary">{ban.reason || "No reason"}</p>
                   </div>
                   <Button onClick={() => void removeIPBan.mutateAsync(ban.ipAddress)}>Remove</Button>
                 </div>
@@ -1141,57 +1035,49 @@ function EnforcementRoute(props: {
   canViewEnforcement: boolean;
 }) {
   const actionsQuery = useQuery({
-    queryKey: ["admin-enforcement-actions", props.accessToken],
-    enabled: props.canViewEnforcement && !!props.accessToken,
-    queryFn: () => requestModeratorEnforcementActions(props.config, props.accessToken),
+	queryKey: ["moderator-log", props.accessToken],
+	enabled: props.canViewEnforcement && !!props.accessToken,
+	queryFn: () => requestModeratorLog(props.config, props.accessToken),
   });
   if (!props.canViewEnforcement) {
-    return <Panel className="p-5 text-slate-400">Moderator access is required for enforcement history.</Panel>;
+    return <Panel className="p-5 text-body-sm text-content-secondary">Moderator access is required for the moderation log.</Panel>;
   }
-  const actions = (actionsQuery.data?.actions || []) as EnforcementAction[];
+  const actions = (actionsQuery.data?.log || []) as ModerationTimelineItem[];
   return (
     <div className="space-y-4">
       <header>
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">Enforcement</p>
-        <h2 className="mt-1 text-3xl font-black text-white">Action History</h2>
+		<Text as="p" variant="label" className="text-status-success">Moderation</Text>
+		<Heading as="h2" variant="display-md" className="mt-1">Moderator Log</Heading>
       </header>
       <Panel className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-left text-sm">
-          <thead className="border-b border-slate-800 text-xs uppercase tracking-[0.12em] text-slate-500">
+        <Table className="w-full min-w-[900px] text-left text-body-sm">
+          <TableHead className="border-b border-border-default text-label uppercase text-content-secondary">
             <tr>
-              <th className="px-4 py-3">Target</th>
+			  <th className="px-4 py-3">Subject</th>
               <th className="px-4 py-3">Action</th>
               <th className="px-4 py-3">Actor</th>
-              <th className="px-4 py-3">Incident</th>
-              <th className="px-4 py-3">Reason</th>
+			  <th className="px-4 py-3">Expires</th>
+			  <th className="px-4 py-3">Reason</th>
               <th className="px-4 py-3">Created</th>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-900">
+          </TableHead>
+          <tbody className="divide-y divide-border-default">
             {actions.map((action) => (
               <tr key={action.id}>
                 <td className="px-4 py-3">
-                  <p className="font-bold text-white">{action.targetName || action.targetUserId}</p>
-                  <p className="text-xs text-slate-500">{action.targetUserId}</p>
+				  <p className="font-strong text-content-primary">{action.subjectName || action.subjectUserId || "Deleted user"}</p>
+			  <p className="text-body-sm text-content-secondary">{action.subjectUserId}</p>
                 </td>
-                <td className="px-4 py-3 font-semibold text-white">{action.actionType}</td>
-                <td className="px-4 py-3 text-slate-400">{action.actorName || action.actorUserId || "system"}</td>
-                <td className="px-4 py-3">
-                  {action.sourceIncidentId ? (
-                    <Link className="text-sky-300 hover:text-white" href={`/moderator/incidents/${action.sourceIncidentId}`}>
-                      #{action.sourceIncidentId}
-                    </Link>
-                  ) : (
-                    <span className="text-slate-500">-</span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-slate-400">{action.reasonNote || action.reasonCode || "-"}</td>
-                <td className="px-4 py-3 text-slate-500">{new Date(action.createdAt).toLocaleString()}</td>
+				<td className="px-4 py-3 font-semibold text-content-primary">{action.action}</td>
+				<td className="px-4 py-3 text-content-secondary">{action.actorName || action.actorUserId || "system"}</td>
+				<td className="px-4 py-3 text-content-secondary">{action.expiresAt ? formatDate(action.expiresAt) : "-"}</td>
+				<td className="px-4 py-3 text-content-secondary">{action.reason || "-"}</td>
+                <td className="px-4 py-3 text-content-secondary">{new Date(action.createdAt).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
-        </table>
-        {!actionsQuery.isLoading && actions.length === 0 ? <p className="p-4 text-sm text-slate-400">No enforcement actions yet.</p> : null}
+        </Table>
+		{!actionsQuery.isLoading && actions.length === 0 ? <p className="p-4 text-body-sm text-content-secondary">No moderator actions yet.</p> : null}
       </Panel>
     </div>
   );
@@ -1223,11 +1109,11 @@ function AccessRoute(props: {
   return (
     <div className="space-y-4">
       <header>
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">Access</p>
-        <h2 className="mt-1 text-3xl font-black text-white">Roles</h2>
+        <Text as="p" variant="label" className="text-status-success">Access</Text>
+        <Heading as="h2" variant="display-md" className="mt-1">Roles</Heading>
       </header>
       {!props.canManageAdmin ? (
-        <Panel className="p-5 text-amber-200">Admin access is required to manage roles.</Panel>
+        <Panel className="p-5 text-body-sm text-status-warning">Admin access is required to manage roles.</Panel>
       ) : (
         <>
           <Panel className="p-4">
@@ -1242,8 +1128,8 @@ function AccessRoute(props: {
             </div>
           </Panel>
           <Panel className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="border-b border-slate-800 text-xs uppercase tracking-[0.12em] text-slate-500">
+            <Table className="w-full min-w-[760px] text-left text-body-sm">
+              <TableHead className="border-b border-border-default text-label uppercase text-content-secondary">
                 <tr>
                   <th className="px-4 py-3">User</th>
                   <th className="px-4 py-3">Role</th>
@@ -1251,24 +1137,24 @@ function AccessRoute(props: {
                   <th className="px-4 py-3">Reason</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900">
+              </TableHead>
+              <tbody className="divide-y divide-border-default">
                 {roles.map((grant) => (
                   <tr key={`${grant.userId}:${grant.role}`}>
                     <td className="px-4 py-3">
-                      <p className="font-bold text-white">{grant.displayName || grant.userId}</p>
-                      <p className="text-xs text-slate-500">{grant.email || grant.userId}</p>
+                      <p className="font-strong text-content-primary">{grant.displayName || grant.userId}</p>
+                      <p className="text-body-sm text-content-secondary">{grant.email || grant.userId}</p>
                     </td>
-                    <td className="px-4 py-3 font-semibold text-white">{grant.role}</td>
-                    <td className="px-4 py-3 text-slate-400">{grant.grantedBy || "system"}</td>
-                    <td className="px-4 py-3 text-slate-400">{grant.reason || "-"}</td>
+                    <td className="px-4 py-3 font-semibold text-content-primary">{grant.role}</td>
+                    <td className="px-4 py-3 text-content-secondary">{grant.grantedBy || "system"}</td>
+                    <td className="px-4 py-3 text-content-secondary">{grant.reason || "-"}</td>
                     <td className="px-4 py-3 text-right">
                       <Button onClick={() => void revokeRole.mutateAsync(grant)}>Revoke</Button>
                     </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </Panel>
         </>
       )}

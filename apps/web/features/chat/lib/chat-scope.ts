@@ -7,10 +7,7 @@ export function selectActiveChatConversationId(params: {
   match: MatchState;
 }) {
   const partySnapshot = params.party.snapshot;
-  if (
-    partySnapshot?.id &&
-    partySnapshot.members.some((member) => member.userId === params.userId)
-  ) {
+  if (partySnapshot?.id && params.party.self?.userId === params.userId) {
     return `party:${partySnapshot.id}`;
   }
   if (params.match.sourcePartyId) {

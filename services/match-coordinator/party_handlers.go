@@ -60,7 +60,7 @@ func (q *matchCoordinator) createParty(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "party unavailable", http.StatusInternalServerError)
 		return
 	}
-	if req.Config.Ruleset != "" || req.Config.MapID != "" || req.Config.MapKey != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 {
+	if req.Config.Ruleset != "" || req.Config.MapID != "" || req.Config.MapKey != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 || req.Config.MultiplierMode != "" {
 		if req.Config.MapID == "" && req.Config.MapKey == "" {
 			req.Config.MapID = snap.Config.MapID
 		}
@@ -86,6 +86,10 @@ func (q *matchCoordinator) createParty(w http.ResponseWriter, r *http.Request) {
 }
 
 func (q *matchCoordinator) getParty(w http.ResponseWriter, r *http.Request) {
+	userID, authenticated := q.requirePlayableUser(w, r)
+	if !authenticated {
+		return
+	}
 	code := strings.TrimSpace(mux.Vars(r)["code"])
 	snap, ok, err := q.persist.GetPartyByInviteCode(code)
 	if err != nil {
@@ -94,6 +98,17 @@ func (q *matchCoordinator) getParty(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		http.Error(w, "party not found", http.StatusNotFound)
+		return
+	}
+	isMember := false
+	for _, member := range snap.Members {
+		if member.UserID == userID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		http.Error(w, "party membership required", http.StatusForbidden)
 		return
 	}
 	q.applyPartyPresence(&snap)
@@ -270,9 +285,8 @@ func (q *matchCoordinator) updatePartySettings(w http.ResponseWriter, r *http.Re
 }
 
 func (q *matchCoordinator) partyPresence(w http.ResponseWriter, r *http.Request) {
-	claims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	claims, _, active := q.requireActiveAccount(w, r)
+	if !active {
 		return
 	}
 	partyID := strings.TrimSpace(mux.Vars(r)["id"])
@@ -293,9 +307,8 @@ func (q *matchCoordinator) partyPresence(w http.ResponseWriter, r *http.Request)
 }
 
 func (q *matchCoordinator) partyWS(w http.ResponseWriter, r *http.Request) {
-	claims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	claims, _, active := q.requireActiveAccount(w, r)
+	if !active {
 		return
 	}
 	partyID := strings.TrimSpace(mux.Vars(r)["id"])
@@ -429,18 +442,8 @@ func (q *matchCoordinator) partyWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (q *matchCoordinator) requirePlayableUser(w http.ResponseWriter, r *http.Request) (string, bool) {
-	appClaims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return "", false
-	}
-	identity, err := q.persist.GetIdentity(appClaims.Sub)
-	if err != nil {
-		http.Error(w, "identity not found", http.StatusUnauthorized)
-		return "", false
-	}
-	if identity.IsBanned {
-		http.Error(w, "account is banned", http.StatusForbidden)
+	appClaims, identity, ok := q.requireActiveAccount(w, r)
+	if !ok {
 		return "", false
 	}
 	if identity.NicknameRequired {
@@ -460,9 +463,8 @@ func (q *matchCoordinator) writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (q *matchCoordinator) startParty(w http.ResponseWriter, r *http.Request) {
-	claims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	claims, _, active := q.requireActiveAccount(w, r)
+	if !active {
 		return
 	}
 	partyID := strings.TrimSpace(mux.Vars(r)["id"])
@@ -532,7 +534,7 @@ func (q *matchCoordinator) clearSupersededAssignment(ctx context.Context, assign
 	}
 	_ = q.state.ClearAssignment(ctx, assigned)
 	if q.persist != nil && sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID) == contracts.ModeSingleplayer {
-		_ = q.persist.RecordRuntimeMatch(assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
+		_ = q.persist.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 	}
 }
 
@@ -625,6 +627,7 @@ func (q *matchCoordinator) partyMatchFound(snap contracts.PartySnapshot) (contra
 		MapScope:              defaultPartyMapScope(snap.MapScope),
 		SourcePartyID:         snap.ID,
 		SourcePartyInviteCode: snap.InviteCode,
+		ReturnTarget:          &contracts.MatchReturnTarget{Kind: contracts.MatchReturnParty, PartyID: snap.ID},
 	}
 	for _, member := range active {
 		match.Players = append(match.Players, member.UserID)

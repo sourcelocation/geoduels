@@ -6,11 +6,7 @@ import (
 	"geoduels/pkg/entityid"
 )
 
-type legacyEntityIDResolver interface {
-	ResolveLegacyEntityID(entityType, legacyID string) (string, bool, error)
-}
-
-func (a *api) resolveEntityID(entityType, value string) string {
+func (a *api) resolveEntityID(_ string, value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return ""
@@ -18,12 +14,7 @@ func (a *api) resolveEntityID(entityType, value string) string {
 	if id, err := entityid.Parse(value); err == nil {
 		return id
 	}
-	if resolver, ok := a.store.(legacyEntityIDResolver); ok {
-		if id, found, err := resolver.ResolveLegacyEntityID(entityType, value); err == nil && found {
-			return id
-		}
-	}
-	return value
+	return ""
 }
 
 func resolveCompactEntityID(value string) string {

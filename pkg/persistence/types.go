@@ -32,12 +32,17 @@ type PublicPlayerProfile struct {
 	DisplayName       string                  `json:"displayName"`
 	AvatarURL         string                  `json:"avatarUrl,omitempty"`
 	MMR               int                     `json:"mmr"`
+	LeaderboardRank   int                     `json:"leaderboardRank"`
+	LeaderboardTotal  int                     `json:"leaderboardTotal"`
 	RatingRD          float64                 `json:"ratingRd,omitempty"`
 	SeasonID          string                  `json:"seasonId,omitempty"`
 	GamesPlayed       int                     `json:"gamesPlayed"`
 	Wins              int                     `json:"wins"`
 	RankedGamesPlayed int                     `json:"rankedGamesPlayed"`
 	RankedWins        int                     `json:"rankedWins"`
+	BestWinStreak     int                     `json:"bestWinStreak"`
+	PerfectGuesses    int                     `json:"perfectGuesses"`
+	FlawlessWins      int                     `json:"flawlessWins"`
 	Badges            []contracts.PlayerBadge `json:"badges,omitempty"`
 	SelectedBadge     *contracts.PlayerBadge  `json:"selectedBadge,omitempty"`
 }
@@ -80,20 +85,23 @@ type Identity struct {
 
 type AdminPlayerSummary = contracts.AdminPlayerSummary
 
+// AdminBadgeDefinition is the server-authoritative catalog entry for badges
+// that an administrator may grant manually.
+type AdminBadgeDefinition struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	ImageURL    string `json:"imageUrl"`
+	Rarity      string `json:"rarity,omitempty"`
+	MaxLevel    int    `json:"maxLevel"`
+}
+
 type ModerationSignalSummary = contracts.ModerationSignalSummary
-type ModerationIncidentSummary = contracts.ModerationIncidentSummary
-type ModerationReviewTaskSummary = contracts.ModerationReviewTaskSummary
-type ModerationVerdictSummary = contracts.ModerationVerdictSummary
 type ModerationAuditLogEntry = contracts.ModerationAuditLogEntry
-type ModerationReporterState = contracts.ModerationReporterState
-type ModerationMatchSummary = contracts.ModerationMatchSummary
-type ModerationMatchPlayerSummary = contracts.ModerationMatchPlayerSummary
-type ModerationIncidentDetail = contracts.ModerationIncidentDetail
 type ModerationSubjectProfile = contracts.ModerationSubjectProfile
 type ModerationSignalCreated = contracts.ModerationSignalCreated
-type ModerationVerdictInput = contracts.ModerationVerdictInput
-type ModerationIncidentNotificationPayload = contracts.ModerationIncidentNotificationPayload
-type EnforcementActionSummary = contracts.EnforcementActionSummary
+type ModerationSignalNotificationPayload = contracts.ModerationSignalNotificationPayload
 type UserRoleGrant = contracts.UserRoleGrant
 
 type MapImportSummary = contracts.MapImportSummary
@@ -151,7 +159,12 @@ type CheatingBanSummary struct {
 	Reason         string           `json:"reason,omitempty"`
 	Refunds        EloRefundSummary `json:"refunds"`
 	IPSignupBanned bool             `json:"ipSignupBanned"`
-	IncidentIDs    []int64          `json:"incidentIds,omitempty"`
+}
+
+type CommunityPardonSummary struct {
+	Eligible int       `json:"eligible"`
+	Pardoned int       `json:"pardoned"`
+	Cutoff   time.Time `json:"cutoff"`
 }
 
 type AdminPlayerStats struct {
@@ -163,23 +176,16 @@ type AdminPlayerStats struct {
 	Losses           int `json:"losses"`
 }
 
-type AdminPlayerEloPoint struct {
-	Date   time.Time `json:"date"`
-	MMR    int       `json:"mmr"`
-	Delta  int       `json:"delta"`
-	Played int       `json:"played"`
-}
-
 type AdminPlayerDetail struct {
-	Player     AdminPlayerSummary    `json:"player"`
-	Stats      AdminPlayerStats      `json:"stats"`
-	EloHistory []AdminPlayerEloPoint `json:"eloHistory"`
+	Player AdminPlayerSummary `json:"player"`
 }
 
 type UserNotification struct {
 	ID        int64           `json:"id"`
 	Type      string          `json:"type"`
+	Category  string          `json:"category,omitempty"`
 	Payload   json.RawMessage `json:"payload"`
+	ReadAt    *time.Time      `json:"readAt,omitempty"`
 	CreatedAt time.Time       `json:"createdAt"`
 }
 

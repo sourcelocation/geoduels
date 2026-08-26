@@ -118,7 +118,7 @@ func (s *pgStore) DeleteMapComment(userID, mapID, commentID string, moderator bo
 	if moderator {
 		status = "moderated"
 	}
-	query := `update map_comments set status=$5, body='', like_count=0, deleted_by=$1, deleted_at=now(), updated_at=now()
+	query := `update map_comments set status=$5, body=null, like_count=0, deleted_by=$1, deleted_at=now(), updated_at=now()
 		where id=$2 and map_id=$3 and status='visible' and ($4 or user_id=$1)`
 	tag, err := tx.Exec(ctx, query, strings.TrimSpace(userID), strings.TrimSpace(commentID), strings.TrimSpace(mapID), moderator, status)
 	if err != nil {
@@ -213,9 +213,9 @@ func (s *pgStore) listMapComments(ctx context.Context, userID, mapID string) ([]
 	profile, _ := s.GetProfile(userID)
 	canModerate := profile.IsAdmin || profile.IsModerator
 	rows, err := s.pool.Query(ctx, `
-		select c.id, c.map_id, coalesce(c.parent_id::text,''), c.user_id, coalesce(u.display_name, c.user_id::text), coalesce(u.avatar_url, ''),
+		select c.id::text, c.map_id::text, coalesce(c.parent_id::text,''), c.user_id::text, coalesce(u.display_name, c.user_id::text), coalesce(u.avatar_url, ''),
 		       case when c.status='visible' then c.body else '' end,
-		       c.status, (c.user_id=nullif($2,'')::uuid or $3), c.like_count,
+		       c.status, coalesce(c.user_id=nullif($2,'')::uuid or $3, false), c.like_count,
 		       exists(select 1 from map_comment_likes l where l.comment_id=c.id and l.user_id=nullif($2,'')::uuid),
 		       c.created_at, c.updated_at
 		from map_comments c

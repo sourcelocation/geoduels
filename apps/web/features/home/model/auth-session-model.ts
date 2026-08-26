@@ -31,13 +31,8 @@ export function currentReturnTo() {
   return path.startsWith("/") ? path : "/";
 }
 
-export function clearGoogleAuthParams(url: URL) {
-  url.searchParams.delete("googleAuth");
-  url.searchParams.delete("googleAuthError");
-  url.searchParams.delete("auth");
-  url.searchParams.delete("authError");
-  url.searchParams.delete("provider");
-}
+/** @deprecated Prefer clearAuthCallbackParams from features/auth/lib/auth-callback. */
+export { clearAuthCallbackParams as clearGoogleAuthParams } from "../../auth/lib/auth-callback";
 
 export function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;

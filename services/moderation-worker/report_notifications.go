@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	reportNotificationType     = "moderation_incident_queued"
+	reportNotificationType     = "moderation_signal_queued"
 	reportNotificationInterval = 15 * time.Second
 	reportNotificationBatch    = 5
 )
@@ -77,7 +77,7 @@ func (w *worker) processOneReportNotification(ctx context.Context) (bool, error)
 	if err != nil || !ok {
 		return false, err
 	}
-	var payload contracts.ModerationIncidentNotificationPayload
+	var payload contracts.ModerationSignalNotificationPayload
 	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
 		return true, w.store.MarkNotificationFailed(item.ID, time.Now().Add(24*time.Hour), "invalid notification payload: "+err.Error())
 	}
@@ -101,7 +101,7 @@ func (w *worker) processOneReportNotification(ctx context.Context) (bool, error)
 	if err := w.store.MarkNotificationSent(item.ID); err != nil {
 		return true, err
 	}
-	observability.Log("info", "moderation incident notification sent", map[string]any{"incident_id": payload.IncidentID, "subject_user_id": payload.SubjectUserID})
+	observability.Log("info", "moderation signal notification sent", map[string]any{"signal_id": payload.SignalID, "subject_user_id": payload.SubjectUserID})
 	return true, nil
 }
 
@@ -124,7 +124,7 @@ func nextReportNotificationAttempt(attempts int) time.Time {
 	return time.Now().Add(delays[idx])
 }
 
-func (w *worker) sendDiscordReportNotification(ctx context.Context, webhookURL string, payload contracts.ModerationIncidentNotificationPayload) (time.Duration, error) {
+func (w *worker) sendDiscordReportNotification(ctx context.Context, webhookURL string, payload contracts.ModerationSignalNotificationPayload) (time.Duration, error) {
 	client := w.httpClient
 	if client == nil {
 		client = http.DefaultClient
@@ -133,17 +133,15 @@ func (w *worker) sendDiscordReportNotification(ctx context.Context, webhookURL s
 		Username: "GeoDuels Moderation",
 		Embeds: []discordEmbed{
 			{
-				Title: "Moderation incident needs review",
+				Title: "Moderation signal needs review",
 				Color: 0xff4d4f,
 				Fields: []discordEmbedField{
-					{Name: "Incident", Value: fmt.Sprintf("#%d", payload.IncidentID), Inline: true},
-					{Name: "Task", Value: fmt.Sprintf("#%d", payload.TaskID), Inline: true},
+					{Name: "Signal", Value: fmt.Sprintf("#%d", payload.SignalID), Inline: true},
 					{Name: "Severity", Value: strings.ToUpper(payload.Severity), Inline: true},
 					{Name: "Subject", Value: discordUserValue(payload.SubjectName, payload.SubjectUserID), Inline: false},
-					{Name: "Evidence", Value: fmt.Sprintf("%s / %s from %d signals", strings.ToUpper(payload.ReasonCode), strings.ToUpper(payload.EvidenceStrength), payload.SignalCount), Inline: false},
-					{Name: "Strongest Signals", Value: discordFieldValue(strings.Join(payload.StrongestSignals, ", "), "No signal summary."), Inline: false},
+					{Name: "Evidence", Value: fmt.Sprintf("%s / %s", strings.ToUpper(payload.ReasonCode), strings.ToUpper(payload.EvidenceStrength)), Inline: false},
 				},
-				Timestamp: payload.LatestSignalAt.UTC().Format(time.RFC3339),
+				Timestamp: payload.OccurredAt.UTC().Format(time.RFC3339),
 			},
 		},
 	})

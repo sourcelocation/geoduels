@@ -11,7 +11,7 @@ export function useProfileOwnerActions(accessToken: string) {
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ["player-profile"] }),
-      queryClient.invalidateQueries({ queryKey: ["optional-viewer"] }),
+      queryClient.invalidateQueries({ queryKey: ["auth", "profile"] }),
     ]);
 
   return {

@@ -13,21 +13,21 @@ const TEAM_PRESENTATIONS: Record<string, TeamPresentation> = {
     id: "a",
     name: "Team Red",
     fallback: "R",
-    color: "#dc2626",
-    textClassName: "text-[#fca5a5]",
-    activeClassName: "bg-[#dc2626] text-white",
+    color: "rgb(var(--gd-status-danger))",
+    textClassName: "text-status-danger",
+    activeClassName: "bg-status-danger text-content-on-danger",
     inactiveClassName:
-      "border border-[#f87171]/25 bg-[#dc2626]/15 text-[#fecaca] hover:bg-[#dc2626]/25",
+      "border border-status-danger/25 bg-status-danger/15 text-status-danger hover:bg-status-danger/25",
   },
   b: {
     id: "b",
     name: "Team Blue",
     fallback: "B",
-    color: "#2563eb",
-    textClassName: "text-[#93c5fd]",
-    activeClassName: "bg-[#2563eb] text-white",
+    color: "rgb(var(--gd-status-info))",
+    textClassName: "text-status-info",
+    activeClassName: "bg-status-info text-content-on-action",
     inactiveClassName:
-      "border border-[#60a5fa]/25 bg-[#2563eb]/15 text-[#bfdbfe] hover:bg-[#2563eb]/25",
+      "border border-status-info/25 bg-status-info/15 text-status-info hover:bg-status-info/25",
   },
 };
 

@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import type { LobbyContentRoute } from "../../../components/ui/LobbyScreen";
+import type { LobbyContentRoute } from "../../lobby/components/LobbyScreen";
 import {
   normalizeEntityRouteId,
   toPublicEntityId,
@@ -22,22 +22,14 @@ function resolveLobbyRoute(pathname: string): LobbyContentRoute {
 
 export function LobbyApplicationLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const [routeLoading, setRouteLoading] = useState(false);
   const lobbyRoute = resolveLobbyRoute(router.pathname);
   const rawPartyCode =
     router.isReady && typeof router.query.code === "string"
       ? router.query.code
       : "";
   const partyInviteCode = rawPartyCode.trim().toUpperCase();
-  const legacyLobbyCode =
-    lobbyRoute === "play" &&
-    router.isReady &&
-    typeof router.query.lobby === "string"
-      ? router.query.lobby.trim().toUpperCase()
-      : "";
-  const routedPartyCode =
-    lobbyRoute === "party" && rawPartyCode.toLowerCase() !== "new"
-      ? partyInviteCode
-      : legacyLobbyCode;
+  const routedPartyCode = lobbyRoute === "party" ? partyInviteCode : "";
   const mapId =
     lobbyRoute === "map-details" &&
     router.isReady &&
@@ -72,11 +64,32 @@ export function LobbyApplicationLayout({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    let loadingTimer: number | undefined;
+
+    const handleStart = () => {
+      if (loadingTimer !== undefined) window.clearTimeout(loadingTimer);
+      loadingTimer = window.setTimeout(() => setRouteLoading(true), 120);
+    };
+    const handleDone = () => {
+      if (loadingTimer !== undefined) window.clearTimeout(loadingTimer);
+      loadingTimer = undefined;
+      setRouteLoading(false);
+    };
+
+    router.events.on("routeChangeStart", handleStart);
+    router.events.on("routeChangeComplete", handleDone);
+    router.events.on("routeChangeError", handleDone);
+
+    return () => {
+      if (loadingTimer !== undefined) window.clearTimeout(loadingTimer);
+      router.events.off("routeChangeStart", handleStart);
+      router.events.off("routeChangeComplete", handleDone);
+      router.events.off("routeChangeError", handleDone);
+    };
+  }, [router.events]);
+
+  useEffect(() => {
     if (!router.isReady || lobbyRoute !== "party" || !rawPartyCode) return;
-    if (rawPartyCode.toLowerCase() === "new") {
-      void router.replace("/");
-      return;
-    }
     if (rawPartyCode !== partyInviteCode) {
       void router.replace(
         `/party/${encodeURIComponent(partyInviteCode)}`,
@@ -99,7 +112,12 @@ export function LobbyApplicationLayout({ children }: { children: ReactNode }) {
   return (
     <>
       {children}
-      <HomePageView model={model} lobbyRoute={lobbyRoute} mapId={mapId} />
+      <HomePageView
+        model={model}
+        lobbyRoute={lobbyRoute}
+        mapId={mapId}
+        routeLoading={routeLoading}
+      />
     </>
   );
 }

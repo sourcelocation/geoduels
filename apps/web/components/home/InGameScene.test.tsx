@@ -110,6 +110,22 @@ describe('InGameScene', () => {
     expect(streetViewFrame).not.toHaveAttribute('tabindex');
   });
 
+  it('shows individual multipliers beside both player names instead of in the shared HUD', () => {
+    render(
+      <InGameScene
+        {...createProps({
+          multiplierMode: 'individual',
+          selfDamageMultiplier: 1.5,
+          oppDamageMultiplier: 1,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('self-multiplier')).toHaveTextContent('1.5x');
+    expect(screen.getByTestId('opponent-multiplier')).toHaveTextContent('1x');
+    expect(screen.queryByTestId('multiplier-badge')).not.toBeInTheDocument();
+  });
+
   it('embeds extension rules in the Street View iframe hash', () => {
     render(
       <InGameScene

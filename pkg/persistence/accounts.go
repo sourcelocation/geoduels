@@ -123,10 +123,9 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	if providerName == "" {
 		providerName = providerUserID
 	}
-	if banned, _, err := s.IsProviderIdentityBanned(provider, providerUserID); err != nil {
+	providerIdentityBanned, _, err := s.IsProviderIdentityBanned(provider, providerUserID)
+	if err != nil {
 		return Identity{}, err
-	} else if banned {
-		return Identity{}, errors.New("provider identity banned")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -153,6 +152,11 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	`, provider, providerUserID)
 	if err := row.Scan(&existingProviderUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Identity{}, err
+	}
+	// A provider ban prevents account creation/evasion, but an identity that is
+	// still attached to its banned account may authenticate into that account.
+	if providerIdentityBanned && existingProviderUserID == "" {
+		return Identity{}, errors.New("provider identity banned")
 	}
 	var previousLinkedProviderUserID string
 	if provider == IdentityProviderDiscord && linkUserID != "" {
@@ -806,89 +810,15 @@ func (s *pgStore) SuggestNickname(sub, displayName string) (string, error) {
 }
 
 func (s *pgStore) SetUserAdmin(userID string, isAdmin bool) error {
-	if userID == "" {
-		return errors.New("user id required")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `
-		update users
-		set is_admin = $2,
-			is_moderator = case when $2 then true else is_moderator end
-		where id = $1
-	`, userID, isAdmin)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("user not found")
-	}
 	if isAdmin {
-		if _, err := tx.Exec(ctx, `
-			insert into user_roles(user_id, role, granted_at, reason)
-			values($1, 'admin', now(), 'legacy admin toggle')
-			on conflict (user_id, role) where revoked_at is null do nothing
-		`, userID); err != nil {
-			return err
-		}
-	} else {
-		if _, err := tx.Exec(ctx, `
-			update user_roles
-			set revoked_at = coalesce(revoked_at, now()), reason = coalesce(nullif(reason, ''), 'legacy admin toggle')
-			where user_id = $1 and role = 'admin' and revoked_at is null
-		`, userID); err != nil {
-			return err
-		}
+		return s.GrantUserRole(userID, "admin", "", "admin toggle")
 	}
-	return tx.Commit(ctx)
+	return s.RevokeUserRole(userID, "admin", "", "admin toggle")
 }
 
 func (s *pgStore) SetUserModerator(userID string, isModerator bool) error {
-	if userID == "" {
-		return errors.New("user id required")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `
-		update users
-		set is_moderator = $2
-		where id = $1
-	`, userID, isModerator)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("user not found")
-	}
 	if isModerator {
-		if _, err := tx.Exec(ctx, `
-			insert into user_roles(user_id, role, granted_at, reason)
-			values($1, 'moderator', now(), 'legacy moderator toggle')
-			on conflict (user_id, role) where revoked_at is null do nothing
-		`, userID); err != nil {
-			return err
-		}
-	} else {
-		if _, err := tx.Exec(ctx, `
-			update user_roles
-			set revoked_at = coalesce(revoked_at, now()), reason = coalesce(nullif(reason, ''), 'legacy moderator toggle')
-			where user_id = $1 and role = 'moderator' and revoked_at is null
-		`, userID); err != nil {
-			return err
-		}
-		if err := removeGeoDuelsTeamBadgeTx(ctx, tx, userID); err != nil {
-			return err
-		}
+		return s.GrantUserRole(userID, "moderator", "", "moderator toggle")
 	}
-	return tx.Commit(ctx)
+	return s.RevokeUserRole(userID, "moderator", "", "moderator toggle")
 }

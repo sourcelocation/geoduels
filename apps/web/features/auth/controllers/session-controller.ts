@@ -2,12 +2,13 @@ import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { ObservableStore } from "../../../lib/observable-store";
 import { INITIAL_MMR, INITIAL_RATING_RD } from "../../../lib/elo";
 import { decodeAccessTokenExpiry } from "../lib/token-expiry";
-import type { PlayerBadgeInfo } from "../../../components/ui/PlayerBadge";
+import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 import {
   emptyAuthSession,
   hasPlayableSession,
   type AuthSessionSnapshot,
 } from "../session";
+import type { AuthGateway } from "../auth-gateway";
 
 type SessionUser = {
   id?: string;
@@ -193,9 +194,11 @@ export class SessionController extends ObservableStore<SessionState> {
     getPlayableSession: async () => null,
   };
   private readonly onResetSession: () => void;
+  private readonly authGateway?: AuthGateway;
+  private readonly unsubscribeGateway?: () => void;
   private readonly messageHandler: (event: MessageEvent) => void;
 
-  constructor(params: { config: RuntimeConfig; onResetSession: () => void }) {
+  constructor(params: { config: RuntimeConfig; onResetSession: () => void; authGateway?: AuthGateway }) {
     super();
     this.config = params.config;
     this.state = {
@@ -206,6 +209,22 @@ export class SessionController extends ObservableStore<SessionState> {
       discordClientId: params.config.discordClientId,
     };
     this.onResetSession = params.onResetSession;
+    this.authGateway = params.authGateway;
+    if (this.authGateway) {
+      this.unsubscribeGateway = this.authGateway.subscribe((session) => {
+        if (!session) {
+          if (this.state.userId) {
+            this.clearAuthSession(
+              this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.",
+              { skipGateway: true },
+            );
+          }
+          return;
+        }
+        this.syncGatewaySession(session);
+      });
+      this.syncGatewaySession(this.authGateway.getSnapshot());
+    }
     this.messageHandler = (event: MessageEvent) => {
       const expectedOrigin = (() => {
         if (!this.config.apiURL.trim()) {
@@ -252,6 +271,7 @@ export class SessionController extends ObservableStore<SessionState> {
     if (wasStarted && typeof window !== "undefined") {
       window.removeEventListener("message", this.messageHandler);
     }
+    this.unsubscribeGateway?.();
   }
 
   getState() {
@@ -328,8 +348,8 @@ export class SessionController extends ObservableStore<SessionState> {
     });
   }
 
-  clearAuthSession = (message?: string) => {
-    this.onResetSession();
+  clearAuthSession = (message?: string, options?: { skipGateway?: boolean }) => {
+    const hadSession = !!this.state.userId || !!this.session.userId;
     this.session = emptyAuthSession();
     this.patchState({
       ...initialState,
@@ -339,9 +359,22 @@ export class SessionController extends ObservableStore<SessionState> {
       discordClientId: this.config.discordClientId,
       authError: message || "",
     });
+    if (hadSession) this.onResetSession();
+    // Clear the canonical source only after the local projection is empty. The
+    // gateway listener then observes an already-cleared projection and cannot
+    // recursively reset the gameplay runtime a second time.
+    if (!options?.skipGateway) this.authGateway?.clear();
   };
 
   bootstrapSession = async (options?: { force?: boolean }): Promise<AuthSessionSnapshot | null> => {
+    if (this.authGateway) {
+      const session = await this.authGateway.bootstrap(options);
+      if (!session && this.state.userId) {
+        this.clearAuthSession(this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.");
+      }
+      this.syncGatewaySession(session);
+      return session;
+    }
     if (this.bootstrapPromise) {
       return this.bootstrapPromise;
     }
@@ -350,7 +383,7 @@ export class SessionController extends ObservableStore<SessionState> {
     }
     this.bootstrapPromise = (async () => {
       try {
-        const session = await this.networkHandlers.bootstrapSession();
+        const session = await this.networkHandlers.bootstrapSession(options);
         this.bootstrapResult = session;
         if (!session && this.state.isGuest) {
           this.clearAuthSession(guestSessionExpiredMessage);
@@ -371,6 +404,14 @@ export class SessionController extends ObservableStore<SessionState> {
   };
 
   refreshSession = async (): Promise<AuthSessionSnapshot | null> => {
+    if (this.authGateway) {
+      const session = await this.authGateway.refresh();
+      if (!session && this.state.userId) {
+        this.clearAuthSession(this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.");
+      }
+      this.syncGatewaySession(session);
+      return session;
+    }
     if (this.refreshPromise) {
       return this.refreshPromise;
     }
@@ -445,6 +486,7 @@ export class SessionController extends ObservableStore<SessionState> {
   };
 
   getSessionSnapshot = (): AuthSessionSnapshot | null => {
+    if (this.authGateway) return this.authGateway.getSnapshot();
     return hasPlayableSession(this.session) ? this.session : null;
   };
 
@@ -454,6 +496,14 @@ export class SessionController extends ObservableStore<SessionState> {
   ): Promise<AuthSessionSnapshot | null> {
     const allowNicknameRequired = !!options?.allowNicknameRequired;
     const forceRefresh = !!options?.forceRefresh;
+    if (this.authGateway) {
+      const session = await this.authGateway.ensureFreshSession(minValidityMs, {
+        forceRefresh,
+        allowNicknameRequired,
+      });
+      this.syncGatewaySession(session);
+      return session;
+    }
     if (!this.session.userId || !this.session.accessToken) {
       return null;
     }
@@ -483,6 +533,11 @@ export class SessionController extends ObservableStore<SessionState> {
   }
 
   getPlayableSession = async (): Promise<AuthSessionSnapshot | null> => {
+    if (this.authGateway) {
+      const session = await this.authGateway.ensurePlayableSession();
+      this.syncGatewaySession(session);
+      return session;
+    }
     if (hasPlayableSession(this.session)) {
       const fresh = await this.ensureFreshSession(60_000, {
         forceRefresh: this.state.isGuest,
@@ -507,6 +562,14 @@ export class SessionController extends ObservableStore<SessionState> {
   }
 
   applySessionSnapshot(session: AuthSessionSnapshot, patch: SessionPatch) {
+    this.authGateway?.applySnapshot(session, {
+      isGuest: patch.isGuest,
+      isAdmin: patch.isAdmin,
+      isModerator: patch.isModerator,
+      displayName: patch.displayName,
+      email: patch.userEmail,
+      avatarUrl: patch.userAvatar,
+    });
     this.session = this.normalizeSessionSnapshot(session);
     this.patchState({
       userId: this.session.userId,
@@ -518,6 +581,34 @@ export class SessionController extends ObservableStore<SessionState> {
       canPlay: this.session.canPlay,
       nicknameInput: this.session.nicknameInput,
       ...patch,
+    });
+  }
+
+  private syncGatewaySession(session: AuthSessionSnapshot | null) {
+    if (!session) return;
+    const user = this.authGateway?.getPayload()?.user;
+    this.session = this.normalizeSessionSnapshot(session);
+    this.patchState({
+      userId: session.userId,
+      accessToken: session.accessToken,
+      nicknameRequired: session.nicknameRequired,
+      authMigrationRequired: session.authMigrationRequired,
+      recoveryAvailable: session.recoveryAvailable,
+      linkedProviders: session.linkedProviders,
+      canPlay: session.canPlay,
+      nicknameInput: session.nicknameInput,
+      userEmail: user?.email || this.state.userEmail,
+      displayName:
+        user?.display_name || user?.email || this.state.displayName,
+      userAvatar: user?.avatar_url || this.state.userAvatar,
+      isGuest:
+        typeof user?.isGuest === "boolean" ? user.isGuest : this.state.isGuest,
+      isAdmin:
+        typeof user?.isAdmin === "boolean" ? user.isAdmin : this.state.isAdmin,
+      isModerator:
+        typeof user?.isModerator === "boolean"
+          ? user.isModerator
+          : this.state.isModerator,
     });
   }
 
@@ -611,8 +702,9 @@ function normalizeBadge(value: unknown): PlayerBadgeInfo | null {
     description: typeof raw.description === "string" ? raw.description : "",
     imageUrl: typeof raw.imageUrl === "string" ? raw.imageUrl : "",
     rarity: typeof raw.rarity === "string" ? raw.rarity : undefined,
-    seasonId: typeof raw.seasonId === "string" ? raw.seasonId : undefined,
-    rank: typeof raw.rank === "number" ? raw.rank : undefined,
+    level: typeof raw.level === "number" ? raw.level : undefined,
+    maxLevel: typeof raw.maxLevel === "number" ? raw.maxLevel : undefined,
+    extra: typeof raw.extra === "number" ? raw.extra : undefined,
     owned: typeof raw.owned === "boolean" ? raw.owned : false,
     unobtainable:
       typeof raw.unobtainable === "boolean" ? raw.unobtainable : undefined,

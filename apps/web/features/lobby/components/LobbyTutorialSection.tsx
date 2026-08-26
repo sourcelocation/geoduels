@@ -1,32 +1,32 @@
 import type React from "react";
 import { ArrowRight } from "lucide-react";
-import { LobbyActionLink, LobbyPanel } from "./lobby-primitives";
+import { ButtonLink } from "../../../components/ui/button";
+import { Badge } from "../../../components/ui/Badge";
+import { AppPanel, SectionCard } from "../../../components/ui/compositions";
+import { BodyText, CardTitle, Eyebrow, MutedText, SectionTitle } from "../../../components/ui/typography";
 
 export function LobbyTutorialSection() {
   return (
     <section
       aria-labelledby="geoduels-seo-heading"
-      className="w-full border-t border-white/10 py-8 pointer-events-auto sm:py-10"
+      className="w-full pointer-events-auto"
     >
-      <div className="space-y-6 text-left">
+      <AppPanel className="space-y-6 rounded-2xl p-5 text-left sm:p-6">
         <div className="flex flex-col items-start justify-between gap-5 sm:flex-row sm:items-end">
           <div className="max-w-3xl space-y-3">
-            <span className="inline-flex rounded-full border border-[#2ad18f]/30 bg-[#2ad18f]/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-[#7de3b7]">
-              Tutorial
-            </span>
-            <h1
+            <Badge tone="success">Tutorial</Badge>
+            <SectionTitle
               id="geoduels-seo-heading"
-              className="text-[30px] font-extrabold leading-tight tracking-tight text-white sm:text-[40px]"
             >
               GeoDuels
-            </h1>
-            <p className="text-[15px] leading-7 text-[#a9bfd4] sm:text-base">
+            </SectionTitle>
+            <BodyText>
               A free GeoGuessr-inspired Street View game. Queue for ranked
               matches against other players, with friends, or jump into
               singleplayer.
-            </p>
+            </BodyText>
           </div>
-          <LobbyActionLink
+          <ButtonLink
             href="/help"
             variant="secondary"
             size="lg"
@@ -34,7 +34,7 @@ export function LobbyTutorialSection() {
           >
             Learn more
             <ArrowRight size={16} />
-          </LobbyActionLink>
+          </ButtonLink>
         </div>
 
         <div className="grid gap-5 lg:grid-cols-3">
@@ -51,18 +51,18 @@ export function LobbyTutorialSection() {
             GeoGuessr alternatives offer.
           </TutorialCard>
         </div>
-      </div>
+      </AppPanel>
     </section>
   );
 }
 
 function TutorialCard(props: { title: string; children: React.ReactNode }) {
   return (
-    <LobbyPanel className="rounded-2xl p-5">
-      <h2 className="text-lg font-extrabold tracking-tight text-white">
+    <SectionCard className="rounded-2xl p-5">
+      <CardTitle>
         {props.title}
-      </h2>
-      <p className="mt-3 text-sm leading-7 text-[#a9bfd4]">{props.children}</p>
-    </LobbyPanel>
+      </CardTitle>
+      <MutedText className="mt-3 leading-prose-lg">{props.children}</MutedText>
+    </SectionCard>
   );
 }

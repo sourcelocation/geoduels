@@ -21,6 +21,18 @@ const (
 	communityMapListPredicate = "m.owner_user_id is not null and m.visibility='public' and m.status='ready'"
 )
 
+func gameplayMapSettingMatchSQL(jsonKey, defaultAlias string) string {
+	return fmt.Sprintf(`exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'%[1]s' from site_settings where key='gameplay_map_settings'),'%[2]s')) or coalesce((select value_json->>'%[1]s' from site_settings where key='gameplay_map_settings'),'%[2]s')=m.id::text`, jsonKey, defaultAlias)
+}
+
+func gameplayMapRoleFlagsSQL() string {
+	return strings.Join([]string{
+		gameplayMapSettingMatchSQL("movingMapId", contracts.MapKeyMoving),
+		gameplayMapSettingMatchSQL("noMoveMapId", contracts.MapKeyNMPZ),
+		gameplayMapSettingMatchSQL("nmpzMapId", contracts.MapKeyNMPZ),
+	}, ",\n\t\t       ")
+}
+
 type MapCatalog interface {
 	ListMaps(userID string, opts contracts.MapListOptions) ([]contracts.CustomMap, error)
 	GetMap(userID, mapID string) (contracts.MapDetails, bool, error)
@@ -66,10 +78,7 @@ func (s *pgStore) ListMaps(userID string, opts contracts.MapListOptions) ([]cont
 		       coalesce(m.published_at, '0001-01-01'::timestamptz), m.play_count, m.favorite_count, m.comment_count, m.trending_score,
 		       exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($1,'')::uuid),
 		       trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))),
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
+		       ` + gameplayMapRoleFlagsSQL() + `,
 		       m.created_at,m.updated_at,pb.best_score,coalesce(pb.match_id::text,''),pb.achieved_at
 		from maps m
 		left join users u on u.id = m.owner_user_id
@@ -135,10 +144,7 @@ func (s *pgStore) GetMap(userID, mapID string) (contracts.MapDetails, bool, erro
 		       coalesce(m.published_at, '0001-01-01'::timestamptz), m.play_count, m.favorite_count, m.comment_count, m.trending_score,
 		       exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($2,'')::uuid),
 		       trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))),
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'rankedMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'rankedNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')) or coalesce((select value_json->>'singleplayerMovingMapId' from site_settings where key='gameplay_map_settings'),'a-source-world')=m.id::text,
-		       exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')) or coalesce((select value_json->>'singleplayerNmpzMapId' from site_settings where key='gameplay_map_settings'),'a-location-world')=m.id::text,
+		       ` + gameplayMapRoleFlagsSQL() + `,
 		       m.created_at,m.updated_at,pb.best_score,coalesce(pb.match_id::text,''),pb.achieved_at
 		from maps m
 		left join users u on u.id = m.owner_user_id

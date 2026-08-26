@@ -594,7 +594,7 @@ func recordMatchHistory(
 			replay_zstd, replay_codec, replay_schema_version, replay_uncompressed_bytes,
 			replay_sha256, replay_expires_at, round_count
 		)
-		values($1,$2,$3,$4,nullif($5,'')::uuid,$6,$7,nullif($8,'')::uuid,nullif($9,''),
+		values($1,$2,$3,$4,nullif($5,'')::uuid,$6,$7,nullif($8,'')::uuid,nullif($9,'')::gd_ruleset,
 		       nullif($10,'')::uuid,$11,$12,$13,$14,$15,
 		       $4::timestamptz + make_interval(days => $16::integer),$17)
 		on conflict (match_id) do update set

@@ -31,17 +31,18 @@ type NodeRecord struct {
 }
 
 type Assignment struct {
-	MatchID               string                `json:"matchId"`
-	Mode                  contracts.MatchMode   `json:"mode,omitempty"`
-	Config                contracts.MatchConfig `json:"config,omitempty"`
-	NodeID                string                `json:"nodeId"`
-	NodeEpoch             int64                 `json:"nodeEpoch,omitempty"`
-	PublicRoute           string                `json:"publicRoute"`
-	Players               []string              `json:"players"`
-	UpdatedAt             int64                 `json:"updatedAt"`
-	RecoverableUntil      int64                 `json:"recoverableUntil,omitempty"`
-	SourcePartyID         string                `json:"sourcePartyId,omitempty"`
-	SourcePartyInviteCode string                `json:"sourcePartyInviteCode,omitempty"`
+	MatchID               string                       `json:"matchId"`
+	Mode                  contracts.MatchMode          `json:"mode,omitempty"`
+	Config                contracts.MatchConfig        `json:"config,omitempty"`
+	NodeID                string                       `json:"nodeId"`
+	NodeEpoch             int64                        `json:"nodeEpoch,omitempty"`
+	PublicRoute           string                       `json:"publicRoute"`
+	Players               []string                     `json:"players"`
+	UpdatedAt             int64                        `json:"updatedAt"`
+	RecoverableUntil      int64                        `json:"recoverableUntil,omitempty"`
+	SourcePartyID         string                       `json:"sourcePartyId,omitempty"`
+	SourcePartyInviteCode string                       `json:"sourcePartyInviteCode,omitempty"`
+	ReturnTarget          *contracts.MatchReturnTarget `json:"returnTarget,omitempty"`
 }
 
 type Store struct {

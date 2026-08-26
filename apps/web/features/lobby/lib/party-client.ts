@@ -2,7 +2,7 @@ import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { normalizeHTTPBase, normalizeWSBase } from "../../../lib/runtime-config";
 import type { AuthSessionSnapshot } from "../../auth/session";
 import type { MatchConfig } from "../../matchmaking/lib/queue-client";
-import type { PlayerBadgeInfo } from "../../../components/ui/PlayerBadge";
+import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 
 export type PartyMode = "duel" | "team_duel" | "free_for_all";
 export type PartyTeamId = "a" | "b";
@@ -134,9 +134,9 @@ export function applyPartyPatch(party: PartySnapshot | null, patch: PartyPatch):
   return next;
 }
 
-export async function fetchParty(config: RuntimeConfig, code: string, signal?: AbortSignal): Promise<PartySnapshot | null> {
+export async function fetchParty(config: RuntimeConfig, code: string, accessToken: string, signal?: AbortSignal): Promise<PartySnapshot | null> {
   const target = `${partyHTTPBase(config)}/parties/${encodeURIComponent(code)}`;
-  const resp = signal ? await fetch(target, { signal }) : await fetch(target);
+  const resp = await fetch(target, { headers: authHeaders(accessToken), signal });
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error("Party unavailable");
   return resp.json();

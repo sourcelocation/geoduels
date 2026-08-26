@@ -1,16 +1,21 @@
-import type { PlayerBadgeInfo } from "../../components/ui/PlayerBadge";
+import type { PlayerBadgeInfo } from "./components/PlayerBadge";
 
 export type PublicPlayerProfile = {
   userId: string;
   displayName: string;
   avatarUrl?: string;
   mmr: number;
+  leaderboardRank: number;
+  leaderboardTotal: number;
   ratingRd?: number;
   seasonId?: string;
   gamesPlayed: number;
   wins: number;
   rankedGamesPlayed: number;
   rankedWins: number;
+  bestWinStreak: number;
+  perfectGuesses: number;
+  flawlessWins: number;
   badges?: PlayerBadgeInfo[];
   selectedBadge?: PlayerBadgeInfo | null;
 };
@@ -32,16 +37,4 @@ export type PlayerMatchSummary = {
 export type PlayerMatchesPage = {
   matches: PlayerMatchSummary[];
   nextCursor?: string;
-};
-
-export type OptionalViewer = {
-  userId: string;
-  accessToken: string;
-  isGuest: boolean;
-  isAdmin?: boolean;
-  isModerator?: boolean;
-  displayName: string;
-  avatarUrl?: string;
-  mmr?: number;
-  selectedBadge?: PlayerBadgeInfo | null;
 };

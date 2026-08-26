@@ -18,15 +18,14 @@ import {
   updatePartySettings,
   updatePartyTeam,
   type PartySnapshot,
+  type PartyMember,
   type PartyTeamId,
   type PartyMode,
 } from "../lib/party-client";
 
 export type PartyRuntimeStatus =
   | "idle"
-  | "creating"
-  | "joining"
-  | "connecting"
+  | "admitting"
   | "ready"
   | "reconnecting"
   | "leaving"
@@ -37,6 +36,7 @@ export type PartyRuntimeState = {
   partyId: string;
   inviteCode: string;
   snapshot: PartySnapshot | null;
+  self: PartyMember | null;
   error: string;
 };
 
@@ -45,16 +45,13 @@ const initialState: PartyRuntimeState = {
   partyId: "",
   inviteCode: "",
   snapshot: null,
+  self: null,
   error: "",
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
   return fallback;
-}
-
-function normalizePartySnapshot(next: PartySnapshot): PartySnapshot {
-  return next;
 }
 
 export function jitteredPartyDelay(baseMs = 5000): number {
@@ -108,45 +105,43 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
     this.patchState(initialState);
   };
 
-  ensureParty = async (inviteCode: string) => {
+  admitParty = async (inviteCode: string) => {
     const code = inviteCode.trim().toUpperCase();
     if (!code) return;
-    if (this.state.inviteCode === code && this.state.snapshot) {
+    if (
+      this.state.inviteCode === code &&
+      this.isCurrentUserMember(this.state.snapshot)
+    ) {
       await this.ensureStream();
       return;
     }
     if (
       this.state.inviteCode === code &&
-      (this.state.status === "connecting" ||
-        this.state.status === "joining" ||
-        this.state.status === "creating")
+      this.state.status === "admitting"
     ) {
       return;
     }
     this.patchState({
-      status: "connecting",
+      status: "admitting",
       inviteCode: code,
       partyId: "",
       snapshot: null,
+      self: null,
       error: "",
     });
     try {
-      const snap = await fetchParty(this.config, code);
-      if (!snap) {
-        this.patchState({ status: "error", error: "Party not found" });
-        return;
-      }
+      const session = await this.playableSession();
+      if (!session) return;
+      const snap = await joinParty(this.config, code, session.accessToken);
+      this.assertCurrentUserMember(snap);
       this.patchState({
         partyId: snap.id,
         inviteCode: snap.inviteCode,
-        snapshot: normalizePartySnapshot(snap),
+        snapshot: snap,
+        self: this.currentUserMember(snap),
       });
       this.markExistingMatchHandled(snap);
-      if (!this.isCurrentUserMember(snap)) {
-        this.patchState({ status: "ready", error: "" });
-        return;
-      }
-      await this.ensureStream();
+      await this.connectToParty(session, snap.id, { waitForSnapshot: true });
     } catch (error) {
       this.patchState({
         status: "error",
@@ -156,7 +151,7 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
   };
 
   createParty = async (mode: PartyMode = "duel", matchConfig?: MatchConfig) => {
-    this.patchState({ status: "creating", error: "" });
+    this.patchState({ status: "admitting", error: "" });
     try {
       const session = await this.playableSession();
       if (!session) return false;
@@ -166,12 +161,14 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
         mode,
         matchConfig,
       );
+      this.assertCurrentUserMember(snap);
       this.handledMatchId = "";
       this.patchState({
-        status: "connecting",
+        status: "admitting",
         partyId: snap.id,
         inviteCode: snap.inviteCode,
         snapshot: snap,
+        self: this.currentUserMember(snap),
       });
       this.markExistingMatchHandled(snap);
       await this.connectToParty(session, snap.id, { waitForSnapshot: true });
@@ -198,17 +195,19 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
       this.patchState({ error: "Party invite is missing." });
       return false;
     }
-    this.patchState({ status: "joining", inviteCode: code, error: "" });
+    this.patchState({ status: "admitting", inviteCode: code, error: "" });
     try {
       const session = await this.playableSession();
       if (!session) return false;
       const snap = await joinParty(this.config, code, session.accessToken);
+      this.assertCurrentUserMember(snap);
       this.handledMatchId = "";
       this.patchState({
-        status: "connecting",
+        status: "admitting",
         partyId: snap.id,
         inviteCode: snap.inviteCode,
         snapshot: snap,
+        self: this.currentUserMember(snap),
       });
       this.markExistingMatchHandled(snap);
       await this.connectToParty(session, snap.id, { waitForSnapshot: true });
@@ -374,10 +373,10 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
     this.streamSession = session;
     this.patchState({
       status: options?.waitForSnapshot
-        ? "connecting"
+        ? "admitting"
         : this.state.snapshot
           ? "reconnecting"
-          : "connecting",
+          : "admitting",
       error: "",
     });
     let readyResolve: (() => void) | null = null;
@@ -503,7 +502,9 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
       this.pollInterval = window.setTimeout(poll, jitteredPartyDelay());
       const code = this.state.inviteCode || this.state.snapshot?.inviteCode || "";
       if (!code) return;
-      void fetchParty(this.config, code)
+      const session = this.streamSession || this.sessionController.getSessionSnapshot();
+      if (!session) return;
+      void fetchParty(this.config, code, session.accessToken)
         .then((snap) => {
           if (snap) this.patchSnapshot(snap, this.state.status === "reconnecting" ? "reconnecting" : "ready");
         })
@@ -536,20 +537,36 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
   }
 
   private patchSnapshot(next: PartySnapshot, status: PartyRuntimeStatus = "ready") {
-    const snapshot = normalizePartySnapshot(next);
+    const snapshot = next;
+    const self = this.currentUserMember(snapshot);
+    if (!self) {
+      this.reset();
+      return;
+    }
     this.patchState({
       status,
       partyId: snapshot.id,
       inviteCode: snapshot.inviteCode,
       snapshot,
+      self,
       error: "",
     });
   }
 
   private isCurrentUserMember(snapshot: PartySnapshot | null) {
+    return !!this.currentUserMember(snapshot);
+  }
+
+  private currentUserMember(snapshot: PartySnapshot | null) {
     const session = this.sessionController.getSessionSnapshot();
-    if (!snapshot || !session?.userId) return false;
-    return snapshot.members.some((member) => member.userId === session.userId);
+    if (!snapshot || !session?.userId) return null;
+    return snapshot.members.find((member) => member.userId === session.userId) || null;
+  }
+
+  private assertCurrentUserMember(snapshot: PartySnapshot) {
+    if (!this.isCurrentUserMember(snapshot)) {
+      throw new Error("Party admission did not include the current player");
+    }
   }
 
   private markExistingMatchHandled(snapshot: PartySnapshot) {

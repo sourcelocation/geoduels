@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -159,7 +162,34 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 	}
 }
 
+func TestAnonymousSessionBootstrapReturnsUnauthorizedWithoutLogging(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	a := &api{
+		store:                 &guestAuthTestStore{},
+		refreshCookieName:     "geoduels_refresh",
+		refreshCookieSameSite: http.SameSiteLaxMode,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	rec := httptest.NewRecorder()
+
+	a.session(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("session status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if strings.Contains(buf.String(), "auth session bootstrap failed") {
+		t.Fatalf("anonymous restore logged a failure: %s", buf.String())
+	}
+}
+
 func TestSessionFailureDoesNotClearRefreshCookie(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
 	a := &api{
 		store:                 &guestAuthTestStore{},
 		refreshCookieName:     "geoduels_refresh",
@@ -175,11 +205,14 @@ func TestSessionFailureDoesNotClearRefreshCookie(t *testing.T) {
 
 	a.session(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("session status = %d, want %d", rec.Code, http.StatusNoContent)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("session status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
 		t.Fatalf("session failure must not overwrite a possibly newer cookie, got %v", cookies)
+	}
+	if strings.Contains(buf.String(), "auth session bootstrap failed") {
+		t.Fatal("invalid refresh session is an expected unauthenticated state")
 	}
 }
 

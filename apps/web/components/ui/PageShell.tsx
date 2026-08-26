@@ -32,17 +32,18 @@ export function PageShell({
   const operational = variant === "operational";
   return (
     <div
+      data-ui-theme={operational ? "operational" : "game"}
       className={cn(
-        "min-h-screen font-sans",
+        "min-h-screen font-body",
         operational
-          ? "bg-[#0d1216] text-[#f4f9ff]"
-          : "relative overflow-hidden bg-[#071016] text-[#f4f9ff]",
+          ? "bg-surface-page text-content-primary"
+          : "relative overflow-hidden bg-surface-page text-content-primary",
       )}
     >
-      <header className="border-b border-white/10">
+      <header className="border-b border-border-default">
         <div className={cn("mx-auto flex w-full items-center justify-between px-6 py-5", maxWidthClassName)}>
           {backHref ? (
-            <Link href={backHref} className="text-sm font-bold text-inkMuted transition hover:text-white">
+            <Link href={backHref} className="text-body-sm font-strong text-content-secondary transition hover:text-content-primary">
               {backLabel}
             </Link>
           ) : (
@@ -56,7 +57,7 @@ export function PageShell({
 
       <main className={cn("mx-auto w-full px-6 py-10 sm:py-14", maxWidthClassName)}>
         {title || eyebrow || description ? (
-          <div className="border-b border-white/10 pb-8">
+          <div className="border-b border-border-default pb-8">
             {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
             {title ? <SectionTitle className={eyebrow ? "mt-2" : ""}>{title}</SectionTitle> : null}
             {description ? <BodyText className="mt-5 max-w-3xl">{description}</BodyText> : null}

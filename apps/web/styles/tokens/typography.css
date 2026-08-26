@@ -1,0 +1,16 @@
+/* Global type defaults. Visual roles are exposed by Tailwind's semantic
+ * fontSize/fontWeight entries and by the shared typography components. */
+/* This file is imported before Tailwind's directives, so these foundation
+ * rules intentionally remain unlayered. The app root owns the body font class
+ * because Next's generated font variables are scoped to that same element. */
+html {
+  font-family: var(--gd-font-family-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* Compatibility utility; new HUD recipes should use a component variant. */
+.font-hud {
+  font-family: var(--gd-font-family-display);
+  font-weight: var(--gd-font-weight-display);
+}

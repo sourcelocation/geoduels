@@ -10,11 +10,11 @@ import (
 	"geoduels/pkg/contracts"
 )
 
-func (s *pgStore) GetRuntimeMatch(matchID string) (RuntimeMatch, bool, error) {
+func (s *pgStore) GetRuntimeMatch(ctx context.Context, matchID string) (RuntimeMatch, bool, error) {
 	if matchID == "" {
 		return RuntimeMatch{}, false, errors.New("matchID required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	row := s.pool.QueryRow(ctx, `
 		select
@@ -36,11 +36,11 @@ func (s *pgStore) GetRuntimeMatch(matchID string) (RuntimeMatch, bool, error) {
 	return out, true, nil
 }
 
-func (s *pgStore) RecordRuntimeMatch(matchID, state string, ownerEpoch int64, terminal bool) error {
+func (s *pgStore) RecordRuntimeMatch(ctx context.Context, matchID, state string, ownerEpoch int64, terminal bool) error {
 	if matchID == "" {
 		return errors.New("matchID required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	if terminal {
 		_, err := s.pool.Exec(ctx, `
@@ -63,11 +63,11 @@ func (s *pgStore) RecordRuntimeMatch(matchID, state string, ownerEpoch int64, te
 	return err
 }
 
-func (s *pgStore) ExpireStaleRuntimeMatches(mode string, olderThan time.Duration) error {
+func (s *pgStore) ExpireStaleRuntimeMatches(ctx context.Context, mode string, olderThan time.Duration) error {
 	if mode == "" || olderThan <= 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	_, err := s.pool.Exec(ctx, `
 		update runtime_matches

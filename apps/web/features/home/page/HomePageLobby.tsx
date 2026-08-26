@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import LobbyScreen, { type LobbyContentRoute } from "../../../components/ui/LobbyScreen";
+import LobbyScreen, { type LobbyContentRoute } from "../../lobby/components/LobbyScreen";
 import type {
   HomeActions,
   HomeAuthView,
@@ -10,6 +9,7 @@ import type {
 type HomePageLobbyProps = {
   contentRoute?: LobbyContentRoute;
   mapId?: string;
+  routeLoading?: boolean;
   auth: HomeAuthView;
   lobby: HomeLobbyView;
   meta: HomeViewModel["meta"];
@@ -17,6 +17,7 @@ type HomePageLobbyProps = {
     HomeActions,
     | "joinQueue"
     | "startSingleplayer"
+    | "clearSingleplayerError"
     | "cancelQueue"
     | "createParty"
     | "joinParty"
@@ -26,9 +27,6 @@ type HomePageLobbyProps = {
     | "startParty"
     | "updatePartySettings"
     | "switchPartyTeam"
-    | "devLogin"
-    | "triggerGoogleSignIn"
-    | "triggerDiscordSignIn"
     | "loadLeaderboard"
     | "startSupportDonation"
   >;
@@ -37,17 +35,12 @@ type HomePageLobbyProps = {
 export default function HomePageLobby({
   contentRoute = "play",
   mapId = "",
+  routeLoading = false,
   auth,
   lobby,
   meta,
   actions,
 }: HomePageLobbyProps) {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
   if (lobby.inGame) {
     return null;
   }
@@ -56,6 +49,7 @@ export default function HomePageLobby({
     <LobbyScreen
       contentRoute={contentRoute}
       mapId={mapId}
+      routeLoading={routeLoading}
       userId={auth.userId}
       accessToken={auth.accessToken}
       userEmail={auth.userEmail}
@@ -72,6 +66,7 @@ export default function HomePageLobby({
       queueStartedAt={lobby.queueStartedAt}
       joinQueue={actions.joinQueue}
       startSingleplayer={actions.startSingleplayer}
+      clearSingleplayerError={actions.clearSingleplayerError}
       cancelQueue={actions.cancelQueue}
       party={lobby.party}
       createParty={actions.createParty}
@@ -83,14 +78,9 @@ export default function HomePageLobby({
       updatePartySettings={actions.updatePartySettings}
       switchPartyTeam={actions.switchPartyTeam}
       queueError={lobby.queueError}
+      singleplayerError={lobby.singleplayerError}
       onlinePlayers={lobby.onlinePlayers}
       maintenance={lobby.maintenance}
-      googleClientId={
-        mounted && auth.googleSignInEnabled ? auth.googleClientId : ""
-      }
-      discordClientId={
-        mounted && auth.discordSignInEnabled ? auth.discordClientId : ""
-      }
       appVersion={meta.appVersion}
       isAdmin={auth.isAdmin}
       isModerator={auth.isModerator}
@@ -99,9 +89,6 @@ export default function HomePageLobby({
       changelogMarkdown={lobby.changelogMarkdown}
       changelogSlug={lobby.changelogSlug}
       changelogUpdatedAt={lobby.changelogUpdatedAt}
-      devLogin={actions.devLogin}
-      onGoogleSignIn={actions.triggerGoogleSignIn}
-      onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleSignIn}
       onBrowseLeaderboard={actions.loadLeaderboard}
       authLoading={auth.authLoading}
       authError={auth.authError}

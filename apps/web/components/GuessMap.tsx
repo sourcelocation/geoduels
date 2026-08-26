@@ -1,6 +1,13 @@
 import { MapContainer, Marker, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
+import type { TeamPing } from '../features/game/model/types';
+
+// Leaflet consumes JS color/opacity values rather than Tailwind classes. Keep
+// this map-artwork contract named and theme-backed so marker visuals remain
+// reviewable and do not become arbitrary product colors.
+const MAP_ROUTE_COLOR = 'var(--gd-map-marker-stroke)';
+const MAP_ROUTE_OPACITY = 0.96;
 
 type RoundPlayerResult = {
   userId: string;
@@ -18,7 +25,13 @@ type RoundResult = {
 
 type Props = {
   onGuess?: (lat: number, lng: number) => void;
+  onPing?: (lat: number, lng: number) => void;
   guess?: { lat: number; lng: number };
+  guessSubmitted?: boolean;
+  teammateGuesses?: Record<string, { lat: number; lng: number }>;
+  teamPings?: TeamPing[];
+  playerAvatars?: Record<string, string | undefined>;
+  playerFallbacks?: Record<string, string | undefined>;
   mode?: 'guess' | 'result';
   result?: RoundResult;
   results?: RoundResult[];
@@ -30,10 +43,10 @@ type Props = {
   resultPlayerBorderColors?: Record<string, string | undefined>;
 };
 
-function ClickCapture({ onGuess }: { onGuess: (lat: number, lng: number) => void }) {
+function ClickCapture({ onClick }: { onClick: (lat: number, lng: number) => void }) {
   useMapEvents({
     click(e) {
-      onGuess(e.latlng.lat, e.latlng.lng);
+      onClick(e.latlng.lat, e.latlng.lng);
     }
   });
   return null;
@@ -261,7 +274,7 @@ function WrappedResultLayer({
             [displayedLatLng.lat, displayedLatLng.lng],
             [layout.actualLatLng.lat, layout.actualLatLng.lng]
           ]}
-          pathOptions={{ color: '#1f2933', dashArray: '2 6', weight: 1.5, opacity: 0.96 }}
+          pathOptions={{ color: MAP_ROUTE_COLOR, dashArray: '2 6', weight: 1.5, opacity: MAP_ROUTE_OPACITY }}
         />
       ))}
       {layout.players.map(({ id, displayedLatLng }) => (
@@ -354,7 +367,7 @@ function WrappedResultsLayer({
               [player.displayedLatLng.lat, player.displayedLatLng.lng],
               [round.actualLatLng.lat, round.actualLatLng.lng]
             ]}
-            pathOptions={{ color: '#1f2933', dashArray: '2 6', weight: 1.5, opacity: 0.96 }}
+            pathOptions={{ color: MAP_ROUTE_COLOR, dashArray: '2 6', weight: 1.5, opacity: MAP_ROUTE_OPACITY }}
           />
         ))
       )}
@@ -491,7 +504,13 @@ export function createActualLocationIcon(lat: number, lng: number, roundNumber?:
 
 export default function GuessMap({
   onGuess,
+  onPing,
   guess,
+  guessSubmitted = false,
+  teammateGuesses = {},
+  teamPings = [],
+  playerAvatars = {},
+  playerFallbacks = {},
   mode = 'guess',
   result,
   results,
@@ -539,8 +558,14 @@ export default function GuessMap({
       />
       <SafeMapUnmount />
       <InvalidateOnResize />
-      {mode === 'guess' && onGuess ? <ClickCapture onGuess={onGuess} /> : null}
+      {mode === 'guess' && (guessSubmitted ? onPing : onGuess) ? <ClickCapture onClick={(guessSubmitted ? onPing : onGuess)!} /> : null}
       {mode === 'guess' && guess ? <Marker position={[guess.lat, guess.lng]} icon={guessMarkerIcon} /> : null}
+      {mode === 'guess' ? Object.entries(teammateGuesses).map(([userId, point]) => (
+        <Marker key={`teammate-${userId}`} position={[point.lat, point.lng]} icon={createAvatarMarkerIcon({ avatarUrl: playerAvatars[userId], fallback: playerFallbacks[userId] || '?', size: 38 / 1.25 })} />
+      )) : null}
+      {mode === 'guess' ? teamPings.map((ping) => (
+        <Marker key={ping.id} position={[ping.lat, ping.lng]} icon={L.divIcon({ className: 'team-ping-marker', html: '<span></span>', iconSize: [48, 48], iconAnchor: [24, 24] })} interactive={false} />
+      )) : null}
       {mode === 'result' && result ? <FitToResult result={result} /> : null}
       {mode === 'result' && !result && results?.length ? <FitToResults results={results} /> : null}
       {mode === 'result' && result ? (

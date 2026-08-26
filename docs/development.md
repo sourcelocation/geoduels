@@ -10,19 +10,21 @@
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres redis
-./scripts/migrate.sh up
+./scripts/dev-up.sh
 ```
+
+`dev-up.sh` starts PostgreSQL and Redis, applies migrations, bootstraps sample
+maps when needed, and starts the playable backend stack. The development-data
+bootstrap is idempotent: it imports the lightweight sample dataset only when
+the configured Moving or NMPZ map is missing. Run
+`./scripts/bootstrap-dev-data.sh` at any time to repair an empty local database
+without replacing existing maps.
 
 Create and manage maps through the web map administration UI.
 
 ## Start the backend stack
 
-```bash
-docker compose up -d gameplay-node match-coordinator realtime-gateway api
-```
-
-This starts the core playable backend services defined in `docker-compose.yml`.
+The core playable backend services are defined in `docker-compose.yml`.
 
 To rebuild/recreate containers before starting them:
 
@@ -75,12 +77,34 @@ Start local PostgreSQL container:
 docker compose up -d postgres
 ```
 
-Run migrations with the repository helper, which uses the pinned migration container:
+Run migrations with the repository helper, which uses the pinned migration container. The default path applies the clean GeoDuels v2 version-2000 schema to a fresh database and future v2 migrations. It also refuses to apply that schema to an existing pre-v2 database:
 
 ```bash
 MIGRATIONS_DB_URL='postgres://geoduels:geoduels@127.0.0.1:5432/geoduels?sslmode=disable' \
 ./scripts/migrate.sh up
 ```
+
+For an existing database below migration 2000, finish the historical upgrade
+chain explicitly, then switch back to the default path:
+
+```bash
+./scripts/migrate.sh --legacy up
+./scripts/migrate.sh up
+```
+
+Historical migrations and the version-2000 cutover are kept in
+`db/migrations-legacy`; post-v2 migrations belong in `db/migrations` at version
+2001 or later.
+
+To verify both fresh-install paths and their required reference settings using
+disposable PostgreSQL containers, run:
+
+```bash
+./scripts/test-migrations-local.sh
+```
+
+The check also confirms that the default v2 path refuses a partially
+initialized public schema.
 
 Set backend DB URL in `.env`:
 

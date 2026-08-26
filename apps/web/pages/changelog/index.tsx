@@ -4,7 +4,7 @@ import Link from "next/link";
 import { EmptyState } from "../../components/ui/EmptyState";
 import MarkdownContent from "../../components/ui/MarkdownContent";
 import { PageShell } from "../../components/ui/PageShell";
-import { Surface } from "../../components/ui/Surface";
+import { DocumentPanel } from "../../components/ui/compositions";
 import { requestChangelogPosts } from "../../features/changelog/changelog-client";
 import type { ChangelogPost } from "../../features/changelog/types";
 import { createRuntimeConfig } from "../../lib/runtime-config";
@@ -56,24 +56,23 @@ export default function ChangelogIndexPage({ posts }: ChangelogIndexProps) {
         variant="operational"
         eyebrow="Updates"
         title="GeoDuels Changelog"
-        description="Product notes for new game modes, matchmaking updates, quality fixes, and other changes to GeoDuels."
         backHref="/"
       >
           <div className="mt-10 space-y-4">
             {posts.map((post) => (
-              <Surface key={post.id} variant="operational" as="article" className="p-5 sm:p-6">
-                <time dateTime={post.updatedAt} className="text-xs font-bold uppercase tracking-[0.14em] text-[#77f0be]">
+              <DocumentPanel key={post.id} as="article" className="p-5 sm:p-6">
+                <time dateTime={post.updatedAt} className="text-label font-strong text-status-success">
                   {formatDate(post.updatedAt)}
                 </time>
-                <h2 className="mt-2 text-2xl font-black text-white">
-                  <Link href={`/changelog/${encodeURIComponent(post.slug)}`} className="hover:text-[#77f0be]">
+                <h2 className="mt-2 text-heading-lg font-strong text-content-primary">
+                  <Link href={`/changelog/${encodeURIComponent(post.slug)}`} className="hover:text-status-success">
                     {post.title}
                   </Link>
                 </h2>
                 <div className="mt-3 max-h-32 overflow-hidden [mask-image:linear-gradient(180deg,black_62%,transparent_100%)] [-webkit-mask-image:linear-gradient(180deg,black_62%,transparent_100%)]">
                   <MarkdownContent markdown={post.markdown || "No changelog content yet."} compact />
                 </div>
-              </Surface>
+              </DocumentPanel>
             ))}
             {posts.length === 0 ? (
               <EmptyState message="No changelog posts have been published yet." />

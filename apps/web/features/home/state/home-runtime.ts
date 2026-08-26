@@ -3,6 +3,7 @@ import { getRuntimeConfig } from '../../../lib/runtime-config';
 import { createSfxController } from '../../../lib/audio/browser-sfx-controller';
 import type { SfxController } from '../../../lib/audio/sfx';
 import { SessionController } from '../../auth/controllers/session-controller';
+import { getAuthGateway } from '../../auth/auth-gateway';
 import { ChatController } from '../../chat/controllers/chat-controller';
 import { GameController } from '../../game/controllers/game-controller';
 import { PartyController } from '../../lobby/controllers/party-controller';
@@ -30,6 +31,7 @@ function createHomeRuntime(config: RuntimeConfig): HomeRuntime {
   runtime.sfxController = createSfxController();
   runtime.sessionController = new SessionController({
     config,
+    authGateway: getAuthGateway(config),
     onResetSession: () => {
       runtime.matchController.resetConnectionState();
       runtime.partyController?.reset();

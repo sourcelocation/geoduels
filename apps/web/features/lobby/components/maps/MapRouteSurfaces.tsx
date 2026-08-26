@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import Router from "next/router";
@@ -104,14 +104,14 @@ type MapRouteSurfaceProps = {
   partyActive: boolean;
   savePartyConfig: (patch: MatchConfig) => void;
   singleplayerDisabled: boolean;
-  startSingleplayer: (config?: MatchConfig) => void | Promise<string>;
+  playMapSingleplayer: (map: CustomMap) => void;
   userAvatar?: string;
   userAvatarFallback: string;
   userEmail: string;
   userId: string;
 };
 
-export function MapRouteSurface({
+export const MapRouteSurface = forwardRef<HTMLDivElement, MapRouteSurfaceProps>(function MapRouteSurface({
   accessToken,
   canUploadCustomMaps,
   contentRoute,
@@ -124,12 +124,12 @@ export function MapRouteSurface({
   partyActive,
   savePartyConfig,
   singleplayerDisabled,
-  startSingleplayer,
+  playMapSingleplayer,
   userAvatar,
   userAvatarFallback,
   userEmail,
   userId,
-}: MapRouteSurfaceProps) {
+}: MapRouteSurfaceProps, ref) {
   const runtimeConfig = getRuntimeConfig();
   const queryClient = useQueryClient();
   const canInteractWithMaps = !!accessToken && canUploadCustomMaps;
@@ -226,15 +226,6 @@ export function MapRouteSurface({
       pressureTimeLimitMs: 15000,
     });
   };
-  const playMapSingleplayer = (item: CustomMap) => {
-    void startSingleplayer({
-      mapId: item.id,
-      mapName: item.displayName,
-      ruleset: "moving",
-      roundTimerMode: "none",
-      pressureTimeLimitMs: 15000,
-    });
-  };
   const createCommentMutation = mapComments.createComment;
   const deleteCommentMutation = mapComments.deleteComment;
   const likeCommentMutation = mapComments.likeComment;
@@ -282,7 +273,7 @@ export function MapRouteSurface({
 
   if (contentRoute === "map-upload") {
     return (
-      <motion.div key="map-upload" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
+      <motion.div ref={ref} key="map-upload" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
         <MapUploadPanel
           canUploadCustomMaps={canUploadCustomMaps}
           mapUploadForm={
@@ -318,7 +309,7 @@ export function MapRouteSurface({
 
   if (contentRoute === "map-details") {
     return (
-      <motion.div key="map-details" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
+      <motion.div ref={ref} key="map-details" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
         <MapDetailsPanel
           accessToken={accessToken}
           canInteractWithMaps={canInteractWithMaps}
@@ -387,7 +378,7 @@ export function MapRouteSurface({
   }
 
   return (
-    <motion.div key="maps" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
+    <motion.div ref={ref} key="maps" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
       <MapsPanel
         canUploadCustomMaps={canUploadCustomMaps}
         hasMapSearch={hasMapSearch}
@@ -407,7 +398,7 @@ export function MapRouteSurface({
       />
     </motion.div>
   );
-}
+});
 
 type MapPickerControllerProps = {
   accessToken: string;

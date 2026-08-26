@@ -15,6 +15,7 @@ const sections = [
       "Profile and ranking information. We store your display name, avatar, MMR, rating data, games played, wins, ranked statistics, account status, moderator/admin flags, bans, and related account history.",
       "Authentication and session information. We store session records, secure refresh-session information, IP addresses, user agents, timestamps, and related security data used to keep accounts signed in and protect the service.",
       "Gameplay information. We store match IDs, players in a match, guesses, coordinates, round timing, scores, HP, match snapshots, match results, reconnect/session state, party data, invite codes, and match history.",
+      "Social information. If you use social features, we store friend requests, friendships, blocks, short-lived friend codes and party invitations, notifications and read state, presence status, and the time your account was last seen. Presence and last-seen visibility are limited by your social privacy settings.",
       "Moderation and safety information. We store reports, report categories and reasons, reporter and reported player IDs, moderation cases, evidence, moderator notes, actions, bans, report reputation signals, and related audit history.",
       "Technical information. We may collect logs, diagnostic data, request metadata, error information, service health data, and timing information needed to operate, secure, debug, and improve GeoDuels.",
       "Analytics information. GeoDuels may process basic analytics about matches, rankings, service usage, and timing to understand gameplay and operate the service.",
@@ -23,7 +24,7 @@ const sections = [
   {
     title: "3. How We Use Information",
     body: [
-      "We use information to provide accounts, authentication, matchmaking, lobbies, real-time gameplay, reconnects, rankings, leaderboards, match history, moderation, abuse prevention, service reliability, debugging, and analytics.",
+      "We use information to provide accounts, authentication, matchmaking, lobbies, friends, invitations, presence, notifications, real-time gameplay, reconnects, rankings, leaderboards, match history, moderation, abuse prevention, service reliability, debugging, and analytics.",
       "We also use information to enforce the Terms of Service, investigate cheating or abuse, protect ranked integrity, issue rating adjustments or refunds, respond to requests, and maintain the security of GeoDuels.",
     ],
   },

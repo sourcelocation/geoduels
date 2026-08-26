@@ -57,6 +57,7 @@ describe('SessionController', () => {
     await controller.bootstrapSession({ force: true });
 
     expect(bootstrapSession).toHaveBeenCalledTimes(2);
+    expect(bootstrapSession).toHaveBeenLastCalledWith({ force: true });
     controller.destroy();
   });
 

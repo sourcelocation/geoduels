@@ -1,7 +1,9 @@
-import { Loader2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { motion } from "framer-motion";
 import AppModalShell from "../../../components/ui/AppModalShell";
+import { IconButton } from "../../../components/ui/button";
 import { LobbyNotice } from "./lobby-primitives";
+import { Spinner } from "../../../components/ui/Spinner";
 
 export function MaintenanceBanner({
   message,
@@ -11,14 +13,13 @@ export function MaintenanceBanner({
   const trailing = onDismiss ? (
     <div className="flex items-center gap-2">
       <span>{countdown || "Soon"}</span>
-      <button
-        type="button"
+      <IconButton
         onClick={onDismiss}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/15 text-white/80 transition hover:bg-white/15 hover:text-white"
+        className="h-8 min-h-8 w-8"
         aria-label="Hide maintenance alert"
       >
         <X size={16} />
-      </button>
+      </IconButton>
     </div>
   ) : (
     countdown || "Soon"
@@ -49,34 +50,32 @@ export function MaintenanceOverlay({
       title="Maintenance Break"
       placement="center"
       showHeader={false}
-      zIndexClassName="z-[2100]"
+      zIndexClassName="z-modal-critical"
       maxWidthClassName="max-w-[560px]"
-      panelClassName="p-7 sm:p-10"
     >
       <div className="relative flex flex-col items-center text-center">
         {onDismiss ? (
-          <button
-            type="button"
+          <IconButton
             onClick={onDismiss}
-            className="absolute right-0 top-0 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-white/75 transition hover:bg-white/[0.12] hover:text-white"
+            className="absolute right-0 top-0 h-9 min-h-9 w-9"
             aria-label="Hide maintenance alert"
           >
             <X size={17} />
-          </button>
+          </IconButton>
         ) : null}
-        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#f4c84c]/30 bg-[#f4c84c]/10">
-          <Loader2 size={30} className="animate-spin text-[#f4c84c]" />
+        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10">
+          <Spinner size="lg" label="Maintenance in progress" color="current" className="text-status-warning" />
         </div>
-        <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#f4d98a]">Maintenance Break</p>
-        <h2 className="mt-3 text-[30px] font-black tracking-tight text-white sm:text-[38px]">We&apos;ll Be Back Shortly</h2>
-        <p className="mt-3 max-w-[42ch] text-[15px] leading-relaxed text-[#d9e7f5]">
+        <p className="text-label font-strong text-status-warning">Maintenance Break</p>
+        <h2 className="mt-3 text-display-md font-strong tracking-heading text-content-primary">We&apos;ll Be Back Shortly</h2>
+        <p className="mt-3 max-w-[42ch] text-body leading-prose text-content-primary">
           {message || "GeoDuels is temporarily offline while we finish a scheduled upgrade."}
         </p>
-        <div className="mt-6 rounded-[20px] border border-white/10 bg-white/5 px-5 py-4">
-          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#a9bfd4]">
+        <div className="mt-6 rounded-xl border border-border-default bg-surface-grouped px-5 py-4">
+          <p className="text-label font-strong text-content-secondary">
             Approximate Time
           </p>
-          <p className="mt-2 text-[18px] font-extrabold text-white">{eta || "A few minutes"}</p>
+          <p className="mt-2 text-heading-sm font-strong text-content-primary">{eta || "A few minutes"}</p>
         </div>
       </div>
     </AppModalShell>

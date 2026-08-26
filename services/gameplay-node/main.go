@@ -58,14 +58,15 @@ type gameplayNode struct {
 	redisCleanup func()
 	plans        *roundPlanRegistry
 
-	runtimes   map[contracts.MatchMode]gameplayRuntime
-	conns      map[string]*websocket.Conn
-	connWrite  map[string]*sync.Mutex
-	connID     map[string]string
-	userMatch  map[string]string
-	matchUsers map[string][]string
-	matchModes map[string]contracts.MatchMode
-	finalizing map[string]bool
+	runtimes     map[contracts.MatchMode]gameplayRuntime
+	conns        map[string]*websocket.Conn
+	connWrite    map[string]*sync.Mutex
+	connID       map[string]string
+	userMatch    map[string]string
+	matchUsers   map[string][]string
+	matchModes   map[string]contracts.MatchMode
+	finalizing   map[string]bool
+	lastTeamPing map[string]time.Time
 
 	metrics *observability.RuntimeMetrics
 
@@ -94,7 +95,7 @@ func main() {
 		log.Fatal(err)
 	}
 	singleplayerTTL := getenvDuration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
-	if err := store.ExpireStaleRuntimeMatches(string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
+	if err := store.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
 		log.Fatal(err)
 	}
 	ticketSecret, err := requiredSecret("GAMEPLAY_TICKET_SECRET", 32)
@@ -130,15 +131,16 @@ func main() {
 			contracts.ModeFreeForAll:   duelRuntime{mode: contracts.ModeFreeForAll, engine: duel.New(roundForPlan), configs: duelConfigs},
 			contracts.ModeSingleplayer: singleplayerRuntime{engine: singleplayer.New(roundForPlan)},
 		},
-		conns:      map[string]*websocket.Conn{},
-		connWrite:  map[string]*sync.Mutex{},
-		connID:     map[string]string{},
-		userMatch:  map[string]string{},
-		matchUsers: map[string][]string{},
-		matchModes: map[string]contracts.MatchMode{},
-		finalizing: map[string]bool{},
-		metrics:    observability.NewRuntimeMetrics(),
-		drainTTL:   getenvDuration("GAMEPLAY_DRAIN_TIMEOUT", 9*time.Minute+30*time.Second),
+		conns:        map[string]*websocket.Conn{},
+		connWrite:    map[string]*sync.Mutex{},
+		connID:       map[string]string{},
+		userMatch:    map[string]string{},
+		matchUsers:   map[string][]string{},
+		matchModes:   map[string]contracts.MatchMode{},
+		finalizing:   map[string]bool{},
+		lastTeamPing: map[string]time.Time{},
+		metrics:      observability.NewRuntimeMetrics(),
+		drainTTL:     getenvDuration("GAMEPLAY_DRAIN_TIMEOUT", 9*time.Minute+30*time.Second),
 	}
 	defer g.persist.Close()
 	defer g.redisCleanup()
@@ -222,7 +224,7 @@ func (g *gameplayNode) createMatch(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if err := g.persist.RecordRuntimeMatch(found.MatchID, string(contracts.MatchLive), g.nodeEpoch, false); err != nil {
+	if err := g.persist.RecordRuntimeMatch(req.Context(), found.MatchID, string(contracts.MatchLive), g.nodeEpoch, false); err != nil {
 		http.Error(w, "match persistence unavailable", http.StatusBadGateway)
 		return
 	}
@@ -433,6 +435,12 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 			return ack, nil
 		}
 		return ack, snap
+	case "team.ping":
+		if err := g.sendTeamPing(userID, matchID, strPayload(cmd.Payload, "roundId"), floatPayload(cmd.Payload, "lat"), floatPayload(cmd.Payload, "lng")); err != nil {
+			status, errorCode = "error", "invalid_team_ping"
+			ack.Status, ack.ErrorCode, ack.Message = "error", errorCode, err.Error()
+		}
+		return ack, nil
 	case "round.advance":
 		snap, err := runtime.AdvanceRound(matchID, userID)
 		if err != nil {
@@ -465,6 +473,46 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 		ack.Message = "unsupported command"
 		return ack, nil
 	}
+}
+
+func (g *gameplayNode) sendTeamPing(userID, matchID, roundID string, lat, lng float64) error {
+	runtime, ok := g.runtimeForMatch(matchID)
+	if !ok {
+		return errors.New("match not found")
+	}
+	snap, err := runtime.GetSnapshot(matchID)
+	if err != nil {
+		return err
+	}
+	self, ok := snap.Players[userID]
+	if snap.Mode != contracts.ModeTeamDuel || !ok || self.TeamID == "" {
+		return errors.New("team ping is unavailable")
+	}
+	if snap.Phase != contracts.PhaseLive || snap.RoundPhase != contracts.RoundPhaseLive || snap.CurrentRound == nil || snap.CurrentRound.RoundID != roundID {
+		return errors.New("round is not live")
+	}
+	if !self.Finalized {
+		return errors.New("finalize your guess before pinging")
+	}
+	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+		return errors.New("invalid coordinates")
+	}
+	now := time.Now()
+	g.mu.Lock()
+	if last := g.lastTeamPing[userID]; !last.IsZero() && now.Sub(last) < time.Second {
+		g.mu.Unlock()
+		return errors.New("pinging too quickly")
+	}
+	g.lastTeamPing[userID] = now
+	users := append([]string(nil), g.matchUsers[matchID]...)
+	g.mu.Unlock()
+	payload := map[string]any{"id": "ping-" + shortID(), "roundId": roundID, "senderUserId": userID, "lat": lat, "lng": lng, "expiresAt": now.Add(5 * time.Second).UnixMilli()}
+	for _, targetID := range users {
+		if target, exists := snap.Players[targetID]; exists && target.TeamID == self.TeamID {
+			_ = g.safeWriteMatch(targetID, matchID, contracts.EventEnvelope{Kind: "event", EventID: "evt-" + shortID(), Type: contracts.EventTeamPing, MatchID: matchID, Seq: snap.EventSequence, ServerTS: now.UnixMilli(), Payload: payload})
+		}
+	}
+	return nil
 }
 
 func (g *gameplayNode) tick() {

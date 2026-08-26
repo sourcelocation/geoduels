@@ -15,7 +15,7 @@ https://geoduels.io/
 - `services/match-coordinator` (Go): matchmaking over websocket (`/queue`), party coordination/chat, assignment, presence, and maintenance status. Resumable-session lookup is exposed by the API at `/v1/session/resumable`.
 - `services/realtime-gateway` (Go): websocket gatewaying (`/ws/{node}`) to the assigned gameplay node.
 - `services/gameplay-node` (Go): round engine and authoritative match state broadcast for assigned matches.
-- `services/moderation-worker` (Go): background moderation projection and enforcement processing.
+- `services/moderation-worker` (Go): background moderation signal notifications and risk-engine work.
 - `services/discord-worker` (Go): Discord role synchronization and membership badge processing.
 - `workers/storage-maintenance` (Go): replay compression, retention cleanup, and other bounded storage maintenance.
 
@@ -108,9 +108,7 @@ Start:
 ```bash
 cp .env.example .env
 cp apps/web/.env.local.example apps/web/.env.local
-docker compose up -d postgres redis
-./scripts/migrate.sh up
-docker compose up -d gameplay-node match-coordinator realtime-gateway api
+./scripts/dev-up.sh
 cd apps/web
 npm ci
 npm run dev
@@ -173,7 +171,9 @@ Triggered by git tag push.
 
 1. Provision k3s cluster, ingress, DNS, and TLS.
 2. Create namespace and required secrets (`geoduels-secrets`, `ghcr-creds`) in the private ops flow.
-3. Apply DB migrations in `db/migrations`.
+3. Apply DB migrations with `./scripts/migrate.sh up`. Fresh databases use the
+   GeoDuels v2 version-2000 schema in `db/migrations`; existing databases below
+   version 2000 must first be upgraded with `./scripts/migrate.sh --legacy up`.
 4. Configure the release workflow variables/secrets, especially `OPS_REPO_TOKEN`.
 5. Push a release tag (for example `v1.2.3`) to build images and open the Flux release PR.
 6. Merge the generated release PR to trigger production rollout through Flux.
@@ -183,7 +183,7 @@ Triggered by git tag push.
 
 Migration 42 removes redundant match guesses/indexes, converts map locations to compact fixed-width values, and stores new replays as Zstandard-compressed PostgreSQL blobs with 30-day retention. Apply it during a write maintenance window.
 
-The compaction helper intentionally requires the database to be exactly at schema version 42. During an upgrade from an older schema, apply migration 42 by itself, start the migration-42-compatible application, run smoke tests, stop writes, compact, and only then apply migrations 43 and later:
+The compaction helper intentionally requires the database to be exactly at schema version 42. Migration 42 is part of the historical path, so when the legacy database is at version 41, use `./scripts/migrate.sh --legacy up 1` to apply only migration 42, start the migration-42-compatible application, run smoke tests, stop writes, compact, and only then continue the legacy migrations through the version-2000 v2 cutover:
 
 ```bash
 CONFIRM_STORAGE_COMPACTION=yes \
@@ -209,7 +209,6 @@ For production PostgreSQL, enable `wal_compression=on` and `track_io_timing=on` 
 - [`docs/development.md`](docs/development.md) - local macOS setup, service startup, tests, and the k3d development environment.
 - [`docs/deployment.md`](docs/deployment.md) - production release flow, database migration policy, and post-deploy checks.
 - [`docs/map-imports.md`](docs/map-imports.md) - Vali country-map generation, dry-run validation, and admin production import.
-- [`docs/moderator-guide.md`](docs/moderator-guide.md) - moderator workbench workflow, verdict guidance, enforcement rules, and safety practices.
 - [`apps/web/docs/frontend-architecture.md`](apps/web/docs/frontend-architecture.md) - frontend ownership, shared UI and styling rules, and file-size budgets.
 - [`infra/k3s/README.md`](infra/k3s/README.md) - reusable Kubernetes manifests and local k3d scaling tests.
 - [`apps/web/assets/source-map-thumbnails/README.md`](apps/web/assets/source-map-thumbnails/README.md) - source requirements and attribution for generated map thumbnails.

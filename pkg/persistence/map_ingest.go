@@ -75,7 +75,7 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 			thumbnail_variant,thumbnail_key,location_count,content_hash,rejected_location_count,
 			published_at,official_at,official_by,official_region_type,official_region_code,created_at,updated_at
 		)
-		values($1,null,$2,$3,$4,'processing',$5,$6,$7,0,$8,$9,case when $4='public' then now() else null end,now(),nullif($10,'')::uuid,$11,$12,now(),now())
+		values($1,null,$2,$3,$4,'processing',$5,$6,$7,0,$8,$9,case when $4='public'::gd_map_visibility then now() else null end,now(),nullif($10,'')::uuid,$11,$12,now(),now())
 		on conflict(id) do update set
 			owner_user_id=null,
 			display_name=excluded.display_name,
@@ -191,7 +191,7 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 	if create {
 		_, err = tx.Exec(ctx, `
 			insert into maps(id,owner_user_id,display_name,description,visibility,status,difficulty,thumbnail_variant,thumbnail_key,location_count,published_at,created_at,updated_at)
-			values($1,$2,$3,$4,$5,'processing',$6,$7,$8,0,case when $5='public' then now() else null end,now(),now())
+			values($1,$2,$3,$4,$5,'processing',$6,$7,$8,0,case when $5='public'::gd_map_visibility then now() else null end,now(),now())
 		`, mapID, userID, displayName, strings.TrimSpace(description), visibility, difficulty, thumbnailVariant, thumbnailKey)
 	} else {
 		var owner string

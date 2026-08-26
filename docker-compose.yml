@@ -25,6 +25,21 @@ services:
     ports:
       - "6379:6379"
 
+  dev-data-bootstrap:
+    image: golang:1.26
+    working_dir: /app
+    profiles: ["tools"]
+    volumes:
+      - ./:/app:ro
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    command: ["go", "run", "./tools/bootstrap-dev-data", "-dataset", "datasets/a-source-world.sample.json"]
+    environment:
+      - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   gameplay-node:
     image: golang:1.26
     working_dir: /app

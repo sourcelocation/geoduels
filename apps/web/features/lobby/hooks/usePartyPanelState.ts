@@ -6,7 +6,6 @@ type PartyView = {
   status: PartyRuntimeStatus;
   snapshot: PartySnapshot | null;
   inviteCode: string;
-  isMember: boolean;
   isOwner: boolean;
   busy: boolean;
   error: string;
@@ -25,6 +24,7 @@ const defaultPartyConfig: MatchConfig = {
   ruleset: "moving",
   roundTimerMode: "none",
   pressureTimeLimitMs: 15000,
+  multiplierMode: "shared",
 };
 
 export function usePartyPanelState({
@@ -37,10 +37,6 @@ export function usePartyPanelState({
     typeof window !== "undefined" && party.inviteCode
       ? `${window.location.origin}/party/${party.inviteCode}`
       : "";
-  const loading =
-    !party.snapshot &&
-    ["creating", "joining", "connecting", "reconnecting"].includes(party.status);
-  const active = !!party.snapshot || party.status !== "idle";
   const members = party.snapshot?.members || [];
   const activeMatchId = party.snapshot?.activeMatchId || party.snapshot?.startedMatchId || "";
   const matchInProgress =
@@ -102,7 +98,6 @@ export function usePartyPanelState({
   };
 
   return {
-    active,
     activeMatchId,
     canStart,
     clockOn,
@@ -110,7 +105,6 @@ export function usePartyPanelState({
     copyInvite,
     currentMember,
     inviteURL,
-    loading,
     matchInProgress,
     members,
     missingMembers,

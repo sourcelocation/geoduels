@@ -8,9 +8,9 @@ type MetricProps = {
 
 export function Metric({ label, value, className }: MetricProps) {
   return (
-    <div className={cn("rounded-md border border-slate-800 bg-slate-900/60 p-3", className)}>
-      <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p>
-      <p className="mt-1 text-lg font-black text-white">{value}</p>
+    <div className={cn("rounded-md border border-border-default bg-surface-panel p-3", className)}>
+      <p className="text-label font-strong uppercase tracking-eyebrow text-content-secondary">{label}</p>
+      <p className="mt-1 text-heading-sm font-strong text-content-primary">{value}</p>
     </div>
   );
 }

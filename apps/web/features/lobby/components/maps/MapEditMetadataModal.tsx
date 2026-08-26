@@ -1,9 +1,11 @@
-import { Loader2, Save } from "lucide-react";
+import { Save } from "lucide-react";
+import { Spinner } from "../../../../components/ui/Spinner";
 import { useState } from "react";
 import AppModalShell from "../../../../components/ui/AppModalShell";
 import type { CustomMap, MapUpdateInput } from "../../../maps/lib/maps-client";
 import { MapMetadataFields, thumbnailCategoryFromKey } from "../MapMetadataFields";
-import { LobbyActionButton, LobbyNotice } from "../lobby-primitives";
+import { Button } from "../../../../components/ui/button";
+import { LobbyNotice } from "../lobby-primitives";
 
 type MapEditMetadataModalProps = {
   map: CustomMap;
@@ -50,7 +52,6 @@ export function MapEditMetadataModal({ map, onClose, onSave }: MapEditMetadataMo
       onClose={onClose}
       placement="center"
       maxWidthClassName="max-w-[900px]"
-      panelClassName="p-4 sm:p-5"
       contentClassName="space-y-4"
     >
       {map.publishedAt ? (
@@ -75,15 +76,15 @@ export function MapEditMetadataModal({ map, onClose, onSave }: MapEditMetadataMo
         mapThumbnailSearch={mapThumbnailSearch}
         setMapThumbnailSearch={setMapThumbnailSearch}
       />
-      {error ? <p className="text-xs font-semibold text-red-300">{error}</p> : null}
+      {error ? <p className="text-body-sm font-semibold text-status-danger">{error}</p> : null}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <LobbyActionButton type="button" variant="ghost" disabled={saving} onClick={onClose}>
+        <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>
           Cancel
-        </LobbyActionButton>
-        <LobbyActionButton type="button" disabled={saveDisabled} onClick={save}>
-          {saving ? <Loader2 className="mr-2 animate-spin" size={17} /> : <Save className="mr-2" size={17} />}
+        </Button>
+        <Button type="button" variant="primary" disabled={saveDisabled} onClick={save}>
+          {saving ? <Spinner size="sm" label="Saving map" color="current" className="mr-2" /> : <Save className="mr-2" size={17} />}
           Save
-        </LobbyActionButton>
+        </Button>
       </div>
     </AppModalShell>
   );

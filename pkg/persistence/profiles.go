@@ -94,8 +94,7 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 				coalesce(u.is_moderator, false) as is_moderator,
 				coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false) as is_banned,
 				coalesce(u.ban_reason, '') as ban_reason,
-				coalesce(u.selected_badge_code, 0) as selected_badge_code,
-				coalesce(u.selected_badge_season_id, '') as selected_badge_season_id
+				coalesce(u.selected_badge_code, 0) as selected_badge_code
 		from (select $1::uuid as user_id) seed
 		left join users u on u.id = seed.user_id
 		left join lateral (
@@ -119,7 +118,6 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 		left join ranked_stats rs on rs.user_id = seed.user_id and rs.mode = $2 and rs.season_id = $3
 	`, userID, modeDuel, seasonID, initialMMR, initialRatingRD)
 	var selectedBadgeCode int16
-	var selectedBadgeSeasonID string
 	if err := row.Scan(
 		&p.DisplayName,
 		&p.AvatarURL,
@@ -135,14 +133,13 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 		&p.IsBanned,
 		&p.BanReason,
 		&selectedBadgeCode,
-		&selectedBadgeSeasonID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return p, nil
 		}
 		return p, err
 	}
-	badges, selected, err := s.profileBadges(ctx, userID, badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID))
+	badges, selected, err := s.profileBadges(ctx, userID, badgeIDFromCode(selectedBadgeCode))
 	if err != nil {
 		return p, err
 	}
@@ -169,7 +166,6 @@ func (s *pgStore) GetPublicPlayerProfileByNickname(nickname string) (PublicPlaye
 	}
 	p.SeasonID = seasonID
 	var selectedBadgeCode int16
-	var selectedBadgeSeasonID string
 	err = s.pool.QueryRow(ctx, `
 		select
 			u.id::text,
@@ -181,8 +177,7 @@ func (s *pgStore) GetPublicPlayerProfileByNickname(nickname string) (PublicPlaye
 			greatest(coalesce(us.wins, 0), coalesce(history_stats.wins, 0)),
 			coalesce(rs.games_played, 0),
 			coalesce(rs.wins, 0),
-			coalesce(u.selected_badge_code, 0),
-			coalesce(u.selected_badge_season_id, '')
+			coalesce(u.selected_badge_code, 0)
 		from users u
 		left join lateral (
 			select provider_name, avatar_url
@@ -217,12 +212,91 @@ func (s *pgStore) GetPublicPlayerProfileByNickname(nickname string) (PublicPlaye
 		&p.RankedGamesPlayed,
 		&p.RankedWins,
 		&selectedBadgeCode,
-		&selectedBadgeSeasonID,
 	)
 	if err != nil {
 		return p, err
 	}
-	badges, selected, err := s.profileBadges(ctx, p.UserID, badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID))
+	settings, err := rankedSeasonSettingsTx(ctx, s.pool)
+	if err != nil {
+		return p, err
+	}
+	var seasonStartedAt any
+	if settings.LastResetAt != nil {
+		seasonStartedAt = *settings.LastResetAt
+	}
+	if err := s.pool.QueryRow(ctx, `
+		with leaderboard as (
+			select
+				r.user_id,
+				row_number() over (
+					order by r.mmr desc, r.updated_at asc, r.user_id asc
+				) as rank,
+				count(*) over () as total_players
+			from ranks r
+			left join users u on u.id = r.user_id
+			where r.mode = $2
+			  and r.season_id = $3
+			  and coalesce(u.account_type, 'registered') <> 'guest'
+			  and not coalesce(
+				u.banned_at is not null
+				and (u.ban_expires_at is null or u.ban_expires_at > now()),
+				false
+			  )
+		),
+		season_matches as (
+			select
+				h.ended_at,
+				h.match_id,
+				h.winner_user_id = $1::uuid as won
+			from match_players mp
+			join match_history h on h.match_id = mp.match_id
+			where mp.user_id = $1
+			  and h.mode = 'duel'
+			  and h.ranked
+			  and ($4::timestamptz is null or h.ended_at >= $4)
+		),
+		streak_groups as (
+			select
+				won,
+				count(*) filter (where not won) over (
+					order by ended_at asc, match_id asc
+				) as streak_group
+			from season_matches
+		),
+		winning_streaks as (
+			select count(*)::int as streak
+			from streak_groups
+			where won
+			group by streak_group
+		)
+		select
+			coalesce((select rank from leaderboard where user_id = $1), 0),
+			coalesce((select total_players from leaderboard limit 1), 0),
+			coalesce((select max(streak) from winning_streaks), 0),
+			coalesce((
+				select count(*)::int
+				from ranked_guess_events
+				where user_id = $1 and score = 5000
+			), 0),
+			coalesce((
+				select count(*)::int
+				from match_players mp
+				join match_history h on h.match_id = mp.match_id
+				where mp.user_id = $1
+				  and h.mode = 'duel'
+				  and h.winner_user_id = $1::uuid
+				  and mp.hp >= 6000
+			), 0)
+	`, p.UserID, modeDuel, seasonID, seasonStartedAt).Scan(
+		&p.LeaderboardRank,
+		&p.LeaderboardTotal,
+		&p.BestWinStreak,
+		&p.PerfectGuesses,
+		&p.FlawlessWins,
+	); err != nil {
+		return p, err
+	}
+	badges, selected, err := s.profileBadges(ctx, p.UserID, badgeIDFromCode(selectedBadgeCode))
 	if err != nil {
 		return p, err
 	}
@@ -265,16 +339,15 @@ func (s *pgStore) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
 			return Profile{}, errors.New("badge unavailable")
 		}
 	}
-	ref, ok := badgeRefFromID(badgeID)
+	code, ok := badgeRefFromID(badgeID)
 	if badgeID != "" && !ok {
 		return Profile{}, errors.New("badge unavailable")
 	}
 	if _, err := s.pool.Exec(ctx, `
 		update users
-		set selected_badge_code = nullif($2, 0),
-			selected_badge_season_id = $3
+		set selected_badge_code = nullif($2, 0)
 		where id = $1
-	`, userID, ref.Code, ref.SeasonID); err != nil {
+	`, userID, code); err != nil {
 		return Profile{}, err
 	}
 	return s.GetProfile(userID)
@@ -283,10 +356,10 @@ func (s *pgStore) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
 func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID string) ([]contracts.PlayerBadge, *contracts.PlayerBadge, error) {
 	badges := []contracts.PlayerBadge{}
 	rows, err := s.pool.Query(ctx, `
-		select ub.badge_code, coalesce(ub.badge_season_id, ''), coalesce(ub.rank, 0)
+		select ub.badge_code, coalesce(ub.level, 1), coalesce(ub.extra, 0)
 		from user_badges ub
 		where ub.user_id = $1
-		order by ub.awarded_at desc, ub.badge_code asc, ub.badge_season_id asc
+		order by ub.awarded_at desc, ub.badge_code asc
 	`, userID)
 	if err != nil {
 		return nil, nil, err
@@ -295,16 +368,12 @@ func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID str
 	owned := map[string]bool{}
 	for rows.Next() {
 		var code int16
-		var seasonID string
-		var rank int
-		if err := rows.Scan(&code, &seasonID, &rank); err != nil {
+		var level, extra int16
+		if err := rows.Scan(&code, &level, &extra); err != nil {
 			return nil, nil, err
 		}
-		if code == badgeCodeSeasonRank {
-			continue
-		}
-		badge, ok := badgeFromParts(code, seasonID, rank, true)
-		if !ok {
+		badge := badgeFromParts(code, level, extra, true)
+		if badge.ID == "" {
 			continue
 		}
 		owned[badge.ID] = true
@@ -312,17 +381,6 @@ func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID str
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
-	}
-	seasonBadges, err := s.earnedSeasonRankBadges(ctx, []string{userID})
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, badge := range seasonBadges[userID] {
-		if owned[badge.ID] {
-			continue
-		}
-		owned[badge.ID] = true
-		badges = append(badges, badge)
 	}
 	for _, badge := range badgeTemplates() {
 		if !owned[badge.ID] {

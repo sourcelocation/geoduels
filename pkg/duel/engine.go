@@ -59,6 +59,7 @@ type Match struct {
 	RoundLiveAnnounced bool
 	CreatedAt          time.Time
 	LastActivity       time.Time
+	now                func() time.Time
 }
 
 type RoundProvider func(matchID string, roundIndex int) (contracts.LocationPoint, error)
@@ -67,10 +68,20 @@ type Engine struct {
 	mu            sync.RWMutex
 	matches       map[string]*Match
 	roundProvider RoundProvider
+	now           func() time.Time
 }
 
 func New(roundProvider RoundProvider) *Engine {
-	return &Engine{matches: map[string]*Match{}, roundProvider: roundProvider}
+	return NewWithClock(roundProvider, time.Now)
+}
+
+// NewWithClock makes all authoritative timestamps deterministic in tests and
+// replay tools. Production callers should use New.
+func NewWithClock(roundProvider RoundProvider, now func() time.Time) *Engine {
+	if now == nil {
+		now = time.Now
+	}
+	return &Engine{matches: map[string]*Match{}, roundProvider: roundProvider, now: now}
 }
 
 func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile) (*Match, error) {
@@ -143,6 +154,7 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 			SelectedBadge:     p.SelectedBadge,
 			TeamID:            teamID,
 			HP:                startingHP,
+			DamageMultiplier:  1,
 		}
 	}
 	teams := buildTeams(mode, playerIDs, players)
@@ -160,16 +172,17 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 		Teams:           teams,
 		CurrentLocation: firstRound,
 		CurrentIndex:    0,
-		RoundStartedAt:  time.Now(),
+		RoundStartedAt:  e.now(),
 		RoundID:         roundID(matchID, 1),
 		Guesses:         map[string]Guess{},
 		EventSeq:        1,
-		CreatedAt:       time.Now(),
-		LastActivity:    time.Now(),
+		CreatedAt:       e.now(),
+		LastActivity:    e.now(),
+		now:             e.now,
 	}
 	e.startRoundTimer(m)
 	if m.Mode == contracts.ModeDuel && !m.Unranked {
-		m.RatingPreview = ratingPreview(playerIDs, players)
+		m.RatingPreview = ratingPreview(playerIDs, players, e.now())
 	}
 	e.matches[matchID] = m
 	return m, nil
@@ -198,14 +211,14 @@ func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot
 	if g.RoundID != m.RoundID {
 		return nil, errors.New("round mismatch")
 	}
-	if m.PendingAdvance && time.Now().Before(m.IntermissionUntil) {
+	if m.PendingAdvance && e.now().Before(m.IntermissionUntil) {
 		return m.snapshot(), nil
 	}
 	p, exists := m.Players[g.UserID]
 	if !exists {
 		return nil, errors.New("player not in match")
 	}
-	now := time.Now()
+	now := e.now()
 	if e.roundExpired(m, now) {
 		e.resolveRound(m)
 		return m.snapshot(), nil
@@ -255,7 +268,7 @@ func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot
 func (e *Engine) Tick() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	now := time.Now()
+	now := e.now()
 	changed := []string{}
 	for _, m := range e.matches {
 		if m.State != contracts.MatchLive {
@@ -338,9 +351,9 @@ func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnaps
 	if m.Unranked {
 		p.DisconnectDue = 0
 	} else {
-		p.DisconnectDue = time.Now().Add(disconnectGrace).UnixMilli()
+		p.DisconnectDue = e.now().Add(disconnectGrace).UnixMilli()
 	}
-	m.LastActivity = time.Now()
+	m.LastActivity = e.now()
 	m.EventSeq++
 	return m.snapshot(), nil
 }
@@ -358,7 +371,7 @@ func (e *Engine) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, 
 	}
 	p.Disconnected = false
 	p.DisconnectDue = 0
-	m.LastActivity = time.Now()
+	m.LastActivity = e.now()
 	m.EventSeq++
 	return m.snapshot(), nil
 }
@@ -384,7 +397,7 @@ func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, erro
 	m.PendingAdvance = false
 	m.IntermissionUntil = time.Time{}
 	m.State = contracts.MatchEnded
-	m.LastActivity = time.Now()
+	m.LastActivity = e.now()
 	m.EventSeq++
 	return m.snapshot(), nil
 }
@@ -456,14 +469,14 @@ func (e *Engine) resolveRound(m *Match) {
 	m.LastRoundResult = result
 	m.RoundResults = append(m.RoundResults, result)
 	m.Guesses = map[string]Guess{}
-	m.LastActivity = time.Now()
+	m.LastActivity = e.now()
 	m.EventSeq++
 	if m.State == contracts.MatchEnded {
 		return
 	}
 	m.PendingAdvance = true
-	m.IntermissionUntil = time.Now().Add(resultDuration)
-	m.LastActivity = time.Now()
+	m.IntermissionUntil = e.now().Add(resultDuration)
+	m.LastActivity = e.now()
 	m.EventSeq++
 }
 
@@ -472,6 +485,14 @@ func resolveDuelDamage(m *Match, result *contracts.RoundResult, userIDs []string
 		a := result.Players[userIDs[0]]
 		b := result.Players[userIDs[1]]
 		multiplier := roundDamageMultiplier(result.RoundNumber)
+		if m.Config.MultiplierMode == contracts.MultiplierIndividual {
+			if a.Score > b.Score {
+				multiplier = playerDamageMultiplier(m.Players[userIDs[0]])
+			} else if b.Score > a.Score {
+				multiplier = playerDamageMultiplier(m.Players[userIDs[1]])
+			}
+		}
+		result.DamageMultiplier = multiplier
 		damage := int(math.Round(float64(absInt(a.Score-b.Score)) * multiplier))
 		switch {
 		case a.Score > b.Score:
@@ -482,6 +503,7 @@ func resolveDuelDamage(m *Match, result *contracts.RoundResult, userIDs []string
 			if p.HP < 0 {
 				p.HP = 0
 			}
+			raiseIndividualMultiplier(m, userIDs[0])
 		case b.Score > a.Score:
 			b.DamageDealt = damage
 			a.DamageTaken = damage
@@ -490,6 +512,7 @@ func resolveDuelDamage(m *Match, result *contracts.RoundResult, userIDs []string
 			if p.HP < 0 {
 				p.HP = 0
 			}
+			raiseIndividualMultiplier(m, userIDs[1])
 		}
 		a.HPAfterRound = m.Players[userIDs[0]].HP
 		b.HPAfterRound = m.Players[userIDs[1]].HP
@@ -524,16 +547,26 @@ func resolveTeamDuelDamage(m *Match, result *contracts.RoundResult) {
 	a := result.Teams["a"]
 	b := result.Teams["b"]
 	multiplier := roundDamageMultiplier(result.RoundNumber)
+	if m.Config.MultiplierMode == contracts.MultiplierIndividual {
+		if a.Score > b.Score {
+			multiplier = playerDamageMultiplier(m.Players[a.RepresentativeUserID])
+		} else if b.Score > a.Score {
+			multiplier = playerDamageMultiplier(m.Players[b.RepresentativeUserID])
+		}
+	}
+	result.DamageMultiplier = multiplier
 	damage := int(math.Round(float64(absInt(a.Score-b.Score)) * multiplier))
 	switch {
 	case a.Score > b.Score:
 		a.DamageDealt = damage
 		b.DamageTaken = damage
 		m.Teams["b"].HP -= damage
+		raiseIndividualMultiplier(m, a.RepresentativeUserID)
 	case b.Score > a.Score:
 		b.DamageDealt = damage
 		a.DamageTaken = damage
 		m.Teams["a"].HP -= damage
+		raiseIndividualMultiplier(m, b.RepresentativeUserID)
 	}
 	for teamID, team := range m.Teams {
 		if team.HP < 0 {
@@ -555,6 +588,22 @@ func resolveTeamDuelDamage(m *Match, result *contracts.RoundResult) {
 	b.HPAfterRound = m.Teams["b"].HP
 	result.Teams["a"] = a
 	result.Teams["b"] = b
+}
+
+func playerDamageMultiplier(player *contracts.PlayerState) float64 {
+	if player == nil || player.DamageMultiplier < 1 {
+		return 1
+	}
+	return player.DamageMultiplier
+}
+
+func raiseIndividualMultiplier(m *Match, userID string) {
+	if m.Config.MultiplierMode != contracts.MultiplierIndividual {
+		return
+	}
+	if player := m.Players[userID]; player != nil {
+		player.DamageMultiplier = playerDamageMultiplier(player) + 0.5
+	}
 }
 
 func guessUnixMS(g Guess) int64 {
@@ -585,7 +634,7 @@ func (e *Engine) advanceRound(m *Match) {
 		m.State = contracts.MatchEnded
 		m.PendingAdvance = false
 		m.IntermissionUntil = time.Time{}
-		m.LastActivity = time.Now()
+		m.LastActivity = e.now()
 		m.EventSeq++
 		return
 	}
@@ -593,7 +642,7 @@ func (e *Engine) advanceRound(m *Match) {
 	m.CurrentLocation = nextLoc
 	nextRound := m.CurrentIndex + 1
 	m.RoundID = roundID(m.ID, nextRound)
-	m.RoundStartedAt = time.Now()
+	m.RoundStartedAt = e.now()
 	m.RoundDeadline = time.Time{}
 	m.RoundLiveAnnounced = false
 	e.startRoundTimer(m)
@@ -605,7 +654,7 @@ func (e *Engine) advanceRound(m *Match) {
 	}
 	m.PendingAdvance = false
 	m.IntermissionUntil = time.Time{}
-	m.LastActivity = time.Now()
+	m.LastActivity = e.now()
 	m.EventSeq++
 }
 
@@ -618,7 +667,7 @@ func (e *Engine) startRoundTimer(m *Match) {
 }
 
 func (m *Match) snapshot() *contracts.MatchSnapshot {
-	now := time.Now()
+	now := m.now()
 	phase := contracts.PhaseLive
 	roundPhase := contracts.RoundPhaseLive
 	phaseStartedAt := m.RoundStartedAt
@@ -662,6 +711,9 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 	}
 	players := map[string]contracts.PlayerState{}
 	for id, p := range m.Players {
+		if p.DamageMultiplier < 1 {
+			p.DamageMultiplier = 1
+		}
 		players[id] = *p
 	}
 	teams := map[string]contracts.TeamState{}
@@ -704,12 +756,12 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 		Teams:           teams,
 		RatingPreview:   copyRatingPreview(m.RatingPreview),
 		EventSequence:   m.EventSeq,
-		ServerUnixMS:    time.Now().UnixMilli(),
+		ServerUnixMS:    m.now().UnixMilli(),
 		GraceWindowSec:  int(disconnectGrace.Seconds()),
 	}
 }
 
-func ratingPreview(playerIDs []string, players map[string]*contracts.PlayerState) map[string]contracts.RatingDeltaPreview {
+func ratingPreview(playerIDs []string, players map[string]*contracts.PlayerState, now time.Time) map[string]contracts.RatingDeltaPreview {
 	if len(playerIDs) != 2 {
 		return nil
 	}
@@ -718,7 +770,6 @@ func ratingPreview(playerIDs []string, players map[string]*contracts.PlayerState
 	if p1 == nil || p2 == nil || (p1.IsGuest && p2.IsGuest) {
 		return nil
 	}
-	now := time.Now()
 	p1State := rating.State{MMR: p1.MMR, RD: p1.RatingRD, UpdatedAt: now}
 	p2State := rating.State{MMR: p2.MMR, RD: p2.RatingRD, UpdatedAt: now}
 	p1Win, p2Lose := rating.CalculateDuelUpdates(p1State, p2State, "p1", now)

@@ -102,18 +102,49 @@ func (s *pgStore) SetPartyMode(partyID string, mode contracts.MatchMode) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `
-		update parties
-		set mode = $2, updated_at = now()
-		where id = $1 and state = 'open'
-	`, partyID, string(mode))
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("party is not open")
+	defer tx.Rollback(ctx)
+	var currentMode string
+	if err := tx.QueryRow(ctx, `
+		select mode
+		from parties
+		where id = $1 and state = 'open'
+		for update
+	`, partyID).Scan(&currentMode); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("party is not open")
+		}
+		return err
 	}
-	return nil
+	if currentMode != string(contracts.ModeTeamDuel) && mode == contracts.ModeTeamDuel {
+		if _, err := tx.Exec(ctx, `
+			with shuffled_members as (
+				select user_id, row_number() over (order by random()) as position
+				from party_members
+				where party_id = $1 and left_at is null
+			)
+			update party_members m
+			set team_id = case
+				when shuffled.position % 2 = 1 then 'a'::gd_team_id
+				else 'b'::gd_team_id
+			end
+			from shuffled_members shuffled
+			where m.party_id = $1 and m.user_id = shuffled.user_id
+		`, partyID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		update parties
+		set mode = $2, updated_at = now()
+		where id = $1
+	`, partyID, string(mode)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *pgStore) SetPartyConfig(partyID string, cfg contracts.MatchConfig) (contracts.PartySnapshot, error) {
@@ -196,14 +227,14 @@ func (s *pgStore) JoinParty(partyID, userID string) (contracts.PartySnapshot, er
 		insert into party_members(party_id, user_id, role, ready, team_id, left_at)
 		values($1, $2, $3, false, (
 			select case
-				when count(*) filter (where team_id = 'a') <= count(*) filter (where team_id = 'b') then 'a'
-				else 'b'
+				when count(*) filter (where team_id = 'a') <= count(*) filter (where team_id = 'b') then 'a'::gd_team_id
+				else 'b'::gd_team_id
 			end
 			from party_members
 			where party_id = $1 and left_at is null
 		), null)
 		on conflict (party_id, user_id) do update set
-			role = case when party_members.role = 'owner' then 'owner' else excluded.role end,
+			role = case when party_members.role = 'owner' then 'owner'::gd_party_role else excluded.role end,
 			team_id = coalesce(party_members.team_id, excluded.team_id),
 			left_at = null,
 			joined_at = case when party_members.left_at is null then party_members.joined_at else now() end
@@ -582,7 +613,10 @@ func transferPartyOwnerTx(ctx context.Context, tx partyTx, partyID, ownerUserID,
 	}
 	if _, err := tx.Exec(ctx, `
 		update party_members
-		set role = case when user_id = $2 then 'owner' else 'member' end
+		set role = case
+			when user_id = $2 then 'owner'::gd_party_role
+			else 'member'::gd_party_role
+		end
 		where party_id = $1 and left_at is null
 	`, partyID, targetUserID); err != nil {
 		return err
@@ -641,8 +675,7 @@ func (s *pgStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 			u.account_type = 'guest',
 			coalesce(u.is_admin, false),
 			coalesce(u.selected_badge_code, 0),
-			coalesce(u.selected_badge_season_id, ''),
-			coalesce(m.team_id, ''),
+			coalesce(m.team_id::text, ''),
 			m.role, m.ready, m.joined_at
 		from party_members m
 		join users u on u.id = m.user_id
@@ -657,12 +690,11 @@ func (s *pgStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 	for rows.Next() {
 		var member contracts.PartyMember
 		var selectedBadgeCode int16
-		var selectedBadgeSeasonID string
-		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &selectedBadgeCode, &selectedBadgeSeasonID, &member.TeamID, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
+		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &selectedBadgeCode, &member.TeamID, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		selected[member.UserID] = badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID)
+		selected[member.UserID] = badgeIDFromCode(selectedBadgeCode)
 		out = append(out, member)
 	}
 	if err := rows.Err(); err != nil {
@@ -694,10 +726,10 @@ func (s *pgStore) selectedPartyBadges(ctx context.Context, selected map[string]s
 		return map[string]*contracts.PlayerBadge{}, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		select ub.user_id, ub.badge_code, coalesce(ub.badge_season_id, ''), coalesce(ub.rank, 0)
+		select ub.user_id, ub.badge_code, coalesce(ub.level, 1), coalesce(ub.extra, 0)
 		from user_badges ub
 		where ub.user_id = any($1)
-		order by ub.user_id asc, ub.awarded_at desc, ub.badge_code asc, ub.badge_season_id asc
+		order by ub.user_id asc, ub.awarded_at desc, ub.badge_code asc
 	`, userIDs)
 	if err != nil {
 		return nil, err
@@ -709,16 +741,12 @@ func (s *pgStore) selectedPartyBadges(ctx context.Context, selected map[string]s
 	for rows.Next() {
 		var userID string
 		var code int16
-		var seasonID string
-		var rank int
-		if err := rows.Scan(&userID, &code, &seasonID, &rank); err != nil {
+		var level, extra int16
+		if err := rows.Scan(&userID, &code, &level, &extra); err != nil {
 			return nil, err
 		}
-		if code == badgeCodeSeasonRank {
-			continue
-		}
-		badge, ok := badgeFromParts(code, seasonID, rank, true)
-		if !ok {
+		badge := badgeFromParts(code, level, extra, true)
+		if badge.ID == "" {
 			continue
 		}
 		if fallback[userID] == nil {
@@ -732,22 +760,6 @@ func (s *pgStore) selectedPartyBadges(ctx context.Context, selected map[string]s
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
-	}
-	seasonBadges, err := s.earnedSeasonRankBadges(ctx, userIDs)
-	if err != nil {
-		return nil, err
-	}
-	for userID, badges := range seasonBadges {
-		for _, badge := range badges {
-			if fallback[userID] == nil {
-				b := badge
-				fallback[userID] = &b
-			}
-			if out[userID] == nil && badge.ID == selected[userID] {
-				b := badge
-				out[userID] = &b
-			}
-		}
 	}
 	for userID, badge := range fallback {
 		if out[userID] == nil && selected[userID] != "" {

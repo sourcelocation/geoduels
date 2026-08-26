@@ -1,6 +1,60 @@
+@import './tokens/primitives.css';
+@import './tokens/themes.css';
+@import './tokens/typography.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html.game-active .hotkey-settings-trigger {
+  display: none;
+}
+
+/* One logical header owns brand, navigation, and account controls. The
+ * navigation only joins its central slot when that header has room for all
+ * three regions; otherwise it retains the established floating placement. */
+.app-shell-header-layout {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+}
+
+.app-shell-header-layout > :first-child {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.app-shell-navigation {
+  grid-column: 2;
+}
+
+.app-shell-header-layout > :last-child {
+  grid-column: 3;
+  justify-self: end;
+}
+
+/* A locked surface cannot rely on document flow to clear the fixed mobile
+ * navigation. Reserve its complete footprint, including the device home
+ * indicator inset, so bottom actions remain reachable. */
+@media (max-width: 767px) {
+  .app-shell-mobile-nav-safe-area {
+    padding-bottom: calc(4rem + max(0.75rem, env(safe-area-inset-bottom)));
+  }
+}
+
+@container (min-width: 1100px) {
+  .app-shell-navigation {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    justify-self: center;
+  }
+}
 
 * {
   box-sizing: border-box;
@@ -25,9 +79,15 @@ html.game-active {
 }
 
 body {
-  font-family: 'IBM Plex Sans', sans-serif;
-  color: #f4f9ff;
-  background: #0a1018;
+  color: var(--gd-content-primary);
+  background: var(--gd-surface-page);
+}
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--gd-border-focus);
+    outline-offset: 2px;
+  }
 }
 
 .scrollbar-hidden {
@@ -39,14 +99,38 @@ body {
   display: none;
 }
 
-.font-hud {
-  font-family: var(--font-montserrat), 'IBM Plex Sans', sans-serif;
-  font-weight: 800;
+.party-player-list-fade {
+  mask-image: linear-gradient(to bottom, black calc(100% - 3rem), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 3rem), transparent 100%);
+}
+
+@media (max-width: 767px) {
+  .party-player-list-fade {
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
+}
+
+.party-team-grid {
+  grid-template-rows: auto auto auto;
+}
+
+@media (min-width: 768px) {
+  .party-team-grid {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
 }
 
 @layer components {
+  .functional-material {
+    background: color-mix(in srgb, var(--gd-surface-panel) 72%, transparent);
+    backdrop-filter: saturate(135%) blur(18px);
+    -webkit-backdrop-filter: saturate(135%) blur(18px);
+  }
+
   .markdown-content {
-    color: #c5d8e8;
+    color: var(--gd-content-secondary);
     font-size: 0.98rem;
     line-height: 1.75;
   }
@@ -59,7 +143,7 @@ body {
   .markdown-content h2,
   .markdown-content h3,
   .markdown-content h4 {
-    color: #ffffff;
+    color: var(--gd-content-primary);
     font-weight: 800;
     line-height: 1.2;
   }
@@ -77,15 +161,32 @@ body {
   }
 
   .markdown-content a {
-    color: #77f0be;
+    color: var(--gd-status-success);
     text-decoration: underline;
-    text-decoration-color: rgba(119, 240, 190, 0.42);
+    text-decoration-color: color-mix(in srgb, var(--gd-status-success) 42%, transparent);
     text-underline-offset: 4px;
   }
 
   .markdown-content strong {
-    color: #ffffff;
+    color: var(--gd-content-primary);
     font-weight: 700;
+  }
+
+  .markdown-content-compact {
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+  }
+
+  .markdown-content-compact > * + * {
+    margin-top: 0.5rem;
+  }
+
+  .markdown-content-compact h1,
+  .markdown-content-compact h2,
+  .markdown-content-compact h3,
+  .markdown-content-compact h4 {
+    font-size: 1rem;
+    line-height: 1.5rem;
   }
 
   .markdown-content ul,
@@ -102,23 +203,23 @@ body {
   }
 
   .markdown-content blockquote {
-    border-left: 3px solid rgba(42, 209, 143, 0.65);
+    border-left: 3px solid color-mix(in srgb, var(--gd-status-success) 65%, transparent);
     padding-left: 1rem;
-    color: #d9e7f5;
+    color: var(--gd-content-secondary);
   }
 
   .markdown-content code {
-    border-radius: 0.35rem;
-    background: rgba(0, 0, 0, 0.28);
+    border-radius: var(--gd-radius-sm);
+    background: color-mix(in srgb, var(--gd-surface-inset) 72%, transparent);
     padding: 0.15rem 0.35rem;
-    color: #d9e7f5;
+    color: var(--gd-content-secondary);
     font-size: 0.92em;
   }
 
   .markdown-content pre {
     overflow-x: auto;
-    border-radius: 0.75rem;
-    background: rgba(0, 0, 0, 0.34);
+    border-radius: var(--gd-radius-md);
+    background: var(--gd-surface-inset);
     padding: 1rem;
   }
 
@@ -131,42 +232,25 @@ body {
     width: 100%;
     border-collapse: collapse;
     overflow: hidden;
-    border-radius: 0.75rem;
+    border-radius: var(--gd-radius-md);
   }
 
   .markdown-content th,
   .markdown-content td {
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--gd-border-default);
     padding: 0.65rem 0.8rem;
     text-align: left;
   }
 
   .markdown-content th {
-    color: #ffffff;
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .markdown-content-compact {
-    font-size: 0.9rem;
-    line-height: 1.65;
-  }
-
-  .markdown-content-compact h1 {
-    font-size: 1.25rem;
-  }
-
-  .markdown-content-compact h2 {
-    font-size: 1.1rem;
-  }
-
-  .markdown-content-compact h3 {
-    font-size: 1rem;
+    color: var(--gd-content-primary);
+    background: var(--gd-surface-fill);
   }
 
   .admin-markdown-editor .EasyMDEContainer,
   .admin-markdown-editor .CodeMirror {
-    background: #020617;
-    color: #e2e8f0;
+    background: var(--gd-surface-inset);
+    color: var(--gd-content-primary);
   }
 
   .admin-markdown-editor .CodeMirror {
@@ -175,35 +259,35 @@ body {
   }
 
   .admin-markdown-editor .CodeMirror-cursor {
-    border-left-color: #e2e8f0 !important;
+    border-left-color: var(--gd-content-primary) !important;
   }
 
   .admin-markdown-editor .editor-toolbar {
     border: 0;
-    border-bottom: 1px solid #1e293b;
-    background: #0f172a;
+    border-bottom: 1px solid var(--gd-border-default);
+    background: var(--gd-surface-panel);
     opacity: 1;
   }
 
   .admin-markdown-editor .editor-toolbar button {
-    color: #cbd5e1 !important;
+    color: var(--gd-content-secondary) !important;
   }
 
   .admin-markdown-editor .editor-toolbar button:hover,
   .admin-markdown-editor .editor-toolbar button.active {
-    border-color: #334155;
-    background: #1e293b;
+    border-color: var(--gd-border-strong);
+    background: var(--gd-surface-raised);
   }
 
   .admin-markdown-editor .editor-toolbar i.separator {
-    border-left-color: #334155;
-    border-right-color: #020617;
+    border-left-color: var(--gd-border-strong);
+    border-right-color: var(--gd-surface-inset);
   }
 
   .admin-markdown-editor .editor-preview,
   .admin-markdown-editor .editor-preview-side {
-    background: #020617;
-    color: #cbd5e1;
+    background: var(--gd-surface-inset);
+    color: var(--gd-content-secondary);
   }
 
   .app-layer-match-end {
@@ -214,7 +298,7 @@ body {
     z-index: 120;
   }
 
-  .glass-panel {
+  .translucent-surface {
     position: relative;
     isolation: isolate;
     overflow: hidden;
@@ -230,7 +314,7 @@ body {
     /* transform: translateZ(0); */
   }
 
-  .glass-panel::before {
+  .translucent-surface::before {
     content: '';
     position: absolute;
     inset: 0;
@@ -238,9 +322,10 @@ body {
     background: radial-gradient(circle at top center, rgba(141, 141, 141, 0.07), transparent 60%);
     opacity: 1;
     pointer-events: none;
+    border-radius: inherit;
   }
 
-  .glass-panel-interactive {
+  .translucent-surface-interactive {
     transition:
       border-color 180ms ease,
       background-color 180ms ease,
@@ -248,7 +333,7 @@ body {
       box-shadow 180ms ease;
   }
 
-  .glass-panel-interactive:hover {
+  .translucent-surface-interactive:hover {
     border-color: rgba(255, 255, 255, 0.18);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
@@ -278,6 +363,22 @@ img {
 .guess-avatar-marker {
   background: transparent;
   border: 0;
+}
+
+.team-ping-marker span {
+  display: block;
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgb(var(--gd-status-info));
+  border-radius: 9999px;
+  box-shadow: 0 0 18px rgb(var(--gd-status-info) / 0.8);
+  animation: team-ping-fade 5s ease-out forwards;
+}
+
+@keyframes team-ping-fade {
+  0% { opacity: 1; transform: scale(.35); }
+  18% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.45); }
 }
 
 .actual-location-marker {

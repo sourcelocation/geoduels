@@ -2,12 +2,12 @@ import type {
   MatchSidesView,
   ParticipantIdentityView,
   PlayerIdentityView,
-} from "../../../components/ui/participant-types";
+} from "../components/overlays/participant-types";
 import type {
   RatingDeltaPreview,
   Snapshot,
   SnapshotPlayer,
-} from "../../../components/ui/types";
+} from "./types";
 import { getTeamPresentation } from "../../../lib/team-presentation";
 
 type FallbackSelf = {

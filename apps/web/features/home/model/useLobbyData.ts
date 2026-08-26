@@ -10,7 +10,7 @@ import {
   requestLobbyChangelog,
   requestMe,
 } from "../../auth/lib/auth-client";
-import { fetchLobbyStatus } from "../../matchmaking/lib/queue-client";
+import { useGlobalRealtime } from "../../social/components/SocialRealtimeProvider";
 
 type Params = {
   config: RuntimeConfig;
@@ -26,30 +26,7 @@ export function useLobbyData({
   enabled,
 }: Params) {
   const [leaderboardEnabled, setLeaderboardEnabled] = useState(false);
-  const [onlinePlayersEnabled, setOnlinePlayersEnabled] = useState(false);
-
-  useEffect(() => {
-    if (!enabled || typeof document === "undefined") {
-      setOnlinePlayersEnabled(false);
-      return;
-    }
-    const syncVisibility = () => {
-      setOnlinePlayersEnabled(document.visibilityState === "visible");
-    };
-    syncVisibility();
-    document.addEventListener("visibilitychange", syncVisibility);
-    return () =>
-      document.removeEventListener("visibilitychange", syncVisibility);
-  }, [enabled]);
-
-  const onlinePlayersQuery = useQuery({
-    queryKey: ["queue-online"],
-    queryFn: async () => fetchLobbyStatus(config),
-    enabled: onlinePlayersEnabled,
-    refetchInterval: 10_000,
-    refetchOnMount: false,
-    staleTime: 30_000,
-  });
+  const globalRealtime = useGlobalRealtime();
 
   const profileQuery = useQuery({
     queryKey: ["me", auth.userId, auth.accessToken],
@@ -125,10 +102,10 @@ export function useLobbyData({
 
   return {
     onlinePlayers:
-      typeof onlinePlayersQuery.data?.onlinePlayers === "number"
-        ? onlinePlayersQuery.data.onlinePlayers
+      typeof globalRealtime.onlinePlayers === "number"
+        ? globalRealtime.onlinePlayers
         : null,
-    maintenance: onlinePlayersQuery.data?.maintenance ?? null,
+    maintenance: globalRealtime.maintenance,
     leaderboardLoading:
       leaderboardQuery.isLoading || leaderboardQuery.isFetching,
     changelogEyebrow:

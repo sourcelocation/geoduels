@@ -1,11 +1,13 @@
 import { Check, Crosshair, Lock, MousePointer2, Move, X } from "lucide-react";
 import AppModalShell from "../../../components/ui/AppModalShell";
+import { Button, IconButton } from "../../../components/ui/button";
+import { Switch } from "../../../components/ui/Switch";
 import type {
   GameRuleset,
+  QueueVariant,
   StreetNamesVisibility,
 } from "../../matchmaking/lib/queue-client";
 import type { ExtensionAvailabilityStatus } from "../../browser-extension/hooks/use-extension-availability";
-import type { DuelStreetNamesChoice } from "../hooks/usePlayPreferences";
 import { PlayModeActionButton } from "./PlayPanel";
 
 type Props =
@@ -13,11 +15,9 @@ type Props =
       kind: "duel";
       extensionAvailable: boolean;
       extensionStatus: ExtensionAvailabilityStatus;
-      modes: GameRuleset[];
-      streetNames: DuelStreetNamesChoice;
+      queues: QueueVariant[];
       disabled: boolean;
-      onModesChange: (modes: GameRuleset[]) => void;
-      onStreetNamesChange: (value: DuelStreetNamesChoice) => void;
+      onQueuesChange: (queues: QueueVariant[]) => void;
       onClose: () => void;
       onStart: () => void;
     }
@@ -28,6 +28,7 @@ type Props =
       mode: GameRuleset;
       streetNames: StreetNamesVisibility;
       disabled: boolean;
+      error: string;
       onModeChange: (mode: GameRuleset) => void;
       onStreetNamesChange: (value: StreetNamesVisibility) => void;
       onClose: () => void;
@@ -67,22 +68,22 @@ function ExtensionInstallCallout({
 }) {
   const outdated = status.state === "outdated";
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-center">
-      <p className="text-xs font-semibold leading-5 text-white/70">
+    <div className="rounded-xl border border-border-default bg-surface-grouped p-3 text-center">
+      <p className="text-body-sm font-semibold text-content-secondary">
         {outdated
           ? "Update the official GeoDuels browser extension to unlock these options."
-          : "Unlock more options by installing the official GeoDuels browser extension."}
+          : "Unlock more options by installing the official GeoDuels browser extension. This is required so GeoDuels can modify Google scripts and stay free."}
       </p>
       <div className="mt-2 flex flex-wrap justify-center gap-2">
         <a
           href="https://chromewebstore.google.com/detail/geoduels-enhancer/ecdjkhpicnccgbkdimbbjbnppnkeelmd"
-          className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-black text-white transition-colors hover:bg-white/15"
+          className="rounded-md bg-surface-fill px-3 py-1.5 text-label font-strong text-content-primary transition-colors hover:bg-surface-raised"
         >
           {outdated ? "Chrome update" : "Chrome setup"}
         </a>
         <a
           href="https://addons.mozilla.org/en-US/firefox/addon/geoduels-enhancer/"
-          className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-black text-white transition-colors hover:bg-white/15"
+          className="rounded-md bg-surface-fill px-3 py-1.5 text-label font-strong text-content-primary transition-colors hover:bg-surface-raised"
         >
           {outdated ? "Firefox update" : "Firefox setup"}
         </a>
@@ -91,63 +92,72 @@ function ExtensionInstallCallout({
   );
 }
 
-function DisabledStreetNamesToggle() {
+function StreetNamesToggle({
+  hidden,
+  locked,
+  onChange,
+}: {
+  hidden: boolean;
+  locked: boolean;
+  onChange: (hidden: boolean) => void;
+}) {
   return (
     <div className="flex justify-center">
-      <button
-        type="button"
-        aria-disabled="true"
-        aria-label="Hide street names requires the GeoDuels extension"
-        className="flex min-h-12 w-full cursor-not-allowed items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left opacity-65"
-      >
-        <span className="text-sm font-black text-white">Hide street names</span>
-        <span className="relative h-6 w-11 rounded-full bg-white/10 shadow-inner">
-          <span className="absolute left-1 top-1 h-4 w-4 rounded-full bg-white/45" />
+      <div className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-border-default bg-surface-grouped px-4 text-left">
+        <span className="flex items-center gap-2 text-body-sm font-strong text-content-primary">
+          Hide street names
+          {locked ? <Lock size={15} className="text-content-secondary" /> : null}
         </span>
-      </button>
+        <Switch
+          checked={hidden}
+          onCheckedChange={onChange}
+          aria-label="Hide street names"
+        />
+      </div>
     </div>
   );
 }
 
 export function PlayLaunchModal(props: Props) {
-  const selectedModes =
-    props.kind === "duel" ? props.modes : [props.mode];
+  const selectedModes = props.kind === "singleplayer" ? [props.mode] : [];
   const hasLockedSelection =
     !props.extensionAvailable &&
-    (selectedModes.includes("no_move") || props.streetNames !== "shown");
-  const streetOptions: Array<{
-    value: DuelStreetNamesChoice;
-    label: string;
-    extensionRequired: boolean;
-  }> = [
-    { value: "shown", label: "Shown", extensionRequired: false },
-    { value: "hidden", label: "Hidden", extensionRequired: true },
-    ...(props.kind === "duel"
-      ? [{ value: "any" as const, label: "Any", extensionRequired: true }]
-      : []),
-  ];
+    (props.kind === "duel"
+      ? props.queues.includes("no_move_hidden")
+      : selectedModes.includes("no_move") || props.streetNames === "hidden");
+  const hideStartButton =
+    hasLockedSelection && props.extensionStatus.state === "missing";
 
   const chooseMode = (mode: GameRuleset) => {
-    if (mode === "no_move" && !props.extensionAvailable) return;
-    if (props.kind === "singleplayer") {
-      props.onModeChange(mode);
-      return;
-    }
-    props.onModesChange(
-      props.modes.includes(mode)
-        ? props.modes.filter((current) => current !== mode)
-        : [...props.modes, mode],
-    );
+    if (props.kind === "singleplayer") props.onModeChange(mode);
   };
 
-  const chooseStreetNames = (value: DuelStreetNamesChoice) => {
-    if (value !== "shown" && !props.extensionAvailable) return;
-    if (props.kind === "duel") {
-      props.onStreetNamesChange(value);
-    } else if (value !== "any") {
-      props.onStreetNamesChange(value);
-    }
+  const chooseStreetNames = (value: StreetNamesVisibility) => {
+    if (props.kind === "singleplayer") props.onStreetNamesChange(value);
   };
+
+  const rankedModes: Array<{
+    value: QueueVariant;
+    title: string;
+    detail: string;
+    Icon: typeof Move;
+    extensionRequired: boolean;
+  }> = [
+    {
+      value: "moving",
+      title: "Moving",
+      detail: "Street names",
+      Icon: Move,
+      extensionRequired: false,
+    },
+    {
+      value: "no_move_hidden",
+      title: "No Move",
+      detail: "No street names",
+      Icon: MousePointer2,
+      extensionRequired: true,
+    },
+  ];
 
   return (
     <AppModalShell
@@ -156,100 +166,147 @@ export function PlayLaunchModal(props: Props) {
       placement="center"
       maxWidthClassName="max-w-xl"
       showHeader={false}
-      panelClassName="relative"
     >
-      <button
-        type="button"
+      <IconButton
         onClick={props.onClose}
         aria-label={`Close ${props.kind === "duel" ? "Find a Duel" : "Start Singleplayer"}`}
-        className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+        className="absolute right-4 top-4 h-8 min-h-8 w-8"
       >
         <X size={18} strokeWidth={2.5} />
-      </button>
+      </IconButton>
 
       <div className="space-y-5 pt-7">
-        <div className="grid gap-3 sm:grid-cols-3">
-          {modes.map((mode) => {
-            const selected = selectedModes.includes(mode.value);
+        <div
+          className={`grid gap-3 ${props.kind === "duel" ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}
+        >
+          {(props.kind === "duel" ? rankedModes : modes).map((mode) => {
+            if (props.kind === "duel") {
+              const selected = props.queues.includes(
+                mode.value as QueueVariant,
+              );
+              const locked =
+                mode.extensionRequired && !props.extensionAvailable;
+              const Icon = mode.Icon;
+              return (
+                <Button
+                  variant="ghost"
+                  type="button"
+                  key={mode.value}
+                  aria-pressed={selected}
+                  aria-label={mode.title}
+                  onClick={() =>
+                    props.onQueuesChange(
+                      selected
+                        ? props.queues.filter((queue) => queue !== mode.value)
+                        : [...props.queues, mode.value as QueueVariant],
+                    )
+                  }
+                  className={`relative flex min-h-32 flex-col items-center justify-center gap-2 rounded-xl border p-4 text-center transition-colors duration-instant active:scale-[0.99] ${selected ? "border-status-success/75 bg-status-success/15 ring-1 ring-status-success/20" : "border-border-default bg-surface-grouped hover:border-border-strong hover:bg-surface-fill"}`}
+                >
+                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-surface-fill text-content-primary">
+                    <Icon size={22} />
+                  </span>
+                  <span className="text-body font-strong text-content-primary">
+                    {mode.title}
+                  </span>
+                  <span className="text-label font-semibold text-content-secondary">
+                    {"detail" in mode ? mode.detail : null}
+                  </span>
+                  {locked ? (
+                    <Lock
+                      size={16}
+                      className="absolute right-3 top-3 text-content-secondary"
+                    />
+                  ) : selected ? (
+                    <Check
+                      size={17}
+                      className="absolute right-3 top-3 text-action-primary"
+                    />
+                  ) : null}
+                </Button>
+              );
+            }
+            const selected = selectedModes.includes(mode.value as GameRuleset);
             const locked = mode.extensionRequired && !props.extensionAvailable;
             const Icon = mode.Icon;
             return (
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 key={mode.value}
                 aria-pressed={selected}
                 aria-label={mode.title}
-                disabled={locked}
-                onClick={() => chooseMode(mode.value)}
-                className={`relative flex min-h-32 flex-col items-center justify-center gap-3 rounded-2xl border p-4 text-center transition-colors duration-75 active:scale-[0.99] ${
+                onClick={() => chooseMode(mode.value as GameRuleset)}
+                className={`relative flex min-h-32 flex-col items-center justify-center gap-3 rounded-xl border p-4 text-center transition-colors duration-instant active:scale-[0.99] ${
                   selected
-                    ? "border-accentPrimary/75 bg-accentPrimary/15 ring-1 ring-accentPrimary/20"
-                    : "border-white/10 bg-white/[0.045] hover:border-white/20 hover:bg-white/[0.075]"
-                } ${locked ? "cursor-not-allowed opacity-45" : ""}`}
+                    ? "border-status-success/75 bg-status-success/15 ring-1 ring-status-success/20"
+                    : "border-border-default bg-surface-grouped hover:border-border-strong hover:bg-surface-fill"
+                }`}
               >
-                <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/[0.07] text-white">
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-surface-fill text-content-primary">
                   <Icon size={22} />
                 </span>
-                <span className="text-base font-black text-white">
+                <span className="text-body font-strong text-content-primary">
                   {mode.title}
                 </span>
                 {locked ? (
-                  <Lock size={16} className="absolute right-3 top-3 text-white/55" />
+                  <Lock
+                    size={16}
+                    className="absolute right-3 top-3 text-content-secondary"
+                  />
                 ) : selected ? (
-                  <Check size={17} className="absolute right-3 top-3 text-accentPrimary" />
+                  <Check
+                    size={17}
+                    className="absolute right-3 top-3 text-action-primary"
+                  />
                 ) : null}
-              </button>
+              </Button>
             );
           })}
         </div>
 
-        <div className="space-y-3">
-          {props.extensionAvailable ? (
-            <div className="grid rounded-xl border border-white/10 bg-black/20 p-1" style={{ gridTemplateColumns: `repeat(${streetOptions.length}, minmax(0, 1fr))` }}>
-              {streetOptions.map((option) => {
-                const selected = props.streetNames === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => chooseStreetNames(option.value)}
-                    className={`flex min-h-11 items-center justify-center rounded-lg px-3 text-[11px] font-black uppercase tracking-[0.08em] transition ${
-                      selected
-                        ? "bg-white text-[#10201a]"
-                        : "text-[#a9bfd4] hover:bg-white/[0.08]"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <>
-              <DisabledStreetNamesToggle />
+        {props.kind === "singleplayer" ? (
+          <div className="space-y-3">
+            <StreetNamesToggle
+              hidden={props.streetNames === "hidden"}
+              locked={!props.extensionAvailable}
+              onChange={(hidden) =>
+                chooseStreetNames(hidden ? "hidden" : "shown")
+              }
+            />
+            {hasLockedSelection ? (
               <ExtensionInstallCallout status={props.extensionStatus} />
-            </>
-          )}
-        </div>
+            ) : null}
+          </div>
+        ) : hasLockedSelection ? (
+          <ExtensionInstallCallout status={props.extensionStatus} />
+        ) : null}
 
-        {props.kind === "duel" && props.modes.length === 0 ? (
-          <p className="text-sm font-semibold text-amber-200">
+        {props.kind === "duel" && props.queues.length === 0 ? (
+          <p className="text-body-sm font-semibold text-status-warning">
             Select at least one mode.
           </p>
         ) : null}
 
-        <PlayModeActionButton
-          tone={props.kind === "duel" ? "duel" : "singleplayer"}
-          onClick={props.onStart}
-          disabled={
-            props.disabled ||
-            hasLockedSelection ||
-            (props.kind === "duel" && props.modes.length === 0)
-          }
-        >
-          Start
-        </PlayModeActionButton>
+        {props.kind === "singleplayer" && props.error ? (
+          <p role="alert" className="text-body-sm font-semibold text-status-danger">
+            {props.error}
+          </p>
+        ) : null}
+
+        {hideStartButton ? null : (
+          <PlayModeActionButton
+            tone={props.kind === "duel" ? "duel" : "singleplayer"}
+            onClick={props.onStart}
+            disabled={
+              props.disabled ||
+              hasLockedSelection ||
+              (props.kind === "duel" && props.queues.length === 0)
+            }
+          >
+            Start
+          </PlayModeActionButton>
+        )}
       </div>
     </AppModalShell>
   );

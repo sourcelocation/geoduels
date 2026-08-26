@@ -1,4 +1,5 @@
 import { sfxRegistry, type SfxController, type SfxDefinition, type SfxName, type SfxSource } from './sfx';
+import { isSfxMuted, subscribeToSfxMute } from './sfx-preferences';
 
 type ManagedSource = {
   source: AudioBufferSourceNode;
@@ -29,6 +30,7 @@ export class BrowserSfxController implements SfxController {
   private unlocked = false;
   private started = false;
   private destroyed = false;
+  private unsubscribeFromMute: (() => void) | null = null;
 
   private readonly unlock = () => {
     void this.unlockAudio();
@@ -38,6 +40,9 @@ export class BrowserSfxController implements SfxController {
     if (this.started || typeof window === 'undefined' || !this.probe) return;
     this.destroyed = false;
     this.started = true;
+    this.unsubscribeFromMute = subscribeToSfxMute((muted) => {
+      if (muted) this.stopAllManaged();
+    });
     window.addEventListener('pointerdown', this.unlock, { once: true });
     window.addEventListener('keydown', this.unlock, { once: true });
   }
@@ -58,6 +63,8 @@ export class BrowserSfxController implements SfxController {
     }
     this.audioContext = null;
     this.unlocked = false;
+    this.unsubscribeFromMute?.();
+    this.unsubscribeFromMute = null;
   }
 
   play(name: SfxName) {
@@ -110,7 +117,7 @@ export class BrowserSfxController implements SfxController {
   }
 
   private async playBuffer(name: SfxName, managed: boolean, loop: boolean) {
-    if (this.destroyed || !this.probe) return;
+    if (this.destroyed || !this.probe || isSfxMuted()) return;
     const context = this.ensureAudioContext();
     if (!context || !this.masterGain) return;
     if (!this.unlocked) {
@@ -119,7 +126,7 @@ export class BrowserSfxController implements SfxController {
       await context.resume().catch(() => {});
     }
     const buffer = this.buffers.get(name) || (await this.loadBuffer(name));
-    if (!buffer || this.destroyed || !this.audioContext || !this.masterGain) return;
+    if (!buffer || this.destroyed || isSfxMuted() || !this.audioContext || !this.masterGain) return;
     if (managed) {
       this.stop(name);
     }

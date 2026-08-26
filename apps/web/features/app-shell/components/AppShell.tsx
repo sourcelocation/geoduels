@@ -1,131 +1,71 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ClipboardList, Shield } from "lucide-react";
+import { ClipboardList, Settings, Shield } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import AvatarBadge from "../../../components/ui/AvatarBadge";
-import { circularIconButtonClassName } from "../../../components/ui/button";
-import { MmrDisplay } from "../../../components/ui/MmrDisplay";
-import PlayerBadge, { type PlayerBadgeInfo } from "../../../components/ui/PlayerBadge";
-import PlayerNameWithBadge from "../../../components/ui/PlayerNameWithBadge";
+import AvatarBadge from "../../players/components/AvatarBadge";
+import { MmrDisplay } from "../../players/components/MmrDisplay";
+import PlayerBadge from "../../players/components/PlayerBadge";
+import PlayerNameWithBadge from "../../players/components/PlayerNameWithBadge";
+import { Button } from "../../../components/ui/button";
 import { Tooltip } from "../../../components/ui/Tooltip";
+import { AppChromeIconButton, AppChromeIconLink, AppNavigationSurface } from "../../../components/ui/compositions";
 import { cn } from "../../../lib/cn";
 import {
   APP_NAV_ITEMS,
   appNavRouteStorageKey,
-  isAppNavRoute,
   type AppNavRoute,
 } from "../navigation";
-
-const backgroundImage = "/bg3.v2.webp";
-const backgroundPlaceholder = "/bg3.placeholder.v2.webp";
-const backgroundOverlay =
-  "linear-gradient(rgba(18, 56, 41, 0.4), rgba(0, 0, 0, 0.9))";
-
-let backgroundLoaded = false;
-let backgroundLoadPromise: Promise<void> | null = null;
-
-function loadBackground() {
-  if (backgroundLoaded) return Promise.resolve();
-  if (backgroundLoadPromise) return backgroundLoadPromise;
-
-  backgroundLoadPromise = new Promise<void>((resolve) => {
-    const image = new Image();
-    image.onload = async () => {
-      try {
-        await image.decode();
-      } catch {
-        // onload is sufficient when decode is unavailable.
-      }
-      backgroundLoaded = true;
-      resolve();
-    };
-    image.onerror = () => {
-      backgroundLoadPromise = null;
-      resolve();
-    };
-    image.src = backgroundImage;
-  });
-  return backgroundLoadPromise;
-}
-
-export type AppShellViewer = {
-  userId: string;
-  displayName: string;
-  avatarUrl?: string;
-  avatarFallback: string;
-  mmr?: number;
-  selectedBadge?: PlayerBadgeInfo | null;
-};
+import { NotificationCenter } from "../../notifications/components/NotificationCenter";
+import { useGlobalRealtime } from "../../social/components/SocialRealtimeProvider";
+import { useOptionalHotkeys } from "../../hotkeys/components/HotkeyProvider";
+import { AppBackground } from "./AppBackground";
+import { AppNavTasks, type AppNavTask } from "./AppNavTasks";
+import { useAuthActions, useAuthState } from "../../auth/components/AuthProvider";
+import { useAppActivities } from "./AppActivityProvider";
 
 type AppShellProps = {
   activeNavRoute: AppNavRoute | null;
+  backgroundBlurred?: boolean;
   children: ReactNode;
-  navigationDisabled?: boolean;
   navigationHidden?: boolean;
   onlinePlayers?: number;
-  viewer?: AppShellViewer | null;
-  signedOutAction?: ReactNode;
-  isAdmin?: boolean;
-  isModerator?: boolean;
   maintenanceBanner?: ReactNode;
+  tasks?: AppNavTask[];
   contentClassName?: string;
+  viewportLocked?: boolean;
 };
 
 export function AppShell({
   activeNavRoute,
+  backgroundBlurred = false,
   children,
-  navigationDisabled = false,
   navigationHidden = false,
   onlinePlayers,
-  viewer,
-  signedOutAction,
-  isAdmin = false,
-  isModerator = false,
   maintenanceBanner,
+  tasks,
   contentClassName,
+  viewportLocked = false,
 }: AppShellProps) {
-  const [highQualityBackgroundReady, setHighQualityBackgroundReady] =
-    useState(backgroundLoaded);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (backgroundLoaded) {
-      setHighQualityBackgroundReady(true);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void loadBackground().then(() => {
-        if (!cancelled && backgroundLoaded) {
-          setHighQualityBackgroundReady(true);
-        }
-      });
-    }, 350);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, []);
-
+  const auth = useAuthState();
+  const globalRealtime = useGlobalRealtime();
+  const globalTasks = useAppActivities();
+  const resolvedOnlinePlayers = onlinePlayers ?? globalRealtime.onlinePlayers;
   return (
-    <div className="relative flex min-h-screen flex-col overflow-hidden font-sans text-[#f4f9ff] selection:bg-accentPrimary/30">
-      <AppBackground ready={highQualityBackgroundReady} />
+    <div className={cn("relative flex flex-col overflow-hidden font-body text-content-primary selection:bg-status-success/30", viewportLocked ? "h-screen" : "min-h-screen")}>
+      <AppBackground blurred={backgroundBlurred} />
       <AppShellHeader
-        isAdmin={isAdmin}
-        isModerator={isModerator}
+        auth={auth}
         maintenanceBanner={maintenanceBanner}
-        signedOutAction={signedOutAction}
-        viewer={viewer}
+        navigationHidden={navigationHidden}
+        activeNavRoute={activeNavRoute}
+        onlinePlayers={resolvedOnlinePlayers}
+        tasks={tasks ?? globalTasks}
       />
-      {!navigationHidden ? (
-        <AppNavigation
-          activeRoute={activeNavRoute}
-          disabled={navigationDisabled}
-          onlinePlayers={onlinePlayers}
-        />
-      ) : null}
+      <div aria-hidden="true" className="h-[68px] shrink-0 sm:h-[82px] lg:h-[90px]" />
       <div
         className={cn(
-          "relative z-10 flex min-h-0 flex-1 flex-col",
+          "relative z-content flex min-h-0 flex-1 flex-col",
+          viewportLocked && !navigationHidden && "app-shell-mobile-nav-safe-area",
           contentClassName,
         )}
       >
@@ -135,54 +75,27 @@ export function AppShell({
   );
 }
 
-function AppBackground({ ready }: { ready: boolean }) {
-  return (
-    <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage: `${backgroundOverlay}, url('${backgroundPlaceholder}')`,
-          backgroundPosition: "center",
-          backgroundRepeat: "no-repeat",
-          backgroundSize: "cover",
-          filter: "blur(14px)",
-          transform: "scale(1.06)",
-        }}
-      />
-      <div
-        className={cn(
-          "absolute inset-0 transition-opacity duration-700 ease-out",
-          ready ? "opacity-100" : "opacity-0",
-        )}
-        style={{
-          backgroundImage: `${backgroundOverlay}, url('${backgroundImage}')`,
-          backgroundPosition: "center",
-          backgroundRepeat: "no-repeat",
-          backgroundSize: "cover",
-          transform: "scale(1.06)",
-        }}
-      />
-    </div>
-  );
-}
-
 function AppShellHeader({
-  isAdmin,
-  isModerator,
+  auth,
   maintenanceBanner,
-  signedOutAction,
-  viewer,
+  navigationHidden,
+  activeNavRoute,
+  onlinePlayers,
+  tasks,
 }: {
-  isAdmin: boolean;
-  isModerator: boolean;
+  auth: ReturnType<typeof useAuthState>;
   maintenanceBanner?: ReactNode;
-  signedOutAction?: ReactNode;
-  viewer?: AppShellViewer | null;
+  navigationHidden: boolean;
+  activeNavRoute: AppNavRoute | null;
+  onlinePlayers?: number;
+  tasks: AppNavTask[];
 }) {
+  const hotkeys = useOptionalHotkeys();
+  const authActions = useAuthActions();
   return (
-    <header className="sticky top-0 z-20 px-4 pb-4 pt-4 sm:px-6 sm:pb-5 sm:pt-5 lg:px-8 lg:pb-6 lg:pt-6">
+    <header className="fixed inset-x-0 top-0 z-sticky px-4 pb-4 pt-4 sm:px-6 sm:pb-5 sm:pt-5 lg:px-8 lg:pb-6 lg:pt-6">
       <AnimatePresence>{maintenanceBanner}</AnimatePresence>
-      <div className="flex items-center justify-between gap-4">
+      <div className="app-shell-header-layout">
         <div className="flex min-w-0 items-center gap-3 sm:gap-5">
           <Link href="/" aria-label="GeoDuels home" className="inline-flex shrink-0">
             <img
@@ -193,70 +106,98 @@ function AppShellHeader({
               className="h-auto w-[112px] sm:w-[140px]"
             />
           </Link>
-          {isAdmin ? (
+          {auth.status === "registered" && auth.isAdmin ? (
             <Tooltip content="Admin" side="bottom">
-              <Link
+              <AppChromeIconLink
                 href="/admin"
                 prefetch={false}
                 aria-label="Admin"
-                className={circularIconButtonClassName()}
+                className="hidden sm:inline-flex"
               >
                 <Shield size={17} aria-hidden="true" />
-              </Link>
+              </AppChromeIconLink>
             </Tooltip>
           ) : null}
-          {isAdmin || isModerator ? (
+          {auth.status === "registered" && (auth.isAdmin || auth.isModerator) ? (
             <Tooltip content="Moderator" side="bottom">
-              <Link
+              <AppChromeIconLink
                 href="/moderator"
                 prefetch={false}
                 aria-label="Moderator"
-                className={circularIconButtonClassName()}
+                className="hidden sm:inline-flex"
               >
                 <ClipboardList size={17} aria-hidden="true" />
-              </Link>
+              </AppChromeIconLink>
             </Tooltip>
           ) : null}
         </div>
 
-        {viewer ? (
-          <Link
-            href={`/players/${encodeURIComponent(viewer.displayName || viewer.userId)}`}
-            className="group flex min-w-0 cursor-pointer items-center justify-self-end gap-2.5 sm:gap-3"
-          >
-            <div className="hidden min-w-0 max-w-[7.5rem] flex-col items-end justify-center sm:flex sm:max-w-none">
-              <PlayerNameWithBadge
-                name={viewer.displayName || "Player"}
-                isAdmin={isAdmin}
-                selectedBadge={null}
-                nameClassName="text-[12px] font-bold leading-tight text-white transition-colors group-hover:text-emerald-100 sm:text-[15px]"
+        {!navigationHidden ? (
+          <AppNavigation
+            activeRoute={activeNavRoute}
+            onlinePlayers={onlinePlayers}
+            tasks={tasks}
+          />
+        ) : null}
+
+        {auth.status === "bootstrapping" ? (
+          <div aria-hidden="true" className="h-9 w-20 justify-self-end" />
+        ) : auth.status === "registered" ? (
+          <div className="flex items-center gap-2.5">
+            <NotificationCenter />
+            <Tooltip content="Settings" side="bottom">
+              <AppChromeIconButton
+                aria-label="Open settings"
+                onClick={() => hotkeys?.setSettingsOpen(true)}
+              >
+                <Settings size={18} aria-hidden="true" />
+              </AppChromeIconButton>
+            </Tooltip>
+            <Link
+              href={`/players/${encodeURIComponent(auth.displayName || auth.userId)}`}
+              className="group flex min-w-0 cursor-pointer items-center justify-self-end gap-2.5 sm:gap-3"
+            >
+              <div className="hidden min-w-0 max-w-[7.5rem] flex-col items-end justify-center sm:flex sm:max-w-none">
+                <PlayerNameWithBadge
+                  name={auth.displayName || "Player"}
+                  isAdmin={auth.isAdmin}
+                  selectedBadge={null}
+                  nameClassName="text-body-sm font-strong leading-heading text-content-primary transition-colors group-hover:text-content-primary"
+                />
+                {typeof auth.mmr === "number" ? (
+                  <div className="mt-0.5 flex items-center">
+                    <MmrDisplay
+                      value={auth.mmr}
+                      size="sm"
+                      className="bg-transparent p-0 shadow-none"
+                    />
+                    <PlayerBadge
+                      badge={auth.selectedBadge || null}
+                      size="sm"
+                      className="ml-1 hidden sm:inline-flex"
+                    />
+                  </div>
+                ) : null}
+              </div>
+              <PlayerBadge
+                badge={auth.selectedBadge || null}
+                size="sm"
+                className="sm:hidden"
               />
-              {typeof viewer.mmr === "number" ? (
-                <div className="mt-0.5 flex items-center">
-                  <MmrDisplay
-                    value={viewer.mmr}
-                    size="sm"
-                    className="bg-transparent p-0 shadow-none"
-                  />
-                  <PlayerBadge
-                    badge={viewer.selectedBadge}
-                    size="sm"
-                    className="ml-1"
-                  />
-                </div>
-              ) : null}
-            </div>
-            <AvatarBadge
-              avatarUrl={viewer.avatarUrl}
-              fallback={viewer.avatarFallback}
-              alt={viewer.displayName || "Player"}
-              size="sm"
-              className="h-9 w-9 border-[1.5px] border-white/20 bg-[#162130] transition-colors group-hover:border-white/40 sm:h-[42px] sm:w-[42px]"
-            />
-          </Link>
+              <AvatarBadge
+                avatarUrl={auth.avatarUrl}
+                fallback={(auth.displayName || "P").slice(0, 1).toUpperCase()}
+                alt={auth.displayName || "Player"}
+                size="sm"
+                className="h-9 w-9 border-border-strong bg-surface-raised transition-colors group-hover:border-content-primary/40 sm:h-[42px] sm:w-[42px]"
+              />
+            </Link>
+          </div>
         ) : (
           <div className="pointer-events-auto justify-self-end">
-            {signedOutAction}
+            <Button type="button" variant="secondary" size="sm" onClick={authActions.openSignIn}>
+              Sign In
+            </Button>
           </div>
         )}
       </div>
@@ -266,19 +207,19 @@ function AppShellHeader({
 
 function AppNavigation({
   activeRoute,
-  disabled,
   onlinePlayers,
+  tasks,
 }: {
   activeRoute: AppNavRoute | null;
-  disabled: boolean;
   onlinePlayers?: number;
+  tasks: AppNavTask[];
 }) {
   const reduceMotion = useReducedMotion();
-  const [visualRoute, setVisualRoute] = useState<AppNavRoute | null>(() => {
-    if (activeRoute === null || typeof window === "undefined") return activeRoute;
-    const stored = window.sessionStorage.getItem(appNavRouteStorageKey) || "";
-    return isAppNavRoute(stored) ? stored : activeRoute;
-  });
+  const hasTasks = tasks.length > 0;
+  // The first client render must match SSR. Reading sessionStorage here made the
+  // previously visited route active during hydration, moving the selection
+  // span into a different link than the server rendered.
+  const [visualRoute, setVisualRoute] = useState<AppNavRoute | null>(activeRoute);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -301,33 +242,44 @@ function AppNavigation({
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-30 mx-auto flex max-w-[430px] items-stretch justify-center gap-2 md:inset-x-0 md:bottom-auto md:top-5 md:grid md:max-w-none md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3"
+      className={cn(
+        "app-shell-navigation pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-game-controls mx-auto flex max-w-2xl items-stretch justify-center gap-2 md:inset-x-0 md:bottom-auto md:top-5 md:max-w-none md:items-center md:gap-3",
+        !hasTasks && "md:grid md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]",
+      )}
     >
-      <nav
+      <AppNavigationSurface
         aria-label="Primary navigation"
-        className="glass-panel pointer-events-auto grid min-w-0 flex-1 grid-cols-4 rounded-[20px] p-1.5 md:col-start-2 md:max-w-[520px] md:flex-none md:gap-1.5 md:rounded-full md:p-2"
+        className={cn(
+          "pointer-events-auto grid min-w-0 flex-1 grid-cols-4 rounded-xl p-1.5 md:max-w-[520px] md:flex-none md:gap-1.5 md:p-2",
+          !hasTasks && "md:col-start-2",
+        )}
       >
         {APP_NAV_ITEMS.map((item) => (
           <AppNavLink
             key={item.route}
             item={item}
             active={item.route === visualRoute}
-            disabled={disabled}
             reduceMotion={!!reduceMotion}
+            compact={hasTasks}
             onNavigate={rememberCurrentRoute}
           />
         ))}
-      </nav>
-      {typeof onlinePlayers === "number" ? (
-        <div
+      </AppNavigationSurface>
+      {hasTasks ? (
+        <div className="min-w-0">
+          <AppNavTasks tasks={tasks} />
+        </div>
+      ) : typeof onlinePlayers === "number" ? (
+        <AppNavigationSurface
+          as="div"
           aria-label={`${onlinePlayers} players online`}
-          className="glass-panel pointer-events-auto flex w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-[20px] text-[11px] font-semibold text-[#2ad18f] md:col-start-3 md:min-h-[52px] md:w-auto md:justify-self-start md:flex-row md:justify-start md:gap-3 md:rounded-full md:px-5 md:text-xs"
+          className="pointer-events-auto flex w-14 shrink-0 flex-col items-center justify-center gap-1 text-label font-semibold text-status-success md:col-start-3 md:min-h-[52px] md:w-auto md:justify-self-start md:flex-row md:justify-start md:gap-3 md:rounded-full md:px-5 md:text-body-sm"
         >
           <span className="status-dot-wrap relative flex h-4 w-4 shrink-0 items-center justify-center">
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accentPrimary" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-status-success" />
           </span>
           <span>{onlinePlayers.toLocaleString()}</span>
-        </div>
+        </AppNavigationSurface>
       ) : null}
     </div>
   );
@@ -335,13 +287,13 @@ function AppNavigation({
 
 function AppNavLink({
   active,
-  disabled,
+  compact,
   item,
   onNavigate,
   reduceMotion,
 }: {
   active: boolean;
-  disabled: boolean;
+  compact: boolean;
   item: (typeof APP_NAV_ITEMS)[number];
   onNavigate: () => void;
   reduceMotion: boolean;
@@ -352,7 +304,7 @@ function AppNavLink({
       {active ? (
         <motion.span
           layoutId="app-nav-selection"
-          className="absolute inset-0 rounded-[14px] border border-white/15 bg-white/[0.12]"
+          className="absolute inset-0 rounded-lg border border-border-strong bg-surface-fill"
           transition={
             reduceMotion
               ? { duration: 0 }
@@ -366,22 +318,21 @@ function AppNavLink({
         className="relative shrink-0"
         aria-hidden="true"
       />
-      <span className="relative">{item.label}</span>
+      <motion.span
+        className="relative overflow-hidden whitespace-nowrap"
+        animate={{ width: compact ? 0 : "auto", opacity: compact ? 0 : 1 }}
+        transition={{ duration: reduceMotion ? 0 : 0.18 }}
+        aria-hidden={compact || undefined}
+      >
+        {item.label}
+      </motion.span>
     </>
   );
   const className = cn(
-    "relative flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[14px] text-[10px] font-extrabold transition-colors md:min-h-9 md:flex-row md:gap-2.5 md:px-4 md:text-[13px]",
-    active ? "text-white" : "text-[#8fa7af] hover:text-white",
-    disabled && "cursor-not-allowed opacity-45",
+    "relative flex min-h-[52px] items-center justify-center rounded-lg text-label font-strong transition-colors md:min-h-9 md:flex-row md:text-body-sm",
+    compact ? "gap-0 px-2 md:px-3" : "flex-col gap-1 md:flex-row md:gap-2.5 md:px-4",
+    active ? "text-content-primary" : "text-content-secondary hover:text-content-primary",
   );
-
-  if (disabled) {
-    return (
-      <span className={className} aria-disabled="true">
-        {content}
-      </span>
-    );
-  }
 
   return (
     <motion.div
@@ -392,6 +343,7 @@ function AppNavLink({
         href={item.href}
         onClick={onNavigate}
         className={className}
+        aria-label={item.label}
         aria-current={active ? "page" : undefined}
       >
         {content}

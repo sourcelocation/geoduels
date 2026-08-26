@@ -6,7 +6,7 @@ import { PlayerProfilePage } from "./PlayerProfilePage";
 
 const hookMocks = vi.hoisted(() => ({
   usePlayerProfile: vi.fn(),
-  useOptionalViewer: vi.fn(),
+  useAuthState: vi.fn(),
   useProfileOwnerActions: vi.fn(),
   router: {
     isReady: true,
@@ -18,26 +18,37 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../hooks/use-player-profile", () => hookMocks);
+vi.mock("../../auth/components/AuthProvider", () => ({
+  useAuthState: hookMocks.useAuthState,
+  useAuthActions: () => ({ openSignIn: vi.fn() }),
+}));
+vi.mock("../../notifications/components/NotificationCenter", () => ({
+  NotificationCenter: () => null,
+}));
+vi.mock("../../social/components/ProfileSocialActions", () => ({
+  ProfileSocialActions: () => null,
+}));
 vi.mock("../hooks/use-profile-mutations", () => ({
   useProfileOwnerActions: hookMocks.useProfileOwnerActions,
 }));
 vi.mock("next/router", () => ({
   useRouter: () => hookMocks.router,
 }));
-vi.mock("./AccountSettingsModal", () => ({
-  AccountSettingsModal: () => <div role="dialog" aria-label="Account settings" />,
-}));
-
 const profile: PublicPlayerProfile = {
   userId: "player-1",
   displayName: "Atlas",
   avatarUrl: "/atlas.png",
   mmr: 1432,
+  leaderboardRank: 42,
+  leaderboardTotal: 1200,
   seasonId: "s3",
   gamesPlayed: 20,
   wins: 12,
   rankedGamesPlayed: 14,
   rankedWins: 8,
+  bestWinStreak: 5,
+  perfectGuesses: 23,
+  flawlessWins: 4,
   selectedBadge: {
     id: "badge-1",
     kind: "achievement",
@@ -109,15 +120,24 @@ function arrange({
       fetchNextPage,
     },
   });
-  hookMocks.useOptionalViewer.mockReturnValue({
-    data: {
-      userId: viewerId,
-      accessToken: "token",
-      isGuest: false,
-      displayName: viewerId === "player-1" ? "Atlas" : "Viewer",
-      mmr: 1432,
-      selectedBadge: profile.selectedBadge,
-    },
+  hookMocks.useAuthState.mockReturnValue({
+    status: "registered",
+    userId: viewerId,
+    accessToken: "token",
+    isGuest: false,
+    isRegistered: true,
+    isAdmin: false,
+    isModerator: false,
+    email: "viewer@example.com",
+    avatarUrl: "",
+    canPlayUnranked: true,
+    canPlayRanked: true,
+    canUseSocial: true,
+    canManageMaps: true,
+    session: { accessToken: "token", user: { id: viewerId } },
+    displayName: viewerId === "player-1" ? "Atlas" : "Viewer",
+    mmr: 1432,
+    selectedBadge: profile.selectedBadge,
   });
   hookMocks.useProfileOwnerActions.mockReturnValue({
     nicknameMutation: {
@@ -156,21 +176,23 @@ afterEach(() => {
 });
 
 describe("PlayerProfilePage", () => {
-  it("renders compact stats, badges, match details, and owner settings", async () => {
+  it("renders compact stats, badges, and match details without separate account settings", async () => {
     const { fetchNextPage } = arrange();
 
     expect(screen.getByRole("heading", { name: "Atlas" })).toBeInTheDocument();
     expect(screen.getAllByLabelText("1432 MMR")).toHaveLength(2);
-    expect(screen.getByText("Duels played")).toBeInTheDocument();
     expect(screen.getByText("Duel wins")).toBeInTheDocument();
-    expect(screen.getByText("Duel win rate")).toBeInTheDocument();
-    expect(screen.getByText("Ranked duels")).toBeInTheDocument();
-    expect(screen.getByText("20")).toBeInTheDocument();
+    expect(screen.getByText("Ranked win rate")).toBeInTheDocument();
+    expect(screen.getByText("Best win streak")).toBeInTheDocument();
+    expect(screen.getByText("Perfect guesses")).toBeInTheDocument();
+    expect(screen.getByText("Flawless wins")).toBeInTheDocument();
+    expect(screen.getByText("#42")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
-    expect(screen.getByText("60%")).toBeInTheDocument();
-    expect(screen.getByText("14")).toBeInTheDocument();
-    expect(screen.getByText("8")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Account settings" })).toBeInTheDocument();
+    expect(screen.getByText("57%")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("23")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Account settings" })).not.toBeInTheDocument();
 
     const badge = screen
       .getAllByLabelText("World Walker - Visited every continent.")
@@ -281,13 +303,11 @@ describe("PlayerProfilePage", () => {
     );
   });
 
-  it("opens confidential settings from the owner profile query flag", () => {
+  it("does not open a separate account modal from the legacy profile query flag", () => {
     hookMocks.router.query = { id: "player-1", settings: "account" };
     arrange();
 
-    expect(
-      screen.getByRole("dialog", { name: "Account settings" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Account settings" })).not.toBeInTheDocument();
   });
 
   it("renders the profile loading state inside the shared shell", () => {
@@ -295,7 +315,7 @@ describe("PlayerProfilePage", () => {
       profileQuery: { data: undefined, isLoading: true, isError: false },
       matchesQuery: { data: undefined },
     });
-    hookMocks.useOptionalViewer.mockReturnValue({ data: null });
+    hookMocks.useAuthState.mockReturnValue({ status: "anonymous", userId: "", accessToken: "", isGuest: false, isRegistered: false, isAdmin: false, isModerator: false, email: "", avatarUrl: "", displayName: "", canPlayUnranked: false, canPlayRanked: false, canUseSocial: false, canManageMaps: false, session: null });
 
     const { container } = render(
       <TooltipProvider>
@@ -303,7 +323,7 @@ describe("PlayerProfilePage", () => {
       </TooltipProvider>,
     );
 
-    expect(container.querySelector(".animate-pulse")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading player profile" })).toBeInTheDocument();
     expect(screen.getAllByRole("navigation", { name: "Primary navigation" })).toHaveLength(1);
   });
 
@@ -312,7 +332,7 @@ describe("PlayerProfilePage", () => {
       profileQuery: { data: undefined, isLoading: false, isError: true },
       matchesQuery: { data: undefined },
     });
-    hookMocks.useOptionalViewer.mockReturnValue({ data: null });
+    hookMocks.useAuthState.mockReturnValue({ status: "anonymous", userId: "", accessToken: "", isGuest: false, isRegistered: false, isAdmin: false, isModerator: false, email: "", avatarUrl: "", displayName: "", canPlayUnranked: false, canPlayRanked: false, canUseSocial: false, canManageMaps: false, session: null });
 
     render(
       <TooltipProvider>

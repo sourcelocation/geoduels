@@ -1,8 +1,9 @@
 import type {
   RoundResultOverlayProps,
   Snapshot,
-} from "../../../components/ui/types";
+} from "../../game/model/types";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
+import { getMatchReturnDestination } from "../../matchmaking/lib/match-return";
 import { getTeamPresentation } from "../../../lib/team-presentation";
 import { deriveUIPhase } from "../../../lib/uiPhase";
 import type { SessionState } from "../../auth/controllers/session-controller";
@@ -11,6 +12,7 @@ import {
   deriveMatchSides,
   withRoundSideResults,
 } from "../../game/model/match-sides";
+import { deriveDuelRatingDeltas } from "../../game/model/match-rating";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 import type { MatchState } from "../../matchmaking/controllers/match-controller";
 import type { HomeViewModel } from "./types";
@@ -164,8 +166,11 @@ export function deriveHomeModel({
       : Math.round((auth.wins / auth.gamesPlayed) * 100);
   const currentRoundNumber =
     snapshot?.currentRound?.roundNumber || roundResult?.roundNumber || 1;
+  const multiplierMode =
+    snapshot?.config?.multiplierMode === "individual" ? "individual" : "shared";
   const damageMultiplier =
-    currentRoundNumber <= 2 ? 1 : 1 + 0.5 * (currentRoundNumber - 2);
+    roundResult?.damageMultiplier ??
+    (currentRoundNumber <= 2 ? 1 : 1 + 0.5 * (currentRoundNumber - 2));
   const isRoundTimerRunning =
     isSingleplayer ||
     !!(
@@ -193,6 +198,8 @@ export function deriveHomeModel({
   const resultMode = uiPhase === "round_result" || uiPhase === "match_end";
   const selfPlayer = snapshot?.players?.[selfId];
   const oppPlayer = oppId ? snapshot?.players?.[oppId] : undefined;
+  const selfDamageMultiplier = selfPlayer?.damageMultiplier || 1;
+  const oppDamageMultiplier = oppPlayer?.damageMultiplier || 1;
   const matchConfig = snapshot?.config || {};
   const ruleset =
     matchConfig.ruleset === "nmpz" || matchConfig.ruleset === "no_move"
@@ -304,36 +311,12 @@ export function deriveHomeModel({
   const matchOutcome: "win" | "lose" | "draw" =
     selfHP === oppHP ? "draw" : selfHP > oppHP ? "win" : "lose";
   const isRankedDuel = mode === "duel" && !snapshot?.unranked;
-  const selfRatingPreview =
-    isRankedDuel && selfId ? snapshot?.ratingPreview?.[selfId] : undefined;
-  const opponentRatingPreview =
-    isRankedDuel && oppId ? snapshot?.ratingPreview?.[oppId] : undefined;
-  const selfIsGuest = selfPlayer?.isGuest ?? auth.isGuest;
-  const oppIsGuest = oppPlayer?.isGuest ?? false;
-  const selfReceivesEloDelta =
-    isRankedDuel &&
-    snapshot?.state === "ended" &&
-    !!selfPlayer &&
-    !!oppPlayer &&
-    !selfIsGuest;
-  const opponentReceivesEloDelta =
-    isRankedDuel &&
-    snapshot?.state === "ended" &&
-    !!selfPlayer &&
-    !!oppPlayer &&
-    !oppIsGuest;
-  const selfEloDelta =
-    matchOutcome === "win"
-      ? selfRatingPreview?.win
-      : matchOutcome === "lose"
-        ? selfRatingPreview?.lose
-        : selfRatingPreview?.draw;
-  const opponentEloDelta =
-    matchOutcome === "win"
-      ? opponentRatingPreview?.lose
-      : matchOutcome === "lose"
-        ? opponentRatingPreview?.win
-        : opponentRatingPreview?.draw;
+  const { selfRatingDelta, opponentRatingDelta } = deriveDuelRatingDeltas({
+    snapshot,
+    selfUserId: selfId,
+    opponentUserId: oppId,
+    outcome: matchOutcome,
+  });
 
   const derivedSides = deriveMatchSides({
     snapshot,
@@ -349,12 +332,14 @@ export function deriveHomeModel({
       rating: selfElo,
     },
     competitive: {
-      selfRatingDelta: selfReceivesEloDelta ? selfEloDelta : undefined,
-      opponentRatingDelta: opponentReceivesEloDelta
-        ? opponentEloDelta
+      selfRatingDelta,
+      opponentRatingDelta,
+      selfRatingPreview: isRankedDuel
+        ? snapshot?.ratingPreview?.[selfId]
         : undefined,
-      selfRatingPreview,
-      opponentRatingPreview,
+      opponentRatingPreview: isRankedDuel
+        ? snapshot?.ratingPreview?.[oppId]
+        : undefined,
     },
   });
   const participantsById = derivedSides.playersById;
@@ -403,10 +388,6 @@ export function deriveHomeModel({
       nicknameSaving: auth.nicknameSaving,
       authLoading: auth.authLoading,
       authError: auth.authError,
-      googleSignInEnabled: auth.googleSignInEnabled,
-      googleClientId: auth.googleClientId,
-      discordSignInEnabled: auth.discordSignInEnabled,
-      discordClientId: auth.discordClientId,
       isAdmin: auth.isAdmin,
       isModerator: auth.isModerator,
       isGuest: auth.isGuest,
@@ -422,6 +403,7 @@ export function deriveHomeModel({
       status: match.matchmaking.status,
       queueStartedAt: match.matchmaking.queueStartedAt,
       queueError: match.queueError,
+      singleplayerError: match.singleplayerError,
       onlinePlayers: match.onlinePlayers,
       canStartSingleplayer: !inGame && match.matchmaking.status !== "queueing",
       maintenance,
@@ -434,7 +416,6 @@ export function deriveHomeModel({
         status: "idle",
         snapshot: null,
         inviteCode: "",
-        isMember: false,
         isOwner: false,
         busy: false,
         error: "",
@@ -473,11 +454,16 @@ export function deriveHomeModel({
       canFinalizeGuess,
       canAdvanceRound,
       guess: game.guess,
+      teammateGuesses: snapshot?.team?.guesses || {},
+      teamPings: match.teamPings,
       currentRoundId: snapshot?.currentRound?.roundId || "",
       currentRoundNumber,
       totalRounds: isSingleplayer || isFreeForAll ? SINGLEPLAYER_TOTAL_ROUNDS : undefined,
       userAvatar: auth.userAvatar,
       damageMultiplier,
+      multiplierMode,
+      selfDamageMultiplier,
+      oppDamageMultiplier,
       guessSubmitted: game.guessSubmitted,
       opponentGuessAlert: isPointsMode ? false : game.opponentGuessAlert,
       connectionIssue: match.connectionIssue,
@@ -493,9 +479,7 @@ export function deriveHomeModel({
             ? "No Move"
             : "Moving",
       mapName: match.snapshot?.config?.mapName || (ruleset === "nmpz" ? "A Location World" : "A Source World"),
-      backLabel: match.sourcePartyInviteCode
-        ? "Back to party"
-        : "Back to lobby",
+      backLabel: getMatchReturnDestination(match.returnTarget).label,
       streetViewInteractive: ruleset !== "nmpz",
       ruleset,
       streetNames,
@@ -506,6 +490,7 @@ export function deriveHomeModel({
       messages: [],
       selfUserId: selfId,
       error: "",
+      teamId: "",
     },
     overlays: {
       nicknameRequiredOpen: auth.nicknameRequired && !!auth.userId,
@@ -536,15 +521,14 @@ export function deriveHomeModel({
               resultPlayerBorderColors,
               participantsById,
               matchConfig: snapshot?.config,
-              backLabel: match.sourcePartyInviteCode
-                ? "Back to party"
-                : "Back to lobby",
+              backLabel: getMatchReturnDestination(match.returnTarget).label,
             }
           : { open: false },
     },
     meta: {
       activeMatchId,
       sourcePartyInviteCode: match.sourcePartyInviteCode,
+      returnTarget: match.returnTarget,
       appVersion: config.appVersion,
       maxHP: config.maxHP,
     },

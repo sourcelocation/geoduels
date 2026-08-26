@@ -1,7 +1,8 @@
 import type React from "react";
-import { Play, ShieldCheck, Trash2, Trophy } from "lucide-react";
+import { Crosshair, MousePointer2, Move, ShieldCheck, Trash2 } from "lucide-react";
 import type { CustomMap, GameplayMapRole } from "../../../maps/lib/maps-client";
-import { LobbyActionButton, LobbyPanel } from "../lobby-primitives";
+import { Button } from "../../../../components/ui/button";
+import { SectionCard } from "../../../../components/ui/compositions";
 
 export function MapAdminOperations({
   map,
@@ -21,26 +22,25 @@ export function MapAdminOperations({
     active?: boolean;
     icon: React.ReactNode;
   }> = [
-    { role: "ranked_moving", label: "Ranked Moving", active: map.rankedMoving, icon: <Trophy size={16} /> },
-    { role: "ranked_nmpz", label: "Ranked NMPZ", active: map.rankedNmpz, icon: <Trophy size={16} /> },
-    { role: "singleplayer_moving", label: "Default Moving", active: map.defaultMoving, icon: <Play size={16} fill="currentColor" /> },
-    { role: "singleplayer_nmpz", label: "Default NMPZ", active: map.defaultNmpz, icon: <Play size={16} fill="currentColor" /> },
+    { role: "moving", label: "Moving", active: map.modeMoving, icon: <Move size={16} /> },
+    { role: "no_move", label: "No Move", active: map.modeNoMove, icon: <MousePointer2 size={16} /> },
+    { role: "nmpz", label: "NMPZ", active: map.modeNmpz, icon: <Crosshair size={16} /> },
   ];
 
   return (
-    <LobbyPanel variant="subtle" className="p-4 sm:p-5">
+    <SectionCard className="rounded-2xl p-4 sm:p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h3 className="flex items-center gap-2 text-lg font-extrabold tracking-tight text-white">
-            <ShieldCheck className="text-accentPrimary" size={19} />
+          <h3 className="flex items-center gap-2 text-heading-sm font-strong tracking-heading text-content-primary">
+            <ShieldCheck className="text-action-primary" size={19} />
             Admin Map Operations
           </h3>
-          <p className="mt-1 text-sm font-medium text-inkMuted">
-            Promote this ready map or assign it to ranked and default queues.
+          <p className="mt-1 text-body-sm font-medium text-content-secondary">
+            Promote this ready map or assign it as the site map for a game mode.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <LobbyActionButton
+          <Button
             type="button"
             variant={map.official ? "secondary" : "primary"}
             size="sm"
@@ -49,9 +49,9 @@ export function MapAdminOperations({
           >
             <ShieldCheck size={15} />
             {map.official ? "Remove Official" : "Mark Official"}
-          </LobbyActionButton>
+          </Button>
           {roles.map((item) => (
-            <LobbyActionButton
+            <Button
               key={item.role}
               type="button"
               variant={item.active ? "secondary" : "ghost"}
@@ -61,15 +61,15 @@ export function MapAdminOperations({
             >
               {item.icon}
               {item.active ? `${item.label} Active` : item.label}
-            </LobbyActionButton>
+            </Button>
           ))}
-          <LobbyActionButton type="button" variant="danger" size="sm" onClick={() => onDeleteMap(map)}>
+          <Button type="button" variant="danger" size="sm" onClick={() => onDeleteMap(map)}>
             <Trash2 size={15} />
             Delete Map
-          </LobbyActionButton>
+          </Button>
         </div>
       </div>
-      {!ready ? <p className="mt-3 text-xs font-semibold text-amber-200">Map must be ready before it can be promoted.</p> : null}
-    </LobbyPanel>
+      {!ready ? <p className="mt-3 text-body-sm font-semibold text-status-warning">Map must be ready before it can be promoted.</p> : null}
+    </SectionCard>
   );
 }

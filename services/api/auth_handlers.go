@@ -17,6 +17,9 @@ import (
 	"geoduels/pkg/persistence"
 )
 
+var errMissingRefreshToken = errors.New("missing refresh token")
+var errUnavailableRefreshSession = errors.New("session unavailable")
+
 func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
 	if payload, nextRefreshToken, err := a.rotateSessionFromCookie(r); err == nil {
 		a.setRefreshCookie(w, r, nextRefreshToken)
@@ -64,8 +67,12 @@ func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) session(w http.ResponseWriter, r *http.Request) {
 	if err := a.writeSessionFromCookie(w, r); err != nil {
+		if errors.Is(err, errMissingRefreshToken) || errors.Is(err, errUnavailableRefreshSession) {
+			http.Error(w, "missing session", http.StatusUnauthorized)
+			return
+		}
 		log.Printf("auth session bootstrap failed: %v", err)
-		w.WriteHeader(http.StatusNoContent)
+		http.Error(w, "session restoration failed", http.StatusInternalServerError)
 	}
 }
 
@@ -77,12 +84,7 @@ func (a *api) refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) updateNickname(w http.ResponseWriter, r *http.Request) {
-	claims, err := a.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	identity, err := a.store.GetIdentity(claims.Sub)
+	claims, identity, err := a.authenticatedAccount(r)
 	if err != nil {
 		http.Error(w, "identity not found", http.StatusUnauthorized)
 		return
@@ -211,6 +213,9 @@ func validatedNickname(raw string) (string, error) {
 }
 
 func (a *api) authenticatedClaims(r *http.Request) (auth.AppClaims, error) {
+	if principal, ok := r.Context().Value(requestPrincipalKey{}).(requestPrincipal); ok {
+		return principal.claims, nil
+	}
 	authz := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authz, "Bearer ") {
 		return auth.AppClaims{}, errors.New("missing bearer token")
@@ -220,9 +225,6 @@ func (a *api) authenticatedClaims(r *http.Request) (auth.AppClaims, error) {
 	if err != nil {
 		return auth.AppClaims{}, err
 	}
-	claims.Sub = a.resolveEntityID("user", claims.Sub)
-	claims.Subject = claims.Sub
-	claims.SessionID = a.resolveEntityID("session", claims.SessionID)
 	return claims, nil
 }
 
@@ -280,7 +282,7 @@ func (a *api) writeSessionFromCookie(w http.ResponseWriter, r *http.Request) err
 func (a *api) authSessionFromCookies(r *http.Request) (persistence.RefreshTokenRecord, error) {
 	refreshTokens := a.readRefreshCookies(r)
 	if len(refreshTokens) == 0 {
-		return persistence.RefreshTokenRecord{}, errors.New("missing refresh token")
+		return persistence.RefreshTokenRecord{}, errMissingRefreshToken
 	}
 	for _, refreshToken := range refreshTokens {
 		candidate, ok, err := a.store.GetAuthSessionByRefreshToken(auth.RefreshTokenHash(refreshToken))
@@ -292,7 +294,7 @@ func (a *api) authSessionFromCookies(r *http.Request) (persistence.RefreshTokenR
 		}
 		return candidate, nil
 	}
-	return persistence.RefreshTokenRecord{}, errors.New("session unavailable")
+	return persistence.RefreshTokenRecord{}, errUnavailableRefreshSession
 }
 
 func (a *api) rotateSessionFromCookie(r *http.Request) (contracts.AuthSessionPayload, string, error) {

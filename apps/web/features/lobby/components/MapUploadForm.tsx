@@ -1,12 +1,12 @@
-import { Loader2, Upload } from "lucide-react";
+import { Upload } from "lucide-react";
+import { Spinner } from "../../../components/ui/Spinner";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import type { MapUploadQuota, MapVisibility } from "../../maps/lib/maps-client";
 import { MapMetadataFields } from "./MapMetadataFields";
 import { MapUploadLimitsModal } from "./MapUploadLimitsModal";
 import type { ThumbnailCategory } from "./MapThumbnailPickerModal";
-import {
-  LobbyActionButton,
-} from "./lobby-primitives";
+import { Button } from "../../../components/ui/button";
+import { FileInputTrigger } from "../../../components/ui/FileInputTrigger";
 
 type MapDifficulty = "easy" | "normal" | "hard";
 
@@ -92,23 +92,27 @@ export function MapUploadForm({
         />
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#6b8b80]">Upload JSON</p>
-            <label className="flex min-h-20 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-white/20 bg-black/20 px-4 text-center text-sm font-semibold text-[#a9bfd4] hover:border-[#2ad18f]/50">
-              <Upload className="mb-2 text-[#2ad18f]" size={22} />
+            <p className="text-label font-strong text-content-secondary">Upload JSON</p>
+            <FileInputTrigger
+              accept=".json,application/json"
+              disabled={isGuest}
+              onChange={(event) => { setMapFile(event.target.files?.[0] || null); setMapUploadError(""); }}
+              className="flex min-h-20 flex-col items-center justify-center rounded-lg border border-dashed border-border-strong bg-surface-grouped px-4 text-center text-body-sm font-semibold text-content-secondary hover:border-status-success/50 hover:bg-surface-fill"
+            >
+              <Upload className="mb-2 text-status-success" size={22} />
               {mapFile ? mapFile.name : "Choose JSON file"}
-              <input type="file" accept=".json,application/json" className="hidden" disabled={isGuest} onChange={(event) => { setMapFile(event.target.files?.[0] || null); setMapUploadError(""); }} />
-            </label>
+            </FileInputTrigger>
           </div>
 
-          {mapUploadError ? <p className="text-xs font-semibold text-red-300">{mapUploadError}</p> : null}
-          <LobbyActionButton type="button" disabled={uploadDisabled} onClick={onUpload} className="h-11 rounded-xl">
-            {uploadPending ? <Loader2 className="mr-2 animate-spin" size={17} /> : <Upload className="mr-2" size={17} />}
+          {mapUploadError ? <p className="text-body-sm font-semibold text-status-danger">{mapUploadError}</p> : null}
+          <Button type="button" variant="primary" disabled={uploadDisabled} onClick={onUpload} className="h-11 rounded-xl">
+            {uploadPending ? <Spinner size="sm" label="Uploading map" color="current" className="mr-2" /> : <Upload className="mr-2" size={17} />}
             Upload
-          </LobbyActionButton>
+          </Button>
           {!isGuest ? (
-            <button type="button" onClick={() => setLimitsOpen(true)} className={`text-xs font-bold transition hover:text-white ${blockedReason ? "text-amber-200" : "text-[#6f8998]"}`}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setLimitsOpen(true)} className={blockedReason ? "text-status-warning" : undefined}>
             {blockedReason ? "Why?" : "Limits & tiers"}
-          </button>
+            </Button>
         ) : null}
         </div>
       </div>

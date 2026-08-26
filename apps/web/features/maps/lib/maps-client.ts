@@ -28,10 +28,9 @@ export type CustomMap = {
   trendingScore: number;
   favorited?: boolean;
   officialRegion?: string;
-  rankedMoving?: boolean;
-  rankedNmpz?: boolean;
-  defaultMoving?: boolean;
-  defaultNmpz?: boolean;
+  modeMoving?: boolean;
+  modeNoMove?: boolean;
+  modeNmpz?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -152,7 +151,7 @@ export async function setMapOfficial(config: RuntimeConfig, accessToken: string,
   return expectJSON(await apiFetch(config, `/v1/maps/${encodeURIComponent(mapId)}/official`, { method: official ? "POST" : "DELETE", headers: headers(accessToken) }), "Map request failed");
 }
 
-export type GameplayMapRole = "ranked_moving" | "ranked_nmpz" | "singleplayer_moving" | "singleplayer_nmpz";
+export type GameplayMapRole = "moving" | "no_move" | "nmpz";
 
 export async function setGameplayMapRole(config: RuntimeConfig, accessToken: string, mapId: string, role: GameplayMapRole): Promise<CustomMap> {
   return expectJSON(await apiFetch(config, `/v1/maps/${encodeURIComponent(mapId)}/roles/${encodeURIComponent(role)}`, { method: "POST", headers: headers(accessToken) }), "Map request failed");

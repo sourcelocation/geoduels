@@ -1,4 +1,4 @@
-import type { ChatEmote, ChatMessage } from "../../../components/ui/types";
+import type { ChatAudience, ChatEmote, ChatMessage } from "../model/types";
 import type { SfxController } from "../../../lib/audio/sfx";
 import { ObservableStore } from "../../../lib/observable-store";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
@@ -128,15 +128,15 @@ export class ChatController extends ObservableStore<ChatRuntimeState> {
     this.connection = connection;
   };
 
-  sendMessage = (body: string) => {
+  sendMessage = (body: string, audience: ChatAudience = "all") => {
     const trimmed = body.trim();
     if (!trimmed || !this.state.conversationId) return false;
-    return this.connection?.sendMessage(trimmed) || false;
+    return this.connection?.sendMessage(trimmed, audience) || false;
   };
 
-  sendEmote = (emote: ChatEmote) => {
+  sendEmote = (emote: ChatEmote, audience: ChatAudience = "all") => {
     if (!this.state.conversationId) return false;
-    return this.connection?.sendEmote(emote) || false;
+    return this.connection?.sendEmote(emote, audience) || false;
   };
 
   private storeMessages(conversationId: string, messages: ChatMessage[]) {

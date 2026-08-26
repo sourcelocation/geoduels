@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -110,6 +111,55 @@ func upsertUserNotification(ctx context.Context, tx pgx.Tx, userID, notification
 	`, userID, notificationType, dedupeKey, string(body)).Scan(id)
 }
 
+func notifyAccountEnforcement(ctx context.Context, tx pgx.Tx, userID, action, reason string, moderationLogID int64, endsAt any) error {
+	notificationType := "account_banned"
+	if action == "unban" {
+		notificationType = "account_unbanned"
+	}
+	var notificationID int64
+	return upsertUserNotification(ctx, tx, userID, notificationType, fmt.Sprintf("%s:%d", notificationType, moderationLogID), map[string]any{
+		"reason":          strings.TrimSpace(reason),
+		"action":          action,
+		"moderationLogId": moderationLogID,
+		"endsAt":          endsAt,
+	}, &notificationID)
+}
+
+func notifyReportersOfBan(ctx context.Context, tx pgx.Tx, subjectUserID, action string, logID int64) error {
+	rows, err := tx.Query(ctx, `
+		select distinct s.reporter_user_id::text
+		from moderation_signals s
+		where s.subject_user_id = $1 and s.reporter_user_id is not null
+	`, subjectUserID)
+	if err != nil {
+		return err
+	}
+	var reporterIDs []string
+	for rows.Next() {
+		var reporterID string
+		if err := rows.Scan(&reporterID); err != nil {
+			rows.Close()
+			return err
+		}
+		reporterIDs = append(reporterIDs, reporterID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, reporterID := range reporterIDs {
+		var notificationID int64
+		if err := upsertUserNotification(ctx, tx, reporterID, "reported_player_banned", fmt.Sprintf("reported_player_banned:%d:%s", logID, reporterID), map[string]any{
+			"action":          action,
+			"moderationLogId": logID,
+		}, &notificationID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func mustJSON(value any) string {
 	body, err := json.Marshal(value)
 	if err != nil {
@@ -185,5 +235,50 @@ func (s *pgStore) MarkUserNotificationRead(userID string, notificationID int64) 
 		set read_at = coalesce(read_at, now())
 		where id = $1 and user_id = $2
 	`, notificationID, userID)
+	return err
+}
+
+func (s *pgStore) ListNotificationInbox(userID string, limit int, beforeID int64) ([]UserNotification, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, errors.New("userID required")
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		select id,type,category,payload_json::text,read_at,created_at
+		from user_notifications
+		where user_id=$1 and archived_at is null and ($3=0 or id<$3)
+		  and (expires_at is null or expires_at>now())
+		order by created_at desc,id desc limit $2
+	`, userID, limit, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserNotification{}
+	for rows.Next() {
+		var item UserNotification
+		var payload string
+		if err := rows.Scan(&item.ID, &item.Type, &item.Category, &payload, &item.ReadAt, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.Payload = json.RawMessage(payload)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *pgStore) MarkAllUserNotificationsRead(userID string) error {
+	_, err := s.pool.Exec(context.Background(), `
+		update user_notifications set read_at=coalesce(read_at,now())
+		where user_id=$1 and read_at is null and archived_at is null
+	`, userID)
 	return err
 }

@@ -1,6 +1,8 @@
 package persistence
 
 import (
+	"context"
+	"encoding/json"
 	"time"
 
 	"geoduels/pkg/contracts"
@@ -37,6 +39,11 @@ type ProfileRepository interface {
 	UpdateSelectedBadge(userID, badgeID string) (Profile, error)
 }
 
+type PreferenceRepository interface {
+	GetUserPreferences(userID string) (UserPreferences, error)
+	UpdateUserPreferences(userID string, schemaVersion int, preferences json.RawMessage, expectedRevision int64) (UserPreferences, error)
+}
+
 type BadgeRepository interface {
 	SyncLoginBadges(userID string) error
 	AwardDiscordServerMemberByDiscordID(discordUserID string) (bool, error)
@@ -64,22 +71,20 @@ type MatchRepository interface {
 
 type ModerationRepository interface {
 	CreatePlayerReportSignal(params CreatePlayerReportSignalParams) (ModerationSignalCreated, error)
-	ListReviewTasks(view, actorUserID string, limit int) ([]ModerationReviewTaskSummary, error)
-	GetIncidentDetail(incidentID int64) (ModerationIncidentDetail, error)
-	ClaimReviewTask(taskID int64, actorUserID string) (ModerationIncidentDetail, error)
-	ReleaseReviewTask(taskID int64, actorUserID string) (ModerationIncidentDetail, error)
-	SubmitVerdict(incidentID int64, actorUserID string, input ModerationVerdictInput) (ModerationIncidentDetail, error)
 	ListSubjectModerationProfile(userID string) (ModerationSubjectProfile, error)
 	ListModerationSignals(limit int) ([]ModerationSignalSummary, error)
-	SetPlayerBan(userID, reason string, banned bool) error
+	ListModerationLog(limit int) ([]ModerationAuditLogEntry, error)
+	SetPlayerBan(userID, reason, actorUserID string, banned bool) error
+	SetPlayerMute(userID, kind, reason, actorUserID string, until time.Time, muted bool) error
 	BanPlayerForCheating(userID, reason, actorUserID string) (CheatingBanSummary, error)
 	ClearReporterMute(userID string) error
 	IssueEloRefundsForCheater(userID string, lookback time.Duration) (EloRefundSummary, error)
-	ListEnforcementActions(limit int) ([]EnforcementActionSummary, error)
 	AddSignupIPBan(ipAddress, reason, createdBy string) error
 	RemoveSignupIPBan(ipAddress string) error
 	ListSignupIPBans(limit int) ([]SignupIPBan, error)
 	IsSignupIPBanned(ipAddress string) (bool, error)
+	PreviewCommunityPardon(olderThan time.Duration) (CommunityPardonSummary, error)
+	PardonBannedPlayers(olderThan time.Duration, actorUserID string) (CommunityPardonSummary, error)
 }
 
 type AdminRepository interface {
@@ -90,6 +95,8 @@ type AdminRepository interface {
 	ListUserRoles() ([]UserRoleGrant, error)
 	GrantUserRole(userID, role, grantedBy, reason string) error
 	RevokeUserRole(userID, role, revokedBy, reason string) error
+	ListAdminGrantableBadges() []AdminBadgeDefinition
+	GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.PlayerBadge, bool, error)
 }
 
 type MapCreatorAdminRepository interface {
@@ -130,11 +137,11 @@ type NotificationRepository interface {
 }
 
 type RuntimeRepository interface {
-	GetRuntimeMatch(matchID string) (RuntimeMatch, bool, error)
-	RecordRuntimeMatch(matchID, state string, ownerEpoch int64, terminal bool) error
-	UpsertMatchSession(params MatchSessionUpsert) error
-	MatchSessionSourceParty(matchID string) (string, string, bool, error)
-	ExpireStaleRuntimeMatches(prefix string, olderThan time.Duration) error
+	GetRuntimeMatch(ctx context.Context, matchID string) (RuntimeMatch, bool, error)
+	RecordRuntimeMatch(ctx context.Context, matchID, state string, ownerEpoch int64, terminal bool) error
+	UpsertMatchSession(ctx context.Context, params MatchSessionUpsert) error
+	MatchSessionSourceParty(ctx context.Context, matchID string) (string, string, bool, error)
+	ExpireStaleRuntimeMatches(ctx context.Context, prefix string, olderThan time.Duration) error
 }
 
 type StorageCleanupResult struct {
@@ -162,6 +169,9 @@ type StorageMaintenance interface {
 type ChatRepository interface {
 	RecordChatMessage(conversationID, scopeKind, scopeID string, message ChatMessage) error
 	ListChatMessages(conversationID string, limit int) ([]ChatMessage, error)
+	ListChatMessagesForUser(conversationID, userID string, limit int) ([]ChatMessage, error)
+	ActivePartyChatTeam(partyID, userID string) (matchID, teamID string, ok bool, err error)
+	ChatTeamForMatch(matchID, userID string) (teamID string, ok bool, err error)
 	GetActiveChatRestriction(userID string) (ChatRestriction, bool, error)
 }
 

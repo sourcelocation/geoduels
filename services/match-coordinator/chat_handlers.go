@@ -37,9 +37,8 @@ type chatClientCommand struct {
 }
 
 func (q *matchCoordinator) chatWS(w http.ResponseWriter, r *http.Request) {
-	claims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	claims, _, ok := q.requireActiveAccount(w, r)
+	if !ok {
 		return
 	}
 	scope, err := q.authorizeChatConversation(r.Context(), strings.TrimSpace(r.URL.Query().Get("conversationId")), claims.Sub)
@@ -67,7 +66,7 @@ func (q *matchCoordinator) chatWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	var writeMu sync.Mutex
-	if messages, err := q.persist.ListChatMessages(scope.ConversationID, 100); err == nil && len(messages) > 0 {
+	if messages, err := q.persist.ListChatMessagesForUser(scope.ConversationID, claims.Sub, 100); err == nil && len(messages) > 0 {
 		q.writeQueueMessage(conn, &writeMu, "chat.history", map[string]any{
 			"conversationId": scope.ConversationID,
 			"messages":       messages,
@@ -112,6 +111,18 @@ func (q *matchCoordinator) chatWS(w http.ResponseWriter, r *http.Request) {
 				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": err.Error()})
 				continue
 			}
+			if message.Audience == contracts.ChatAudienceTeam {
+				matchID, teamID, ok, teamErr := q.resolveChatTeam(scope, claims.Sub)
+				if teamErr != nil {
+					q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat unavailable"})
+					continue
+				}
+				if !ok {
+					q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "team chat is only available during a team duel"})
+					continue
+				}
+				message.MatchID, message.TeamID = matchID, teamID
+			}
 			if !q.allowChatSend(scope.ConversationID, claims.Sub, time.Now()) {
 				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat is moving too fast"})
 				continue
@@ -152,7 +163,9 @@ func (q *matchCoordinator) chatWS(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal([]byte(event.Payload), &message); err != nil {
 				continue
 			}
-			q.writeQueueMessage(conn, &writeMu, contracts.EventChatMessage, message)
+			if q.canViewChatMessage(claims.Sub, message) {
+				q.writeQueueMessage(conn, &writeMu, contracts.EventChatMessage, message)
+			}
 		case <-pingTicker.C:
 			if !q.writeQueuePing(conn, &writeMu) {
 				return
@@ -200,6 +213,22 @@ func (q *matchCoordinator) buildCoordinatorChatMessage(scope chatScope, userID, 
 		SenderUserID:      userID,
 		SenderDisplayName: strings.TrimSpace(displayName),
 		CreatedAt:         time.Now().UTC(),
+		Audience:          contracts.ChatAudienceAll,
+	}
+	if cmd.Payload != nil {
+		if rawAudience, exists := cmd.Payload["audience"]; exists {
+			audience, ok := rawAudience.(string)
+			if !ok {
+				return contracts.ChatMessage{}, errors.New("unsupported chat audience")
+			}
+			switch contracts.ChatAudience(strings.TrimSpace(audience)) {
+			case contracts.ChatAudienceAll:
+			case contracts.ChatAudienceTeam:
+				message.Audience = contracts.ChatAudienceTeam
+			default:
+				return contracts.ChatMessage{}, errors.New("unsupported chat audience")
+			}
+		}
 	}
 	if message.SenderDisplayName == "" {
 		message.SenderDisplayName = userID
@@ -234,6 +263,25 @@ func (q *matchCoordinator) buildCoordinatorChatMessage(scope chatScope, userID, 
 	return message, nil
 }
 
+func (q *matchCoordinator) resolveChatTeam(scope chatScope, userID string) (string, string, bool, error) {
+	if scope.Kind == "party" {
+		return q.persist.ActivePartyChatTeam(scope.ID, userID)
+	}
+	if scope.Kind == "match" {
+		teamID, ok, err := q.persist.ChatTeamForMatch(scope.MatchID, userID)
+		return scope.MatchID, teamID, ok, err
+	}
+	return "", "", false, nil
+}
+
+func (q *matchCoordinator) canViewChatMessage(userID string, message contracts.ChatMessage) bool {
+	if message.Audience != contracts.ChatAudienceTeam {
+		return true
+	}
+	teamID, ok, err := q.persist.ChatTeamForMatch(message.MatchID, userID)
+	return err == nil && ok && teamID == message.TeamID
+}
+
 func chatRestrictionErrorMessage(restriction persistence.ChatRestriction) string {
 	switch restriction.ActionType {
 	case "temporary_ban", "permanent_ban":
@@ -255,7 +303,7 @@ func sanitizeCoordinatorChatBody(body string) string {
 
 func validCoordinatorChatEmote(emote contracts.ChatEmote) bool {
 	switch emote {
-	case contracts.ChatEmoteSkull, contracts.ChatEmoteSob, contracts.ChatEmoteThinking, contracts.ChatEmoteSunglasses:
+	case contracts.ChatEmoteSkull, contracts.ChatEmoteSob, contracts.ChatEmoteThinking, contracts.ChatEmoteSunglasses, contracts.ChatEmoteWave:
 		return true
 	default:
 		return false

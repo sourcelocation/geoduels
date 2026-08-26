@@ -7,12 +7,23 @@ export type Player = {
   gamesPlayed: number;
   wins: number;
   rankedGamesPlayed: number;
+  trackedMatches: number;
+  rankedMatches: number;
+  duelMatches: number;
+  singleplayerRuns: number;
+  losses: number;
   isGuest?: boolean;
   isAdmin: boolean;
   isModerator: boolean;
   isBanned: boolean;
   banReason?: string;
   bannedAt?: string;
+  banExpiresAt?: string;
+  chatMuteReason?: string;
+  chatMutedAt?: string;
+  chatMutedUntil?: string;
+  reportMuteReason?: string;
+  reportMutedAt?: string;
   lastIpAddress?: string;
   reportMutedUntil?: string;
   identities?: AdminUserIdentity[];
@@ -25,41 +36,6 @@ export type AdminUserIdentity = {
   providerName?: string;
   lastSeenAt?: string;
   deletedAt?: string;
-};
-
-export type ModerationIncident = {
-  id: number;
-  subjectUserId: string;
-  subjectName?: string;
-  status: string;
-  severity: string;
-  evidenceStrength: string;
-  reasonCode: string;
-  summary?: string;
-  signalCount: number;
-  uniqueReporterCount: number;
-  latestSignalAt: string;
-  assignedTo?: string;
-  watchUntil?: string;
-  resolvedAt?: string;
-  resolutionNote?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ModerationTask = {
-  id: number;
-  incidentId: number;
-  status: string;
-  queue: string;
-  priority: string;
-  assignedTo?: string;
-  claimedAt?: string;
-  claimExpiresAt?: string;
-  completedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-  incident: ModerationIncident;
 };
 
 export type ModerationSignal = {
@@ -81,56 +57,22 @@ export type ModerationSignal = {
   payload?: Record<string, unknown>;
   occurredAt: string;
   createdAt: string;
-};
-
-export type ModerationVerdict = {
-  id: number;
-  incidentId: number;
-  taskId?: number;
-  actorUserId?: string;
-  actorName?: string;
-  verdict: string;
-  reasonCode: string;
-  note?: string;
-  enforcementAction?: string;
-  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  outcome?: string;
 };
 
 export type ModerationTimelineItem = {
   id: number;
-  incidentId?: number;
-  taskId?: number;
+  subjectUserId?: string;
+  subjectName?: string;
   actorUserId?: string;
-  eventType: string;
-  reasonCode?: string;
-  body?: string;
+  actorName?: string;
+  action: string;
+  reason?: string;
+  expiresAt?: string;
+  signalIds?: number[];
   createdAt: string;
-};
-
-export type ModerationReporterState = {
-  userId: string;
-  reportsSubmitted: number;
-  reportsUseful: number;
-  reportsDismissed: number;
-  reportsInconclusive: number;
-  reportsAbusive: number;
-  reportWeight: number;
-  mutedUntil?: string;
-};
-
-export type ModerationMatch = {
-  matchId: string;
-  mode?: string;
-  startedAt?: string;
-  endedAt?: string;
-  winnerUserId?: string;
-  roundCount: number;
-  players: Array<{
-    userId: string;
-    displayName: string;
-    totalScore: number;
-    finalHp: number;
-  }>;
 };
 
 export type MatchHistory = {
@@ -143,34 +85,6 @@ export type MatchHistory = {
 
 export type PlayerDetail = {
   player: Player;
-  stats: {
-    totalMatches: number;
-    rankedMatches: number;
-    duelMatches: number;
-    singleplayerRuns: number;
-    wins: number;
-    losses: number;
-  };
-  eloHistory: Array<{
-    date: string;
-    mmr: number;
-    delta: number;
-    played: number;
-  }>;
-};
-
-export type EnforcementAction = {
-  id: number;
-  targetUserId: string;
-  targetName?: string;
-  actorUserId?: string;
-  actorName?: string;
-  sourceIncidentId?: number;
-  sourceVerdictId?: number;
-  actionType: string;
-  reasonCode?: string;
-  reasonNote?: string;
-  createdAt: string;
 };
 
 export type CheatingBanSummary = {
@@ -181,25 +95,12 @@ export type CheatingBanSummary = {
     totalRefunded: number;
   };
   ipSignupBanned?: boolean;
-  incidentIds?: number[];
-};
-
-export type ModerationIncidentDetail = {
-  incident: ModerationIncident;
-  subjectPlayer?: Player;
-  tasks: ModerationTask[];
-  signals: ModerationSignal[];
-  matches: ModerationMatch[];
-  verdicts: ModerationVerdict[];
-  auditLog: ModerationTimelineItem[];
-  reporterState?: ModerationReporterState[];
 };
 
 export type ModerationSubjectProfile = {
   player: Player;
-  incidents: ModerationIncident[];
   signals: ModerationSignal[];
-  enforcement: EnforcementAction[];
+  log: ModerationTimelineItem[];
 };
 
 export type UserRoleGrant = {

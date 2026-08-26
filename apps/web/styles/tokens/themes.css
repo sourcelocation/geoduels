@@ -1,0 +1,71 @@
+/* Semantic roles. Components consume these roles, never raw palette values. */
+:root,
+[data-ui-theme='game'] {
+  --gd-surface-page: #0a1018;
+  --gd-surface-panel: #101a20;
+  --gd-surface-raised: #162130;
+  --gd-surface-grouped: rgb(255 255 255 / 4%);
+  --gd-surface-fill: rgb(255 255 255 / 6%);
+  --gd-surface-inset: rgb(0 0 0 / 14%);
+  --gd-surface-overlay: rgb(3 8 13 / 52%);
+  --gd-content-primary: #f4f9ff;
+  --gd-content-secondary: #a9bfd4;
+  --gd-content-inverse: #06120d;
+  --gd-content-on-action: #ffffff;
+  --gd-content-on-danger: #ffffff;
+  --gd-border-default: rgb(255 255 255 / 12%);
+  --gd-border-strong: rgb(255 255 255 / 20%);
+  --gd-border-focus: #77f0be;
+  --gd-action-primary: var(--gd-color-brand-green);
+  --gd-action-primary-hover: 14 165 104;
+  --gd-action-secondary: var(--gd-surface-raised);
+  --gd-action-danger: var(--gd-color-brand-orange);
+  --gd-status-success: var(--gd-color-brand-green);
+  --gd-status-warning: var(--gd-color-status-warning);
+  --gd-status-danger: var(--gd-color-brand-orange);
+  --gd-status-info: var(--gd-color-status-info);
+  --gd-scrim: var(--gd-surface-overlay);
+  --gd-hud-surface: rgb(7 12 18 / 74%);
+  --gd-hud-border: rgb(147 197 253 / 24%);
+  --gd-accent-blue: var(--gd-color-brand-blue);
+  --gd-accent-blue-hover: 75 141 248;
+  --gd-accent-pink: var(--gd-color-brand-pink);
+  --gd-accent-pink-soft: 247 161 181;
+  --gd-accent-orange: var(--gd-color-brand-orange);
+  --gd-map-marker-stroke: var(--gd-color-neutral-800);
+  --gd-map-marker-opacity: 0.96;
+  --gd-background-overlay: linear-gradient(rgb(18 56 41 / 40%), rgb(0 0 0 / 90%));
+  --gd-background-filter: blur(14px);
+  --gd-background-filter-focus: blur(22px);
+  --gd-forfeit-glow: inset 0 0 120px rgb(239 68 68 / 20%), inset 0 0 100px rgb(239 68 68 / 35%), inset 0 0 0 2px rgb(248 113 113 / 35%);
+  --gd-countdown-glow: 0 0 14px rgb(37 99 235 / 90%), 0 0 32px rgb(59 130 246 / 95%), 0 0 56px rgb(96 165 250 / 75%);
+}
+
+[data-ui-theme='operational'] {
+  --gd-surface-page: #0d1216;
+  --gd-surface-panel: #0f172a;
+  --gd-surface-raised: #162130;
+  --gd-surface-grouped: rgb(148 163 184 / 7%);
+  --gd-surface-fill: rgb(148 163 184 / 10%);
+  --gd-surface-inset: #020617;
+  --gd-surface-overlay: rgb(2 6 23 / 58%);
+  --gd-content-primary: #f8fafc;
+  --gd-content-secondary: #94a3b8;
+  --gd-content-inverse: #020617;
+  --gd-content-on-action: #02130d;
+  --gd-content-on-danger: #1f0710;
+  --gd-border-default: rgb(148 163 184 / 24%);
+  --gd-border-strong: rgb(148 163 184 / 38%);
+  --gd-border-focus: #6ee7b7;
+  --gd-action-primary: 52 211 153;
+  --gd-action-primary-hover: 16 185 129;
+  --gd-action-secondary: var(--gd-surface-raised);
+  --gd-action-danger: 251 113 133;
+  --gd-status-success: 52 211 153;
+  --gd-status-warning: 251 191 36;
+  --gd-status-danger: 251 113 133;
+  --gd-status-info: 96 165 250;
+  --gd-scrim: var(--gd-surface-overlay);
+  --gd-hud-surface: rgb(2 6 23 / 84%);
+  --gd-hud-border: rgb(148 163 184 / 30%);
+}

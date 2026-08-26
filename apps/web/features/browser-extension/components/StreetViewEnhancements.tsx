@@ -30,7 +30,7 @@ export function StreetViewEnhancements({
   return (
     <div
       data-testid="extension-compass"
-      className="pointer-events-none absolute left-1/2 top-3 z-50 h-9 w-[260px] -translate-x-1/2 overflow-hidden rounded-pill border border-white/15 bg-hudBg text-white shadow-elev-2"
+      className="pointer-events-none absolute left-1/2 top-3 z-game h-9 w-[260px] -translate-x-1/2 overflow-hidden rounded-full border border-hud-border bg-hud-surface text-content-primary shadow-elev-2"
       aria-label={`Compass heading ${Math.round(((heading % 360) + 360) % 360)} degrees`}
     >
       <div
@@ -41,7 +41,7 @@ export function StreetViewEnhancements({
           MARKERS.map((marker) => (
             <span
               key={`${cycle}-${marker.label}`}
-              className="font-hud absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-[11px] font-black tracking-[0.08em] text-white/85"
+              className="font-hud absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-hud-label font-strong text-content-primary"
               style={{
                 left: (cycle * 360 + marker.degree) * PIXELS_PER_DEGREE,
               }}
@@ -51,7 +51,7 @@ export function StreetViewEnhancements({
           )),
         )}
       </div>
-      <span className="absolute bottom-0 left-1/2 top-0 w-0.5 -translate-x-1/2 bg-emerald-300" />
+      <span className="absolute bottom-0 left-1/2 top-0 w-0.5 -translate-x-1/2 bg-action-primary" />
     </div>
   );
 }

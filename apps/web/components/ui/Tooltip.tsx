@@ -107,7 +107,7 @@ export function Tooltip({
             ref={refs.setFloating}
             style={floatingStyles}
             className={cn(
-              "pointer-events-none z-[2300] break-words rounded-md bg-slate-700 px-2.5 py-1.5 text-center text-xs font-semibold leading-4 text-white shadow-lg",
+              "pointer-events-none z-tooltip break-words rounded-md bg-surface-raised px-2.5 py-1.5 text-center text-body-sm font-semibold text-content-primary shadow-elev-2",
               className,
             )}
             {...getFloatingProps()}
@@ -119,7 +119,7 @@ export function Tooltip({
               width={12}
               height={6}
               tipRadius={1}
-              className="fill-slate-700"
+              className="fill-surface-raised"
             />
           </div>
         </FloatingPortal>

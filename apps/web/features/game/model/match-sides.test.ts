@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Snapshot } from "../../../components/ui/types";
+import type { Snapshot } from "./types";
 import { deriveMatchSides, withRoundSideResults } from "./match-sides";
+import { getTeamPresentation } from "../../../lib/team-presentation";
 
 function teamSnapshot(): Snapshot {
   return {
@@ -98,7 +99,7 @@ describe("deriveMatchSides", () => {
       id: "a",
       name: "Team Red",
       avatarFallback: "R",
-      avatarColor: "#dc2626",
+      avatarColor: getTeamPresentation("a").color,
       members: expect.arrayContaining([
         expect.objectContaining({ id: "redSelf" }),
         expect.objectContaining({ id: "redMate" }),

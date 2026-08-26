@@ -13,6 +13,7 @@ type HomePageGameProps = {
   actions: Pick<
     HomeActions,
     | "placeGuess"
+    | "pingTeam"
     | "finalizeGuess"
     | "advanceRound"
     | "forfeitMatch"
@@ -30,7 +31,7 @@ export default function HomePageGame({
   }
 
   const framedResultMap = game.roundResult ? (
-    <div className="h-full w-full overflow-hidden rounded-[22px] border border-white/10 bg-[#162130] shadow-[0_20px_42px_rgba(0,0,0,0.35)]">
+    <div className="h-full w-full overflow-hidden rounded-xl border border-border-default bg-surface-raised shadow-elev-3">
       <GuessMap
         mode="result"
         result={game.roundResult}
@@ -91,7 +92,13 @@ export default function HomePageGame({
         <GuessMap
           key={`guess-map-${game.currentRoundId || "none"}`}
           onGuess={actions.placeGuess}
+          onPing={actions.pingTeam}
           guess={game.guess}
+          guessSubmitted={game.guessSubmitted}
+          teammateGuesses={game.teammateGuesses}
+          teamPings={game.teamPings}
+          playerAvatars={game.resultPlayerAvatars}
+          playerFallbacks={game.resultPlayerFallbacks}
           mode="guess"
           guessAvatarUrl={game.userAvatar}
           guessAvatarFallback={
@@ -101,6 +108,9 @@ export default function HomePageGame({
       }
       resultMapNode={framedResultMap}
       damageMultiplier={game.damageMultiplier}
+      multiplierMode={game.multiplierMode}
+      selfDamageMultiplier={game.selfDamageMultiplier}
+      oppDamageMultiplier={game.oppDamageMultiplier}
       guessSubmitted={game.guessSubmitted}
       opponentGuessAlert={game.opponentGuessAlert}
       connectionIssue={game.connectionIssue}

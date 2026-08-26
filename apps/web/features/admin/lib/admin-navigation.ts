@@ -2,23 +2,15 @@ import type { NextRouter } from "next/router";
 import {
   Ban,
   Bell,
-  ClipboardList,
+  Award,
   FileText,
   Gavel,
   History,
   KeyRound,
   MessageCircle,
   Search,
-  UserCog,
   Wrench,
 } from "lucide-react";
-
-export const moderationViews = new Set([
-  "queue",
-  "mine",
-  "watchlist",
-  "closed",
-]);
 
 export const adminNav = [
   {
@@ -34,7 +26,10 @@ export const adminNav = [
   },
   {
     title: "Access",
-    items: [{ href: "/admin/access/roles", label: "Roles", icon: KeyRound }],
+    items: [
+      { href: "/admin/access/roles", label: "Roles", icon: KeyRound },
+      { href: "/admin/access/badges", label: "Badges", icon: Award },
+    ],
   },
 ];
 
@@ -42,16 +37,13 @@ export const moderatorNav = [
   {
     title: "Review",
     items: [
-      { href: "/moderator/queue", label: "Queue", icon: ClipboardList },
-      { href: "/moderator/reviews", label: "Mine", icon: UserCog },
-      { href: "/moderator/watchlist", label: "Watchlist", icon: Search },
-      { href: "/moderator/closed", label: "Closed", icon: History },
       { href: "/moderator/subjects", label: "Subjects", icon: Search },
+      { href: "/moderator/signals", label: "Signals", icon: Gavel },
     ],
   },
   {
     title: "History",
-    items: [{ href: "/moderator/enforcement", label: "Enforcement", icon: Gavel }],
+    items: [{ href: "/moderator/log", label: "Moderation Log", icon: History }],
   },
 ];
 
@@ -68,24 +60,5 @@ export function moderatorPathFromRouter(router: NextRouter) {
   if (Array.isArray(rawPath) && rawPath.length > 0) return rawPath;
   const tab = router.query.tab;
   if (typeof tab === "string") return [tab];
-  return ["queue"];
-}
-
-export function isModerationReviewSection(section: string) {
-  return section === "queue" || section === "reviews" || section === "watchlist" || section === "closed";
-}
-
-export function moderationViewForRoute(section: string, leaf: string) {
-  if (section === "reviews") return "mine";
-  if (section === "watchlist") return "watchlist";
-  if (section === "closed") return "closed";
-  if (moderationViews.has(leaf)) return leaf;
-  return "queue";
-}
-
-export function moderationTitleForRoute(section: string, leaf: string) {
-  if (section === "reviews") return "My Reviews";
-  if (section === "watchlist") return "Watchlist";
-  if (section === "closed") return "Closed";
-  return "Review Queue";
+	return ["subjects"];
 }

@@ -6,11 +6,11 @@ import {
   requestDeleteAccount,
   requestDiscordStart,
   requestGoogleStart,
-  requestLogout,
   requestMe,
-  requestSession,
   requestUnlinkAuthProvider,
 } from "../../auth/lib/auth-client";
+import { useAuthState } from "../../auth/components/AuthProvider";
+import { getAuthGateway } from "../../auth/auth-gateway";
 
 type Provider = "google" | "discord";
 type AccountData = {
@@ -24,27 +24,29 @@ export function useAccountSettings(profilePath: string) {
   const config = getRuntimeConfig();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const auth = useAuthState();
+  const authGateway = getAuthGateway(config);
   const [error, setError] = useState("");
   const accountQuery = useQuery({
-    queryKey: ["profile-account-settings"],
+    queryKey: ["profile-account-settings", auth.userId || "anonymous"],
+    enabled: auth.status !== "bootstrapping" && !!auth.accessToken,
     queryFn: async (): Promise<AccountData | null> => {
-      const session = await requestSession(config);
-      if (!session?.accessToken || !session.user?.id) return null;
-      const response = await requestMe(config, session.accessToken);
+      if (!auth.accessToken || !auth.userId) return null;
+      const response = await requestMe(config, auth.accessToken);
       if (!response.ok) throw new Error("Failed to load account");
       const profile = await response.json();
       return {
-        accessToken: session.accessToken,
-        email: profile.email || session.user.email || "Guest account",
+        accessToken: auth.accessToken,
+        email: profile.email || auth.email || "Guest account",
         isGuest: !!profile.isGuest,
-        linkedProviders: session.linkedProviders || [],
+        linkedProviders: auth.session?.linkedProviders || [],
       };
     },
     staleTime: 30_000,
   });
   const account = accountQuery.data;
   const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: ["profile-account-settings"] });
+    queryClient.invalidateQueries({ queryKey: ["profile-account-settings", auth.userId || "anonymous"] });
   const fail = (fallback: string) => (value: unknown) =>
     setError(value instanceof Error ? value.message : fallback);
   const unlinkMutation = useMutation({
@@ -56,15 +58,18 @@ export function useAccountSettings(profilePath: string) {
   const deleteMutation = useMutation({
     mutationFn: () =>
       requestDeleteAccount(config, account?.accessToken || ""),
-    onSuccess: () => exit(),
+    onSuccess: async () => {
+      authGateway.clear();
+      await exit();
+    },
     onError: fail("Failed to delete account"),
   });
   const exit = async () => {
-    queryClient.clear();
+    queryClient.removeQueries({ queryKey: ["profile-account-settings", auth.userId || "anonymous"] });
     await router.push("/");
   };
   const signOut = async () => {
-    await requestLogout(config);
+    await authGateway.logout();
     await exit();
   };
   const startProvider = async (provider: Provider) => {

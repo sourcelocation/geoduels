@@ -17,28 +17,56 @@ const gameplayMapSettingsKey = "gameplay_map_settings"
 
 func defaultGameplayMapSettings() contracts.GameplayMapSettings {
 	return contracts.GameplayMapSettings{
-		RankedMovingMapID:       contracts.MapKeyMoving,
-		RankedNMPZMapID:         contracts.MapKeyNMPZ,
-		SingleplayerMovingMapID: contracts.MapKeyMoving,
-		SingleplayerNMPZMapID:   contracts.MapKeyNMPZ,
+		MovingMapID: contracts.MapKeyMoving,
+		NoMoveMapID: contracts.MapKeyNMPZ,
+		NMPZMapID:   contracts.MapKeyNMPZ,
 	}
+}
+
+type legacyGameplayMapSettings struct {
+	MovingMapID             string `json:"movingMapId"`
+	NoMoveMapID             string `json:"noMoveMapId"`
+	NMPZMapID               string `json:"nmpzMapId"`
+	RankedMovingMapID       string `json:"rankedMovingMapId"`
+	RankedNMPZMapID         string `json:"rankedNmpzMapId"`
+	SingleplayerMovingMapID string `json:"singleplayerMovingMapId"`
+	SingleplayerNMPZMapID   string `json:"singleplayerNmpzMapId"`
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func normalizeGameplayMapSettings(settings contracts.GameplayMapSettings) contracts.GameplayMapSettings {
 	defaults := defaultGameplayMapSettings()
-	if strings.TrimSpace(settings.RankedMovingMapID) == "" {
-		settings.RankedMovingMapID = defaults.RankedMovingMapID
+	if strings.TrimSpace(settings.MovingMapID) == "" {
+		settings.MovingMapID = defaults.MovingMapID
 	}
-	if strings.TrimSpace(settings.RankedNMPZMapID) == "" {
-		settings.RankedNMPZMapID = defaults.RankedNMPZMapID
+	if strings.TrimSpace(settings.NoMoveMapID) == "" {
+		settings.NoMoveMapID = defaults.NoMoveMapID
 	}
-	if strings.TrimSpace(settings.SingleplayerMovingMapID) == "" {
-		settings.SingleplayerMovingMapID = defaults.SingleplayerMovingMapID
-	}
-	if strings.TrimSpace(settings.SingleplayerNMPZMapID) == "" {
-		settings.SingleplayerNMPZMapID = defaults.SingleplayerNMPZMapID
+	if strings.TrimSpace(settings.NMPZMapID) == "" {
+		settings.NMPZMapID = defaults.NMPZMapID
 	}
 	return settings
+}
+
+func decodeGameplayMapSettings(raw string) contracts.GameplayMapSettings {
+	var legacy legacyGameplayMapSettings
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return defaultGameplayMapSettings()
+	}
+	return normalizeGameplayMapSettings(contracts.GameplayMapSettings{
+		MovingMapID: firstNonEmpty(legacy.MovingMapID, legacy.RankedMovingMapID, legacy.SingleplayerMovingMapID),
+		// Ranked NMPZ became ranked No Move; keep that map for the no-move slot.
+		NoMoveMapID: firstNonEmpty(legacy.NoMoveMapID, legacy.RankedNMPZMapID),
+		NMPZMapID:   firstNonEmpty(legacy.NMPZMapID, legacy.SingleplayerNMPZMapID, legacy.RankedNMPZMapID),
+	})
 }
 
 func (s *pgStore) GetGameplayMapSettings() (contracts.GameplayMapSettings, error) {
@@ -60,11 +88,7 @@ func (s *pgStore) gameplayMapSettings(ctx context.Context, q seasonQuerier) (con
 		}
 		return contracts.GameplayMapSettings{}, err
 	}
-	var settings contracts.GameplayMapSettings
-	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
-		return defaultGameplayMapSettings(), nil
-	}
-	return normalizeGameplayMapSettings(settings), nil
+	return decodeGameplayMapSettings(raw), nil
 }
 
 func (s *pgStore) SetMapOfficial(adminUserID, mapID string, official bool) (contracts.CustomMap, error) {
@@ -124,11 +148,7 @@ func (s *pgStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts
 		return contracts.CustomMap{}, err
 	}
 	defer tx.Rollback(ctx)
-	required := minMapLocations
-	if strings.HasPrefix(field, "ranked") {
-		required = plannedRoundCount
-	}
-	if err := s.ensureReadyMapTx(ctx, tx, mapID, required); err != nil {
+	if err := s.ensureReadyMapTx(ctx, tx, mapID, plannedRoundCount); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	settings, err := s.gameplayMapSettings(ctx, tx)
@@ -136,14 +156,12 @@ func (s *pgStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts
 		return contracts.CustomMap{}, err
 	}
 	switch field {
-	case "rankedMovingMapId":
-		settings.RankedMovingMapID = mapID
-	case "rankedNmpzMapId":
-		settings.RankedNMPZMapID = mapID
-	case "singleplayerMovingMapId":
-		settings.SingleplayerMovingMapID = mapID
-	case "singleplayerNmpzMapId":
-		settings.SingleplayerNMPZMapID = mapID
+	case "movingMapId":
+		settings.MovingMapID = mapID
+	case "noMoveMapId":
+		settings.NoMoveMapID = mapID
+	case "nmpzMapId":
+		settings.NMPZMapID = mapID
 	}
 	payload, err := json.Marshal(normalizeGameplayMapSettings(settings))
 	if err != nil {
@@ -194,14 +212,17 @@ func (s *pgStore) ensureReadyMapTx(ctx context.Context, tx pgx.Tx, mapID string,
 
 func gameplayMapRoleField(role string) (string, error) {
 	switch strings.TrimSpace(strings.ToLower(role)) {
-	case "ranked_moving", "ranked-moving", "rankedmovingmapid":
-		return "rankedMovingMapId", nil
-	case "ranked_nmpz", "ranked-nmpz", "rankednmpzmapid":
-		return "rankedNmpzMapId", nil
-	case "singleplayer_moving", "singleplayer-moving", "singleplayermovingmapid":
-		return "singleplayerMovingMapId", nil
-	case "singleplayer_nmpz", "singleplayer-nmpz", "singleplayernmpzmapid":
-		return "singleplayerNmpzMapId", nil
+	case "moving", "movingmapid",
+		"ranked_moving", "ranked-moving", "rankedmovingmapid",
+		"singleplayer_moving", "singleplayer-moving", "singleplayermovingmapid":
+		return "movingMapId", nil
+	case "no_move", "nomove", "no-move", "nomovemapid",
+		"ranked_nmpz", "ranked-nmpz", "rankednmpzmapid",
+		"ranked_no_move", "ranked-no-move", "rankednomovemapid":
+		return "noMoveMapId", nil
+	case "nmpz", "nmpzmapid",
+		"singleplayer_nmpz", "singleplayer-nmpz", "singleplayernmpzmapid":
+		return "nmpzMapId", nil
 	default:
 		return "", errors.New("unsupported map role")
 	}
@@ -219,18 +240,12 @@ func (s *pgStore) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contrac
 	if err != nil {
 		return "", err
 	}
-	ruleset = contracts.NormalizeRuleset(ruleset)
-	if mode == contracts.ModeSingleplayer {
-		if ruleset == contracts.RulesetNMPZ {
-			return s.ResolveGameplayMapID(mode, ruleset, settings.SingleplayerNMPZMapID)
-		}
-		return s.ResolveGameplayMapID(mode, ruleset, settings.SingleplayerMovingMapID)
+	switch contracts.NormalizeRuleset(ruleset) {
+	case contracts.RulesetNoMove:
+		return s.ResolveGameplayMapID(mode, ruleset, settings.NoMoveMapID)
+	case contracts.RulesetNMPZ:
+		return s.ResolveGameplayMapID(mode, ruleset, settings.NMPZMapID)
+	default:
+		return s.ResolveGameplayMapID(mode, ruleset, settings.MovingMapID)
 	}
-	if mode == contracts.ModeDuel {
-		if ruleset == contracts.RulesetNMPZ {
-			return s.ResolveGameplayMapID(mode, ruleset, settings.RankedNMPZMapID)
-		}
-		return s.ResolveGameplayMapID(mode, ruleset, settings.RankedMovingMapID)
-	}
-	return requestedMapID, nil
 }

@@ -25,12 +25,7 @@ import (
 )
 
 func (a *api) me(w http.ResponseWriter, r *http.Request) {
-	claims, err := a.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	identity, err := a.store.GetIdentity(claims.Sub)
+	claims, identity, err := a.authenticatedAccount(r)
 	if err != nil {
 		http.Error(w, "identity unavailable", http.StatusInternalServerError)
 		return
@@ -96,6 +91,22 @@ func (a *api) userNotifications(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if strings.EqualFold(r.URL.Query().Get("filter"), "all") {
+		if store, ok := a.store.(interface {
+			ListNotificationInbox(string, int, int64) ([]persistence.UserNotification, error)
+		}); ok {
+			limit := queryLimit(r, 30)
+			beforeID, _ := strconv.ParseInt(r.URL.Query().Get("beforeId"), 10, 64)
+			notifications, err := store.ListNotificationInbox(claims.Sub, limit, beforeID)
+			if err != nil {
+				http.Error(w, "notifications unavailable", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"notifications": notifications})
+			return
+		}
+	}
 	notifications, err := a.store.ListUserNotifications(claims.Sub, 10)
 	if err != nil {
 		http.Error(w, "notifications unavailable", http.StatusInternalServerError)
@@ -103,6 +114,24 @@ func (a *api) userNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"notifications": notifications})
+}
+
+func (a *api) markAllUserNotificationsRead(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	store, ok := a.store.(interface{ MarkAllUserNotificationsRead(string) error })
+	if !ok {
+		http.Error(w, "notifications unavailable", http.StatusNotImplemented)
+		return
+	}
+	if err := store.MarkAllUserNotificationsRead(claims.Sub); err != nil {
+		http.Error(w, "failed to mark notifications", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *api) markUserNotificationRead(w http.ResponseWriter, r *http.Request) {
@@ -235,12 +264,8 @@ func (a *api) match(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) matchSession(w http.ResponseWriter, r *http.Request) {
-	claims, err := a.authenticatedClaims(r)
+	claims, _, err := a.authenticatedAccount(r)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if _, err := a.store.GetIdentity(claims.Sub); err != nil {
 		http.Error(w, "identity not found", http.StatusUnauthorized)
 		return
 	}
@@ -268,6 +293,11 @@ func (a *api) matchRoute(w http.ResponseWriter, r *http.Request) {
 	userID := ""
 	if authenticated {
 		userID = claims.Sub
+		if banned, err := a.accountBanned(userID); err == nil && banned {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(contracts.MatchSessionResponse{Status: "forbidden", MatchID: matchID})
+			return
+		}
 	}
 	resp, err := a.resolveMatchRoute(r.Context(), userID, authenticated, matchID)
 	if err != nil {
@@ -291,6 +321,19 @@ func (a *api) matchBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setRefreshCookie(w, r, nextRefreshToken)
+	banned, err := a.accountBanned(authPayload.User.ID)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	if banned {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(contracts.MatchBootstrapResponse{
+			Auth:  authPayload,
+			Match: contracts.MatchSessionResponse{Status: "forbidden", MatchID: matchID},
+		})
+		return
+	}
 	matchPayload, err := a.resolveMatchSession(r.Context(), authPayload.User.ID, matchID)
 	if err != nil {
 		http.Error(w, "match unavailable", http.StatusBadGateway)
@@ -335,12 +378,12 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 	}
 	if found && !authenticated {
 		resp := contracts.MatchSessionResponse{Status: "history", MatchID: targetMatchID, Snapshot: history}
-		a.attachPartyReturn(&resp, targetMatchID)
+		a.attachReturnTarget(ctx, &resp, userID, authenticated, targetMatchID)
 		return resp, nil
 	}
 
 	if !authenticated {
-		if rec, ok, err := a.store.GetRuntimeMatch(targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+		if rec, ok, err := a.store.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
 			return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 		}
 		return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
@@ -355,7 +398,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 					return contracts.MatchSessionResponse{}, err
 				}
 				if healthy {
-					return contracts.MatchSessionResponse{
+					resp := contracts.MatchSessionResponse{
 						Status:                "live_connectable",
 						MatchID:               payload.MatchID,
 						Mode:                  payload.Mode,
@@ -365,7 +408,10 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 						WSPath:                payload.WSPath,
 						SourcePartyID:         payload.SourcePartyID,
 						SourcePartyInviteCode: payload.SourcePartyInviteCode,
-					}, nil
+						ReturnTarget:          payload.ReturnTarget,
+					}
+					a.attachReturnTarget(ctx, &resp, userID, authenticated, targetMatchID)
+					return resp, nil
 				}
 				return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
 			}
@@ -376,7 +422,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 					Snapshot:           history,
 					ReplacementMatchID: assigned.MatchID,
 				}
-				a.attachPartyReturn(&resp, targetMatchID)
+				a.attachReturnTarget(ctx, &resp, userID, authenticated, targetMatchID)
 				if replacement, ok, err := a.launcher().AssignedPayload(userID, assigned); err == nil && ok {
 					resp.Replacement = &replacement
 				}
@@ -394,7 +440,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 		case matchlaunch.AssignmentPending:
 			if assigned.MatchID == targetMatchID && sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID) == contracts.ModeSingleplayer {
 				_ = a.coord.ClearAssignment(context.Background(), assigned)
-				_ = a.store.RecordRuntimeMatch(assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
+				_ = a.store.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 			}
 		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
 		}
@@ -402,25 +448,67 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 
 	if found {
 		resp := contracts.MatchSessionResponse{Status: "history", MatchID: targetMatchID, Snapshot: history}
-		a.attachPartyReturn(&resp, targetMatchID)
+		a.attachReturnTarget(ctx, &resp, userID, authenticated, targetMatchID)
 		return resp, nil
 	}
-	if rec, ok, err := a.store.GetRuntimeMatch(targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+	if rec, ok, err := a.store.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
 		return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 	}
 	return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
 }
 
-func (a *api) attachPartyReturn(resp *contracts.MatchSessionResponse, matchID string) {
-	if resp == nil || resp.SourcePartyInviteCode != "" {
+func (a *api) attachReturnTarget(ctx context.Context, resp *contracts.MatchSessionResponse, userID string, authenticated bool, matchID string) {
+	if resp == nil {
 		return
 	}
-	partyID, inviteCode, ok, err := a.store.MatchSessionSourceParty(matchID)
-	if err != nil || !ok {
+	var target *contracts.MatchReturnTarget
+	if repository, ok := a.store.(interface {
+		MatchSessionReturnTarget(context.Context, string) (*contracts.MatchReturnTarget, bool, error)
+	}); ok {
+		if persisted, found, err := repository.MatchSessionReturnTarget(ctx, matchID); err == nil && found {
+			target = persisted
+		}
+	}
+	// Rows written before return targets existed retain party provenance. Keep
+	// those rows usable, but resolve the current party server-side.
+	if target == nil {
+		partyID, _, ok, err := a.store.MatchSessionSourceParty(ctx, matchID)
+		if err == nil && ok {
+			target = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnParty, PartyID: partyID}
+		}
+	}
+	if target == nil {
 		return
 	}
-	resp.SourcePartyID = partyID
-	resp.SourcePartyInviteCode = inviteCode
+	target = contracts.NormalizeMatchReturnTarget(target)
+	if target.Kind == contracts.MatchReturnParty {
+		if !authenticated || target.PartyID == "" {
+			resp.ReturnTarget = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnHome}
+			return
+		}
+		party, found, err := a.store.GetPartyByID(target.PartyID)
+		if err != nil || !found || party.State == contracts.PartyClosed || party.State == contracts.PartyExpired {
+			resp.ReturnTarget = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnHome}
+			return
+		}
+		member := false
+		for _, candidate := range party.Members {
+			if candidate.UserID == userID {
+				member = true
+				break
+			}
+		}
+		if !member {
+			resp.ReturnTarget = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnHome}
+			return
+		}
+		target.PartyInviteCode = party.InviteCode
+	}
+	resp.ReturnTarget = target
+	resp.SourcePartyID = target.PartyID
+	if target.Kind == contracts.MatchReturnParty {
+		resp.SourcePartyInviteCode = target.PartyInviteCode
+	}
 }
 
 func (a *api) getPublicFinalMatchSnapshot(matchID string) (*contracts.MatchSnapshot, bool, error) {
@@ -432,7 +520,6 @@ func (a *api) getPublicFinalMatchSnapshot(matchID string) (*contracts.MatchSnaps
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		return nil, false, err
 	}
-	snapshot = contracts.NormalizeSnapshotEntityIDs(snapshot, a.resolveEntityID)
 	snapshot = sanitizeFinalMatchSnapshot(snapshot)
 	if snapshot.State == "" {
 		snapshot.State = contracts.MatchEnded
@@ -531,13 +618,9 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	identity, err := a.store.GetIdentity(claims.Sub)
+	identity, err := a.authenticatedIdentity(r)
 	if err != nil {
 		http.Error(w, "identity not found", http.StatusUnauthorized)
-		return
-	}
-	if identity.IsBanned {
-		http.Error(w, "account is banned", http.StatusForbidden)
 		return
 	}
 	if identity.NicknameRequired {
@@ -549,11 +632,36 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var requestedConfig contracts.MatchConfig
+	requestedReturnTarget := &contracts.MatchReturnTarget{Kind: contracts.MatchReturnHome}
 	if r.Body != nil {
-		dec := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
-		if err := dec.Decode(&requestedConfig); err != nil && !errors.Is(err, io.EOF) {
+		raw, readErr := io.ReadAll(io.LimitReader(r.Body, 16<<10))
+		if readErr != nil {
 			http.Error(w, "invalid singleplayer config", http.StatusBadRequest)
 			return
+		}
+		var keys map[string]json.RawMessage
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &keys); err != nil {
+				http.Error(w, "invalid singleplayer config", http.StatusBadRequest)
+				return
+			}
+		}
+		if _, wrapped := keys["config"]; wrapped {
+			var request struct {
+				Config       contracts.MatchConfig        `json:"config"`
+				ReturnTarget *contracts.MatchReturnTarget `json:"returnTarget,omitempty"`
+			}
+			if err := json.Unmarshal(raw, &request); err != nil {
+				http.Error(w, "invalid singleplayer config", http.StatusBadRequest)
+				return
+			}
+			requestedConfig = request.Config
+			requestedReturnTarget = contracts.NormalizeMatchReturnTarget(request.ReturnTarget)
+		} else if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &requestedConfig); err != nil {
+				http.Error(w, "invalid singleplayer config", http.StatusBadRequest)
+				return
+			}
 		}
 	}
 	userID := claims.Sub
@@ -575,7 +683,7 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_ = a.coord.ClearAssignment(context.Background(), assigned)
-			_ = a.store.RecordRuntimeMatch(assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
+			_ = a.store.RecordRuntimeMatch(r.Context(), assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
 			_ = a.coord.ClearAssignment(context.Background(), assigned)
 		}
@@ -600,6 +708,10 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 		}
 		requestedConfig.MapID = resolvedMapID
 	}
+	requestedReturnTarget = contracts.NormalizeMatchReturnTarget(requestedReturnTarget)
+	if requestedReturnTarget.Kind == contracts.MatchReturnMap && requestedReturnTarget.MapID == "" {
+		requestedReturnTarget.MapID = requestedConfig.MapID
+	}
 	found := contracts.MatchFound{
 		MatchID: soloSessionID(),
 		Mode:    contracts.ModeSingleplayer,
@@ -612,8 +724,10 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 			RoundTimerMode:      requestedConfig.RoundTimerMode,
 			RoundTimeLimitMS:    requestedConfig.RoundTimeLimitMS,
 			PressureTimeLimitMS: requestedConfig.PressureTimeLimitMS,
+			MultiplierMode:      requestedConfig.MultiplierMode,
 		}),
-		Players: []string{userID},
+		ReturnTarget: requestedReturnTarget,
+		Players:      []string{userID},
 		Profiles: map[string]contracts.PlayerProfile{
 			userID: {
 				UserID:            userID,

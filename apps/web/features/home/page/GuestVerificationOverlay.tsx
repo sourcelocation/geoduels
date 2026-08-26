@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import AppModalShell from "../../../components/ui/AppModalShell";
+import { Button } from "../../../components/ui/button";
 import type { HomeOverlaysView } from "../model/types";
 
 declare global {
@@ -150,32 +151,34 @@ export default function GuestVerificationOverlay({
       title={title}
       placement="center"
       showHeader={false}
-      zIndexClassName="z-[1200]"
+      zIndexClassName="z-dialog"
       maxWidthClassName="max-w-sm"
-      panelClassName="text-center"
+      contentClassName="text-center"
     >
       <div className="flex flex-col items-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-[#2ad18f]" />
-        <h2 className="mt-4 text-lg font-black">{title}</h2>
-        <p className="mt-2 text-sm leading-6 text-[#b9c9d8]">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-border-default border-t-action-primary" />
+        <h2 className="mt-4 text-heading-sm font-strong">{title}</h2>
+        <p className="mt-2 text-body-sm text-content-secondary">
           Guest play needs a quick one-time check.
         </p>
         <div className="mt-5 min-h-[70px] w-full">
           <div ref={containerRef} className="flex justify-center" />
         </div>
         {verification.error ? (
-          <p className="mt-3 text-sm font-bold text-[#ffb4b4]">
+          <p className="mt-3 text-body-sm font-strong text-status-danger">
             {verification.error}
           </p>
         ) : null}
         {canCancel ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={onCancel}
-            className="mt-5 text-xs font-black uppercase tracking-[0.14em] text-white/60 transition hover:text-white"
+            className="mt-5 uppercase tracking-control"
           >
             Cancel
-          </button>
+          </Button>
         ) : null}
       </div>
     </AppModalShell>

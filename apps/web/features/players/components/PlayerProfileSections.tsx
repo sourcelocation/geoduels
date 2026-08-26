@@ -1,11 +1,13 @@
-import { Check, Loader2, Pencil, Settings, X } from "lucide-react";
-import AvatarBadge from "../../../components/ui/AvatarBadge";
+import { Check, Pencil, X } from "lucide-react";
+import { CenteredSpinner, Spinner } from "../../../components/ui/Spinner";
+import AvatarBadge from "./AvatarBadge";
+import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/button";
-import { IconMetric } from "../../../components/ui/IconMetric";
+import { IconMetric } from "./IconMetric";
 import { Input } from "../../../components/ui/input";
-import { MmrDisplay } from "../../../components/ui/MmrDisplay";
-import PlayerBadge from "../../../components/ui/PlayerBadge";
-import { Surface } from "../../../components/ui/Surface";
+import { MmrDisplay } from "./MmrDisplay";
+import PlayerBadge from "./PlayerBadge";
+import { AppPanel } from "../../../components/ui/compositions";
 import { Tabs } from "../../../components/ui/Tabs";
 import type { useProfileEditor } from "../hooks/use-profile-editor";
 import type { PlayerMatchSummary, PublicPlayerProfile } from "../types";
@@ -21,33 +23,34 @@ export function ProfileOverview({
   profile,
   editor,
   owner,
-  onSettings,
+  socialActions,
 }: {
   profile: PublicPlayerProfile;
   editor: Editor;
   owner: boolean;
-  onSettings: () => void;
+  socialActions?: React.ReactNode;
 }) {
-  const winRate = profile.gamesPlayed
-    ? Math.round((profile.wins / profile.gamesPlayed) * 100)
-    : 0;
+  const rankedWinRate =
+    profile.rankedGamesPlayed >= 10
+      ? `${Math.round((profile.rankedWins / profile.rankedGamesPlayed) * 100)}%`
+      : "—";
   const stats = [
-    [profileMetrics.games, "Duels played", profile.gamesPlayed],
     [profileMetrics.wins, "Duel wins", profile.wins],
-    [profileMetrics.winRate, "Duel win rate", `${winRate}%`],
-    [profileMetrics.rankedGames, "Ranked duels", profile.rankedGamesPlayed],
-    [profileMetrics.rankedWins, "Ranked wins", profile.rankedWins],
+    [profileMetrics.winRate, "Ranked win rate", rankedWinRate],
+    [profileMetrics.winStreak, "Best win streak", profile.bestWinStreak],
+    [profileMetrics.perfectGuesses, "Perfect guesses", profile.perfectGuesses],
+    [profileMetrics.flawlessWins, "Flawless wins", profile.flawlessWins],
   ] as const;
 
   return (
-    <Surface variant="gameGlass" className="rounded-3xl p-5 sm:p-7">
+    <AppPanel className="rounded-2xl p-5 sm:p-7">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
         <AvatarBadge
           avatarUrl={profile.avatarUrl}
           fallback={(profile.displayName || "?").slice(0, 1).toUpperCase()}
           alt={profile.displayName}
           size="xl"
-          className="shrink-0 border-white/20 bg-slate-900"
+          className="shrink-0 border-border-strong bg-surface-inset"
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -64,10 +67,10 @@ export function ProfileOverview({
                     editor.saveName();
                 }}
                 autoFocus
-                className="max-w-sm flex-1 text-2xl font-black sm:text-3xl"
+                className="max-w-sm flex-1 text-heading-lg font-strong"
               />
             ) : (
-              <h1 className="truncate text-3xl font-black text-white sm:text-4xl">
+              <h1 className="truncate text-display-md font-strong text-content-primary">
                 {profile.displayName}
               </h1>
             )}
@@ -87,7 +90,7 @@ export function ProfileOverview({
                     className="h-9 min-h-9 w-9"
                   >
                     {editor.nicknameMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Spinner size="sm" label="Saving display name" color="current" />
                     ) : (
                       <Check className="h-4 w-4" />
                     )}
@@ -115,20 +118,32 @@ export function ProfileOverview({
               )
             ) : null}
           </div>
-          <MmrDisplay value={profile.mmr} size="md" label className="mt-3" />
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <MmrDisplay value={profile.mmr} size="md" label />
+            {profile.leaderboardRank > 0 ? (
+              <Badge
+                tone="neutral"
+                size="md"
+                aria-label={`Ranked #${profile.leaderboardRank} of ${profile.leaderboardTotal}`}
+                title={`Ranked #${profile.leaderboardRank.toLocaleString()} of ${profile.leaderboardTotal.toLocaleString()}`}
+              >
+                #{profile.leaderboardRank.toLocaleString()}
+                <span className="ml-1.5 text-label">
+                  ranked
+                </span>
+              </Badge>
+            ) : null}
+          </div>
           <MutationError
             mutation={editor.nicknameMutation}
             fallback="Failed to update display name"
           />
         </div>
-        {owner ? (
-          <Button onClick={onSettings} className="shrink-0 rounded-xl">
-            <Settings className="h-4 w-4" />
-            Account settings
-          </Button>
-        ) : null}
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {socialActions}
+        </div>
       </div>
-      <div className="mt-6 grid grid-cols-2 gap-2.5 border-t border-white/10 pt-5 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="mt-6 grid grid-cols-2 gap-2.5 border-t border-border-default pt-5 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map(([icon, label, value], index) => (
           <IconMetric
             key={label}
@@ -139,7 +154,7 @@ export function ProfileOverview({
           />
         ))}
       </div>
-    </Surface>
+    </AppPanel>
   );
 }
 
@@ -153,9 +168,9 @@ export function ProfileBadges({
   owner: boolean;
 }) {
   return (
-    <Surface variant="gameGlass" className="rounded-3xl p-4 sm:p-6">
+    <AppPanel className="rounded-2xl p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-black text-white">Earned badges</h2>
+        <h2 className="text-heading-sm font-strong text-content-primary">Earned badges</h2>
         {owner ? (
           editor.choosingBadge ? (
             <div className="flex gap-2">
@@ -169,14 +184,13 @@ export function ProfileBadges({
                 disabled={editor.badgeMutation.isPending}
               >
                 {editor.badgeMutation.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Spinner size="sm" label="Saving badge" color="current" />
                 ) : null}
                 Save
               </Button>
             </div>
           ) : (
             <Button
-              size="sm"
               onClick={() => editor.setChoosingBadge(true)}
             >
               Choose displayed badge
@@ -197,7 +211,7 @@ export function ProfileBadges({
         }
         onSelect={editor.setBadgeId}
       />
-    </Surface>
+    </AppPanel>
   );
 }
 
@@ -219,9 +233,9 @@ export function ProfileHistory({
   };
 }) {
   return (
-    <Surface variant="gameGlass" className="rounded-3xl p-4 sm:p-6">
+    <AppPanel className="rounded-2xl p-4 sm:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <h2 className="text-xl font-black text-white">Match history</h2>
+        <h2 className="text-heading-md font-strong text-content-primary">Match history</h2>
         <div className="flex flex-wrap items-center gap-3">
           <Tabs
             value={filter}
@@ -233,20 +247,20 @@ export function ProfileHistory({
             className="grid-cols-2"
           />
           {matches.length ? (
-            <span className="text-xs font-bold text-[#8caab0]">
+            <span className="text-caption font-strong text-content-secondary">
               {matches.length} shown
             </span>
           ) : null}
         </div>
       </div>
-      {query.isLoading ? <HistorySkeleton /> : null}
+      {query.isLoading ? <CenteredSpinner label="Loading match history" /> : null}
       {query.isError ? (
-        <p className="mt-4 text-sm text-red-300">
+        <p className="mt-4 text-body-sm text-status-danger">
           Match history is temporarily unavailable.
         </p>
       ) : null}
       {!query.isLoading && !query.isError && !matches.length ? (
-        <p className="mt-4 text-sm text-[#8caab0]">
+        <p className="mt-4 text-body-sm text-content-secondary">
           {filter === "ranked"
             ? "No ranked matches yet."
             : "No match history yet."}
@@ -266,7 +280,7 @@ export function ProfileHistory({
           {query.isFetchingNextPage ? "Loading…" : "Load more"}
         </Button>
       ) : null}
-    </Surface>
+    </AppPanel>
   );
 }
 
@@ -281,21 +295,8 @@ function MutationError({
 }) {
   if (!mutation.isError) return null;
   return (
-    <p className={`${className} text-xs font-semibold text-red-300`}>
+    <p className={`${className} text-body-sm font-semibold text-status-danger`}>
       {mutation.error instanceof Error ? mutation.error.message : fallback}
     </p>
-  );
-}
-
-function HistorySkeleton() {
-  return (
-    <div className="mt-4 space-y-2">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div
-          key={index}
-          className="h-[76px] animate-pulse rounded-xl bg-white/[0.05]"
-        />
-      ))}
-    </div>
   );
 }

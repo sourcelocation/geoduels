@@ -8,9 +8,12 @@ fi
 
 DB_URL="${MIGRATIONS_DB_URL:-postgres://geoduels:geoduels@127.0.0.1:5432/geoduels?sslmode=disable}"
 
+# Migration 42 is intentionally available only through the historical
+# migration path; the v2 fresh-install schema starts at version 2000.
 version="$(psql "$DB_URL" -X -Atqc "select version from schema_migrations")"
 if [ "$version" != "42" ]; then
-  echo "storage compaction requires schema migration 42; current version: $version"
+  echo "storage compaction requires legacy schema migration 42; current version: $version"
+  echo "on a version-41 database, apply it with: ./scripts/migrate.sh --legacy up 1"
   exit 1
 fi
 

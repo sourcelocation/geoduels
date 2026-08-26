@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { deriveUIPhase } from './uiPhase';
-import type { Snapshot } from '../components/ui/types';
+import type { Snapshot } from '../features/game/model/types';
 
 const baseSnapshot: Snapshot = {
   matchId: 'm1',

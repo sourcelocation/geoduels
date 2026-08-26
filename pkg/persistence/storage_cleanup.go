@@ -194,6 +194,16 @@ func (s *pgStore) CleanupStorage(batchSize int) (StorageCleanupResult, error) {
 	`, batchSize); err != nil {
 		return out, err
 	}
+	var userEventsDeleted int64
+	if err := run(&userEventsDeleted, `
+		delete from user_events where (user_id,sequence) in (
+			select user_id,sequence from user_events
+			where created_at < now()-interval '7 days'
+			order by created_at limit $1
+		)
+	`, batchSize); err != nil {
+		return out, err
+	}
 	if err := run(&out.NotificationOutbox, `
 		delete from notification_outbox where id in (
 			select id from notification_outbox

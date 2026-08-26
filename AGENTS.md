@@ -19,13 +19,14 @@ GeoDuels is a GeoGuessr-style multiplayer game: Next.js web client, account/API 
 
 ## State Stores
 
+- Database migrations are forward-only: add `.up.sql` files and do not add `.down.sql` rollback migrations.
 - PostgreSQL is the durable source of truth for users, identities, auth sessions, profiles, stats, ranks, maps/revisions, parties, chat, moderation, and persisted match data.
 - Redis is for ephemeral coordination: queue/coordinator state, node assignment/liveness, pubsub/presence
 - Shared wire/domain types live in `pkg/contracts`
 
 ## Route Semantics
 
-- `/` is the main lobby/session launcher.
+- `/` is the main session launcher.
 - `/match/[id]` is the canonical route for live reconnects and saved match/history views.
 - `/players/[id]` is the public player profile route.
 - API match bootstrap/session endpoints resolve existing match routes
@@ -33,6 +34,14 @@ GeoDuels is a GeoGuessr-style multiplayer game: Next.js web client, account/API 
 ## Browser Testing
 
 If Chrome/Chromium is not found, use either Edge or Brave Browser.
+
+## Frontend UI Contract
+
+- Read `apps/web/docs/frontend-architecture.md` before changing web UI.
+- Feature and page code must use shared controls and semantic design tokens. Raw `button`, `input`, `textarea`, and `select` elements are forbidden outside their exact `components/ui` primitive owners; clickable `div`/`span` substitutes are forbidden.
+- Do not add raw palette colors, color literals, legacy token aliases, arbitrary visual values, or feature-owned material/control recipes. Inline Tailwind is limited to approved layout and spacing composition.
+- New tokens, primitive ownership, or architecture exceptions are design-system changes: document them and add focused validator self-test coverage in the same change.
+- Before completing frontend work, run `npm --prefix apps/web run lint:architecture:self-test` and `npm --prefix apps/web run lint:architecture:strict` alongside the relevant tests and type-check.
 
 ## Documentation Map
 

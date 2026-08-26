@@ -15,7 +15,9 @@ const (
 	badgeCodeElo1000                = int16(6)
 	badgeCodeElo1500                = int16(7)
 	badgeCodeElo2000                = int16(8)
-	badgeCodeSeasonRank             = int16(10)
+	badgeCodeLegacyTopFinish        = int16(10)
+	badgeCodeTopFinish              = int16(11)
+	badgeCodeEventWinner2026        = int16(12)
 )
 const (
 	DiscordSyncActionSync         = "sync"

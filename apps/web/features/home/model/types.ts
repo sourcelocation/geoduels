@@ -6,21 +6,21 @@ import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 import type {
   GameRuleset,
   MatchConfig,
+  MatchReturnTarget,
   QueueVariant,
   StreetNamesVisibility,
 } from "../../matchmaking/lib/queue-client";
 import type {
-  ChatEmote,
-  ChatMessage,
   RoundResult,
   RoundResultOverlayProps,
   UIPhase,
-} from "../../../components/ui/types";
-import type { PlayerBadgeInfo } from "../../../components/ui/PlayerBadge";
+} from "../../game/model/types";
+import type { ChatEmote, ChatMessage } from "../../chat/model/types";
+import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 import type {
   MatchSidesView,
   PlayerIdentityView,
-} from "../../../components/ui/ParticipantIdentity";
+} from "../../game/components/overlays/ParticipantIdentity";
 
 export type HomeAuthView = {
   userId: string;
@@ -43,10 +43,6 @@ export type HomeAuthView = {
   nicknameSaving: boolean;
   authLoading: boolean;
   authError: string;
-  googleSignInEnabled: boolean;
-  googleClientId: string;
-  discordSignInEnabled?: boolean;
-  discordClientId?: string;
 };
 
 export type HomeLobbyView = {
@@ -60,6 +56,7 @@ export type HomeLobbyView = {
   status: string;
   queueStartedAt: number | null;
   queueError: string;
+  singleplayerError: string;
   onlinePlayers: number;
   canStartSingleplayer: boolean;
   maintenance: MaintenanceStatus | null;
@@ -72,7 +69,6 @@ export type HomeLobbyView = {
     status: PartyRuntimeStatus;
     snapshot: PartySnapshot | null;
     inviteCode: string;
-    isMember: boolean;
     isOwner: boolean;
     busy: boolean;
     error: string;
@@ -112,17 +108,22 @@ export type HomeGameView = {
   canFinalizeGuess: boolean;
   canAdvanceRound: boolean;
   guess: { lat: number; lng: number } | undefined;
+  teammateGuesses: Record<string, { lat: number; lng: number }>;
+  teamPings: import("../../game/model/types").TeamPing[];
   currentRoundId: string;
   currentRoundNumber: number;
   totalRounds?: number;
   userAvatar: string;
   damageMultiplier: number;
+  multiplierMode?: "shared" | "individual";
+  selfDamageMultiplier?: number;
+  oppDamageMultiplier?: number;
   guessSubmitted: boolean;
   opponentGuessAlert: boolean;
   connectionIssue: string;
   modeName: string;
   mapName: string;
-  backLabel?: "Back to lobby" | "Back to party";
+  backLabel?: "Back to lobby" | "Back to party" | "Back to map";
   streetViewInteractive: boolean;
   ruleset: GameRuleset;
   streetNames: StreetNamesVisibility;
@@ -154,7 +155,7 @@ export type HomeOverlaysView = {
         resultPlayerBorderColors: Record<string, string | undefined>;
         participantsById: Record<string, PlayerIdentityView>;
         matchConfig?: MatchConfig;
-        backLabel?: "Back to lobby" | "Back to party";
+        backLabel?: "Back to lobby" | "Back to party" | "Back to map";
       }
     | { open: false };
 };
@@ -164,6 +165,7 @@ export type HomeChatView = {
   messages: ChatMessage[];
   selfUserId: string;
   error: string;
+  teamId?: string;
 };
 
 export type HomeViewModel = {
@@ -175,6 +177,7 @@ export type HomeViewModel = {
   meta: {
     activeMatchId: string;
     sourcePartyInviteCode: string;
+    returnTarget?: MatchReturnTarget;
     appVersion: string;
     maxHP: number;
   };
@@ -182,7 +185,8 @@ export type HomeViewModel = {
 
 export type HomeActions = {
   joinQueue: (queues?: QueueVariant[]) => void;
-  startSingleplayer: (config?: MatchConfig) => Promise<string>;
+  startSingleplayer: (config?: MatchConfig, returnTarget?: MatchReturnTarget) => Promise<string>;
+  clearSingleplayerError: () => void;
   cancelQueue: () => void;
   createParty: (mode?: PartyMode, config?: MatchConfig) => Promise<boolean>;
   joinParty: (inviteCode?: string) => Promise<boolean>;
@@ -193,23 +197,18 @@ export type HomeActions = {
   updatePartySettings: (config: MatchConfig, mode?: PartyMode) => Promise<void>;
   switchPartyTeam: (teamId: PartyTeamId) => Promise<void>;
   placeGuess: (lat: number, lng: number) => void;
+  pingTeam: (lat: number, lng: number) => void;
   finalizeGuess: () => void;
   advanceRound: () => boolean;
   forfeitMatch: () => boolean;
   leaveGame: () => void;
-  sendChatMessage: (body: string) => boolean;
-  sendChatEmote: (emote: ChatEmote) => boolean;
+  sendChatMessage: (body: string, audience?: "all" | "team") => boolean;
+  sendChatEmote: (emote: ChatEmote, audience?: "all" | "team") => boolean;
   reportPlayer: (
     reportedUserId: string,
     category?: string,
     reason?: string,
   ) => Promise<void>;
-  devLogin: () => Promise<unknown>;
-  triggerGoogleSignIn: () => Promise<void>;
-  triggerDiscordSignIn?: () => Promise<void>;
-  linkAuthProvider: (provider: "google" | "discord") => Promise<void>;
-  upgradeGuestWithProvider: (provider: "google" | "discord") => Promise<void>;
-  unlinkAuthProvider: (provider: "google" | "discord") => Promise<void>;
   loadLeaderboard: () => void;
   clearAuthSession: (message?: string) => void;
   deleteAccount: () => Promise<void>;

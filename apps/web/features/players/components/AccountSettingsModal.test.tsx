@@ -18,9 +18,29 @@ const mocks = vi.hoisted(() => ({
   requestGoogleStart: vi.fn(),
   requestDiscordStart: vi.fn(),
   routerPush: vi.fn(),
+  authState: {
+    status: "registered",
+    session: { accessToken: "access-token", linkedProviders: ["google", "discord"] },
+    accessToken: "access-token",
+    userId: "player-1",
+    isGuest: false,
+    isRegistered: true,
+    isAdmin: false,
+    isModerator: false,
+    displayName: "Atlas",
+    avatarUrl: "",
+    email: "atlas@example.com",
+    canPlayUnranked: true,
+    canPlayRanked: true,
+    canUseSocial: true,
+    canManageMaps: true,
+  },
 }));
 
 vi.mock("../../auth/lib/auth-client", () => mocks);
+vi.mock("../../auth/components/AuthProvider", () => ({
+  useAuthState: () => mocks.authState,
+}));
 vi.mock("next/router", () => ({
   useRouter: () => ({ push: mocks.routerPush }),
 }));
@@ -75,7 +95,7 @@ describe("AccountSettingsModal", () => {
       screen.getByRole("dialog", { name: "Account settings" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("atlas@example.com")).toBeInTheDocument();
-    expect(mocks.requestSession).toHaveBeenCalledTimes(1);
+    expect(mocks.requestSession).not.toHaveBeenCalled();
     expect(mocks.requestMe).toHaveBeenCalledWith(
       expect.any(Object),
       "access-token",
@@ -110,10 +130,15 @@ describe("AccountSettingsModal", () => {
     mocks.requestDeleteAccount.mockResolvedValue(undefined);
     renderModal();
     await screen.findByText("atlas@example.com");
+    const disclosure = screen.getByRole("button", { name: /Delete account Permanently remove/ });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText("Confirmation")).not.toBeInTheDocument();
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
     expect(
       screen.getByRole("button", { name: "Delete account" }),
     ).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText("Type DELETE"), {
+    fireEvent.change(screen.getByLabelText("Confirmation"), {
       target: { value: "DELETE" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Delete account" }));

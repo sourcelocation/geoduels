@@ -3,13 +3,20 @@ package persistence
 import (
 	"context"
 	"errors"
-	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"geoduels/pkg/contracts"
+)
+
+var (
+	ErrBadgeNicknameRequired = errors.New("nickname required")
+	ErrBadgeUserNotFound     = errors.New("user not found")
+	ErrBadgeUnavailable      = errors.New("badge unavailable for manual grant")
 )
 
 type badgeDefinition struct {
@@ -20,83 +27,76 @@ type badgeDefinition struct {
 	Description  string
 	ImageURL     string
 	Rarity       string
+	MaxLevel     int16
 	Unobtainable bool
+	// AdminGrantable is the sole policy for the admin catalog. It is reserved
+	// for manual/event awards whose ownership is not synchronized from a role,
+	// rank, or historical result.
+	AdminGrantable bool
 }
 
 var badgeDefinitions = []badgeDefinition{
 	{
-		ID:           "discord-member",
-		Code:         badgeCodeDiscordMember,
-		Kind:         "community",
-		Label:        "Discord Member",
-		Description:  "Retired badge previously awarded for linking Discord to your GeoDuels account.",
-		ImageURL:     "/medals/discord-medal.v1.png",
-		Rarity:       "common",
-		Unobtainable: true,
+		ID: "discord-member", Code: badgeCodeDiscordMember, Kind: "community",
+		Label: "Discord Member", Description: "Retired badge previously awarded for linking Discord to your GeoDuels account.",
+		ImageURL: "/badges/discord-badge.v1.png", Rarity: "common", MaxLevel: 1, Unobtainable: true,
 	},
 	{
-		ID:          "geoduels-team",
-		Code:        badgeCodeGeoDuelsTeam,
-		Kind:        "special",
-		Label:       "GeoDuels Team",
-		Description: "An exclusive medal for GeoDuels moderators and team members.",
-		ImageURL:    "/medals/team-badge.v1.png",
-		Rarity:      "special",
+		ID: "geoduels-team", Code: badgeCodeGeoDuelsTeam, Kind: "special",
+		Label: "GeoDuels Team", Description: "An exclusive medal for GeoDuels moderators and team members.",
+		ImageURL: "/badges/team-badge.v1.png", Rarity: "special", MaxLevel: 1,
 	},
 	{
-		ID:          "discord-server-member",
-		Code:        badgeCodeDiscordServerMember,
-		Kind:        "community",
-		Label:       "Discord Server Member",
-		Description: "Awarded for joining the official GeoDuels Discord server.",
-		ImageURL:    "/medals/discord-new-badge.v1.png",
-		Rarity:      "common",
+		ID: "discord-server-member", Code: badgeCodeDiscordServerMember, Kind: "community",
+		Label: "Discord Server Member", Description: "Awarded for joining the official GeoDuels Discord server.",
+		ImageURL: "/badges/discord-new-badge.v1.png", Rarity: "common", MaxLevel: 1,
 	},
 	{
-		ID:          "supporter",
-		Code:        badgeCodeSupporter,
-		Kind:        "supporter",
-		Label:       "Supporter",
-		Description: "Awarded for supporting GeoDuels.",
-		ImageURL:    "/medals/supporter-badge.v2.png",
-		Rarity:      "rare",
+		ID: "supporter", Code: badgeCodeSupporter, Kind: "supporter",
+		Label: "Supporter", Description: "Awarded for supporting GeoDuels.",
+		ImageURL: "/badges/supporter-badge.v1.png", Rarity: "rare", MaxLevel: 1, AdminGrantable: true,
 	},
 	{
-		ID:          "speedrunner",
-		Code:        badgeCodeSpeedrunner,
-		Kind:        "achievement",
-		Label:       "Speedrunner",
-		Description: "Awarded for scoring 5000 points in under 30 seconds in ranked.",
-		ImageURL:    "/medals/speedrunner-badge.v2.png",
-		Rarity:      "epic",
+		ID: "speedrunner", Code: badgeCodeSpeedrunner, Kind: "achievement",
+		Label: "Speedrunner", Description: "Awarded for scoring 5000 points in under 30 seconds in ranked.",
+		ImageURL: "/badges/speedrunner-badge.v1.png", Rarity: "epic", MaxLevel: 1, AdminGrantable: true,
 	},
 	{
-		ID:          "elo-1000",
-		Code:        badgeCodeElo1000,
-		Kind:        "ranked",
-		Label:       "1000 Elo",
-		Description: "Awarded for reaching 1000 Elo.",
-		ImageURL:    "/medals/1k-medal.v1.png",
-		Rarity:      "common",
+		ID: "elo-1000", Code: badgeCodeElo1000, Kind: "ranked",
+		Label: "1000 Elo", Description: "Awarded for reaching 1000 Elo.",
+		ImageURL: "/badges/1k-badge.v1.png", Rarity: "common", MaxLevel: 1,
 	},
 	{
-		ID:          "elo-1500",
-		Code:        badgeCodeElo1500,
-		Kind:        "ranked",
-		Label:       "1500 Elo",
-		Description: "Awarded for reaching 1500 Elo.",
-		ImageURL:    "/medals/1.5k-medal.v1.png",
-		Rarity:      "rare",
+		ID: "elo-1500", Code: badgeCodeElo1500, Kind: "ranked",
+		Label: "1500 Elo", Description: "Awarded for reaching 1500 Elo.",
+		ImageURL: "/badges/1.5k-badge.v1.png", Rarity: "rare", MaxLevel: 1,
 	},
 	{
-		ID:          "elo-2000",
-		Code:        badgeCodeElo2000,
-		Kind:        "ranked",
-		Label:       "2000 Elo",
-		Description: "Awarded for reaching 2000 Elo.",
-		ImageURL:    "/medals/2k-medal.v1.png",
-		Rarity:      "legendary",
+		ID: "elo-2000", Code: badgeCodeElo2000, Kind: "ranked",
+		Label: "2000 Elo", Description: "Awarded for reaching 2000 Elo.",
+		ImageURL: "/badges/2k-badge.v1.png", Rarity: "legendary", MaxLevel: 1,
 	},
+	{
+		ID: "geoduels-v1-top-finish", Code: badgeCodeLegacyTopFinish, Kind: "legacy_top_finish",
+		Label: "GeoDuels V1 Top Finish", Description: "Finished in the global top 100 during GeoDuels V1.",
+		ImageURL: "/badges/geoduels-v1-top-finish-badge.v1.png", Rarity: "legendary", MaxLevel: 1, Unobtainable: true,
+	},
+	{
+		ID: "top-finish", Code: badgeCodeTopFinish, Kind: "top_finish",
+		Label: "Top Finisher", Description: "Finished in the global top 100.",
+		ImageURL: "/badges/top-finish-1-badge.v1.png", Rarity: "legendary", MaxLevel: 3,
+	},
+	{
+		ID: "event-winner-2026", Code: badgeCodeEventWinner2026, Kind: "event",
+		Label: "2026 Event Winner", Description: "Awarded for winning the official GeoDuels 2026 Tournament.",
+		ImageURL: "/badges/event-winner-2026-badge.v1.png", Rarity: "legendary", MaxLevel: 1, AdminGrantable: true,
+	},
+}
+
+var topFinishImageByLevel = map[int16]string{
+	1: "/badges/top-finish-1-badge.v1.png",
+	2: "/badges/top-finish-2-badge.v1.png",
+	3: "/badges/top-finish-3-badge.v1.png",
 }
 
 func badgeDefinitionByID(id string) (badgeDefinition, bool) {
@@ -121,216 +121,254 @@ func badgeDefinitionByCode(code int16) (badgeDefinition, bool) {
 func badgeTemplates() []contracts.PlayerBadge {
 	out := []contracts.PlayerBadge{}
 	for _, def := range badgeDefinitions {
-		if def.Unobtainable {
-			continue
+		if !def.Unobtainable {
+			out = append(out, badgeFromParts(def.Code, 1, 0, false))
 		}
-		out = append(out, badgeFromDefinition(def, false))
 	}
 	return out
 }
 
-func seasonRankBadgeTemplate(seasonID string) contracts.PlayerBadge {
-	displaySeason := seasonBadgeDisplayName(seasonID)
-	return contracts.PlayerBadge{
-		ID:          seasonRankBadgeID(seasonID),
-		Kind:        "season_rank",
-		Label:       displaySeason + " Top 100",
-		Description: "Awarded to players who finish in the top 100 when " + displaySeason + " ends.",
-		ImageURL:    "/medals/platinum-medal.v1.png",
-		Rarity:      "legendary",
-		SeasonID:    seasonID,
-		Owned:       false,
+func (s *pgStore) ListAdminGrantableBadges() []AdminBadgeDefinition {
+	out := make([]AdminBadgeDefinition, 0)
+	for _, def := range badgeDefinitions {
+		if !def.AdminGrantable {
+			continue
+		}
+		out = append(out, AdminBadgeDefinition{
+			ID: def.ID, Kind: def.Kind, Label: def.Label, Description: def.Description,
+			ImageURL: def.ImageURL, Rarity: def.Rarity, MaxLevel: int(def.MaxLevel),
+		})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
-func seasonRankBadgeID(seasonID string) string {
-	return "season-" + strings.TrimSpace(seasonID) + "-top-100"
-}
-
-type badgeRef struct {
-	Code     int16
-	SeasonID string
-}
-
-func badgeRefFromID(id string) (badgeRef, bool) {
-	id = strings.TrimSpace(id)
-	switch id {
-	case "":
-		return badgeRef{}, true
-	default:
-		if def, ok := badgeDefinitionByID(id); ok {
-			return badgeRef{Code: def.Code}, true
-		}
-		if strings.HasPrefix(id, "season-") && strings.HasSuffix(id, "-top-100") {
-			seasonID := strings.TrimSuffix(strings.TrimPrefix(id, "season-"), "-top-100")
-			if strings.TrimSpace(seasonID) == "" {
-				return badgeRef{}, false
-			}
-			return badgeRef{Code: badgeCodeSeasonRank, SeasonID: seasonID}, true
-		}
-		return badgeRef{}, false
+func badgeRefFromID(id string) (int16, bool) {
+	if strings.TrimSpace(id) == "" {
+		return 0, true
 	}
+	def, ok := badgeDefinitionByID(id)
+	if !ok {
+		return 0, false
+	}
+	return def.Code, true
 }
 
-func badgeIDFromParts(code int16, seasonID string) string {
-	if code == badgeCodeSeasonRank {
-		if strings.TrimSpace(seasonID) != "" {
-			return seasonRankBadgeID(seasonID)
-		}
+func badgeIDFromCode(code int16) string {
+	def, ok := badgeDefinitionByCode(code)
+	if !ok {
 		return ""
 	}
-	if def, ok := badgeDefinitionByCode(code); ok {
-		return def.ID
-	}
-	return ""
+	return def.ID
 }
 
-func badgeFromDefinition(def badgeDefinition, owned bool) contracts.PlayerBadge {
-	return contracts.PlayerBadge{
+func badgeImageURL(def badgeDefinition, level int16) string {
+	if def.Code != badgeCodeTopFinish {
+		return def.ImageURL
+	}
+	if level < 1 {
+		level = 1
+	}
+	if level > def.MaxLevel {
+		level = def.MaxLevel
+	}
+	return topFinishImageByLevel[level]
+}
+
+func badgeFromParts(code, level, extra int16, owned bool) contracts.PlayerBadge {
+	def, ok := badgeDefinitionByCode(code)
+	if !ok {
+		return contracts.PlayerBadge{}
+	}
+	if level < 1 {
+		level = 1
+	}
+	if def.MaxLevel > 0 && level > def.MaxLevel {
+		level = def.MaxLevel
+	}
+	badge := contracts.PlayerBadge{
 		ID:           def.ID,
 		Kind:         def.Kind,
 		Label:        def.Label,
 		Description:  def.Description,
-		ImageURL:     def.ImageURL,
+		ImageURL:     badgeImageURL(def, level),
 		Rarity:       def.Rarity,
+		Level:        int(level),
+		MaxLevel:     int(def.MaxLevel),
 		Owned:        owned,
 		Unobtainable: def.Unobtainable,
 	}
+	if extra > 0 {
+		badge.Extra = int(extra)
+	}
+	if code == badgeCodeTopFinish && level > 1 {
+		badge.Label = def.Label + " (" + strconv.Itoa(int(level)) + ")"
+	}
+	return badge
 }
 
-func badgeFromParts(code int16, seasonID string, rank int, owned bool) (contracts.PlayerBadge, bool) {
-	if code == badgeCodeSeasonRank {
-		badge := seasonRankBadgeTemplate(seasonID)
-		badge.Rank = rank
-		badge.Owned = owned
-		if owned && rank > 0 {
-			displaySeason := seasonBadgeDisplayName(seasonID)
-			badge.Label = displaySeason + " #" + fmt.Sprint(rank)
-			badge.Description = "Finished #" + fmt.Sprint(rank) + " in " + displaySeason + "."
-		}
-		return badge, strings.TrimSpace(seasonID) != ""
-	}
-	if def, ok := badgeDefinitionByCode(code); ok {
-		return badgeFromDefinition(def, owned), true
-	}
-	return contracts.PlayerBadge{}, false
-}
-
-func seasonBadgeDisplayName(seasonID string) string {
-	switch strings.TrimSpace(seasonID) {
-	case "s2":
-		return "Season 1"
-	case "s2.5":
-		return "Season 2"
-	default:
-		value := strings.TrimPrefix(strings.TrimSpace(seasonID), "s")
-		if value == "" {
-			return "Season"
-		}
-		return "Season " + strings.ToUpper(value)
-	}
-}
-
-func (s *pgStore) earnedSeasonRankBadges(ctx context.Context, userIDs []string) (map[string][]contracts.PlayerBadge, error) {
-	if len(userIDs) == 0 {
-		return map[string][]contracts.PlayerBadge{}, nil
-	}
-	activeSeasonID, err := activeSeasonIDTx(ctx, s.pool)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(ctx, `
-		with ranked as (
-			select
-				r.user_id,
-				r.season_id,
-				row_number() over (
-					partition by r.season_id
-					order by r.mmr desc, r.updated_at asc, r.user_id asc
-				)::int as rank
-			from ranks r
-			join users u on u.id = r.user_id
-			where r.mode = $1
-				and r.season_id <> $2
-				and coalesce(u.account_type, 'registered') <> 'guest'
-				and not coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false)
-		)
-		select user_id, season_id, rank
-		from ranked
-		where user_id = any($3)
-			and rank between 1 and 100
-		order by user_id asc, season_id desc
-	`, modeDuel, activeSeasonID, userIDs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string][]contracts.PlayerBadge{}
-	for rows.Next() {
-		var userID, seasonID string
-		var rank int
-		if err := rows.Scan(&userID, &seasonID, &rank); err != nil {
-			return nil, err
-		}
-		badge, ok := badgeFromParts(badgeCodeSeasonRank, seasonID, rank, true)
-		if !ok {
-			continue
-		}
-		out[userID] = append(out[userID], badge)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func awardBadgeTx(ctx context.Context, tx pgx.Tx, userID, badgeID string) (bool, error) {
-	ref, ok := badgeRefFromID(badgeID)
-	if !ok || ref.Code == 0 || ref.Code == badgeCodeSeasonRank {
-		return false, errors.New("badge unavailable")
-	}
-	tag, err := tx.Exec(ctx, `
-		insert into user_badges(user_id, badge_code)
-		values(
-			$1,
-			$2
-		)
-		on conflict (user_id, badge_code, badge_season_id) do nothing
-	`, userID, ref.Code)
-	if err != nil {
-		return false, err
-	}
-	awarded := tag.RowsAffected() > 0
-	if !awarded {
-		return false, nil
-	}
-	badge, ok := badgeFromParts(ref.Code, ref.SeasonID, 0, true)
-	if !ok {
-		return false, nil
-	}
+func notifyBadgeUnlock(ctx context.Context, tx pgx.Tx, userID string, badge contracts.PlayerBadge) (bool, error) {
 	var notificationID int64
-	if err := upsertUserNotification(ctx, tx, userID, "badge_unlocked", "badge_unlocked:"+userID+":"+badge.ID, map[string]any{
-		"badge": badge,
-	}, &notificationID); err != nil {
+	key := "badge_unlocked:" + userID + ":" + badge.ID + ":" + strconv.Itoa(badge.Level)
+	if err := upsertUserNotification(ctx, tx, userID, "badge_unlocked", key, map[string]any{"badge": badge}, &notificationID); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
+func upsertBadgeTx(ctx context.Context, tx pgx.Tx, userID string, code, level, extra int16, notify bool) (bool, error) {
+	def, ok := badgeDefinitionByCode(code)
+	if !ok || code == 0 {
+		return false, errors.New("badge unavailable")
+	}
+	if level < 1 {
+		level = 1
+	}
+	if def.MaxLevel > 0 && level > def.MaxLevel {
+		level = def.MaxLevel
+	}
+	var oldLevel, oldExtra int16
+	err := tx.QueryRow(ctx, `
+		select level, coalesce(extra, 0)
+		from user_badges
+		where user_id = $1 and badge_code = $2
+		for update
+	`, userID, code).Scan(&oldLevel, &oldExtra)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, err := tx.Exec(ctx, `
+			insert into user_badges(user_id, badge_code, level, extra, awarded_at, updated_at)
+			values($1, $2, $3, nullif($4, 0), now(), now())
+		`, userID, code, level, extra); err != nil {
+			return false, err
+		}
+		if notify {
+			return notifyBadgeUnlock(ctx, tx, userID, badgeFromParts(code, level, extra, true))
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if level <= oldLevel && extra <= oldExtra {
+		return false, nil
+	}
+	if level < oldLevel {
+		level = oldLevel
+	}
+	if extra < oldExtra {
+		extra = oldExtra
+	}
+	if _, err := tx.Exec(ctx, `
+		update user_badges
+		set level = $3, extra = nullif($4, 0), updated_at = now()
+		where user_id = $1 and badge_code = $2
+	`, userID, code, level, extra); err != nil {
+		return false, err
+	}
+	if notify && level > oldLevel {
+		return notifyBadgeUnlock(ctx, tx, userID, badgeFromParts(code, level, extra, true))
+	}
+	return true, nil
+}
+
+func awardBadgeTx(ctx context.Context, tx pgx.Tx, userID, badgeID string) (bool, error) {
+	code, ok := badgeRefFromID(badgeID)
+	if !ok || code == 0 || code == badgeCodeLegacyTopFinish || code == badgeCodeTopFinish {
+		return false, errors.New("badge unavailable")
+	}
+	return upsertBadgeTx(ctx, tx, userID, code, 1, 0, true)
+}
+
+func (s *pgStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.PlayerBadge, bool, error) {
+	nickname = strings.TrimSpace(nickname)
+	actorUserID = strings.TrimSpace(actorUserID)
+	def, ok := badgeDefinitionByID(badgeID)
+	if nickname == "" {
+		return contracts.PlayerBadge{}, false, ErrBadgeNicknameRequired
+	}
+	if !ok || !def.AdminGrantable {
+		return contracts.PlayerBadge{}, false, ErrBadgeUnavailable
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return contracts.PlayerBadge{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	var userID string
+	if err := tx.QueryRow(ctx, `
+		select id
+		from users
+		where nickname_claimed_at is not null
+		  and lower(display_name) = lower($1)
+	`, nickname).Scan(&userID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return contracts.PlayerBadge{}, false, err
+	}
+	if userID == "" {
+		return contracts.PlayerBadge{}, false, ErrBadgeUserNotFound
+	}
+	changed, err := upsertBadgeTx(ctx, tx, userID, def.Code, 1, 0, true)
+	if err != nil {
+		return contracts.PlayerBadge{}, false, err
+	}
+	var level, extra int16
+	if err := tx.QueryRow(ctx, `
+		select level, coalesce(extra, 0) from user_badges where user_id = $1 and badge_code = $2
+	`, userID, def.Code).Scan(&level, &extra); err != nil {
+		return contracts.PlayerBadge{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into moderation_log(subject_user_id, actor_user_id, action, reason, metadata)
+		values($1, nullif($2, '')::uuid, 'badge_granted', null, jsonb_build_object('badgeId', $3::text, 'source', 'admin'))
+	`, userID, actorUserID, def.ID); err != nil {
+		return contracts.PlayerBadge{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.PlayerBadge{}, false, err
+	}
+	return badgeFromParts(def.Code, level, extra, true), changed, nil
+}
+
+func awardTopFinishTx(ctx context.Context, tx pgx.Tx, userID string) (bool, error) {
+	var count int16
+	err := tx.QueryRow(ctx, `
+		select coalesce(extra, 0) + 1
+		from user_badges
+		where user_id = $1 and badge_code = $2
+		for update
+	`, userID, badgeCodeTopFinish).Scan(&count)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return upsertBadgeTx(ctx, tx, userID, badgeCodeTopFinish, 1, 1, true)
+	}
+	if err != nil {
+		return false, err
+	}
+	level := topFinishLevel(count)
+	return upsertBadgeTx(ctx, tx, userID, badgeCodeTopFinish, level, count, true)
+}
+
+func topFinishLevel(count int16) int16 {
+	if count < 1 {
+		return 1
+	}
+	if count > 3 {
+		return 3
+	}
+	return count
+}
+
 func removeGeoDuelsTeamBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
 	if _, err := tx.Exec(ctx, `
 		update users
-		set selected_badge_code = null,
-			selected_badge_season_id = ''
-		where id = $1
-			and selected_badge_code = $2
+		set selected_badge_code = null
+		where id = $1 and selected_badge_code = $2
 	`, userID, badgeCodeGeoDuelsTeam); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `
 		delete from user_badges
-		where user_id = $1
-			and badge_code = $2
+		where user_id = $1 and badge_code = $2
 	`, userID, badgeCodeGeoDuelsTeam)
 	return err
 }
@@ -357,14 +395,7 @@ func (s *pgStore) SyncLoginBadges(userID string) error {
 		select
 			coalesce(u.account_type = 'guest', false),
 			coalesce(u.is_admin, false)
-				or coalesce(u.is_moderator, false)
-				or exists (
-					select 1
-					from user_roles ur
-					where ur.user_id = u.id
-					  and ur.role in ('admin', 'moderator')
-					  and ur.revoked_at is null
-				),
+				or coalesce(u.is_moderator, false),
 			coalesce(r.mmr, $3)
 		from users u
 		left join ranks r on r.user_id = u.id and r.mode = $2 and r.season_id = $4

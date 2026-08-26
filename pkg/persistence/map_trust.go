@@ -171,15 +171,10 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 
 	var activeSanction bool
 	if err := tx.QueryRow(ctx, `
-		select exists(
-			select 1
-			from enforcement_actions
-			where target_user_id=$1
-			  and action_type in ('temporary_ban','permanent_ban','report_mute')
-			  and starts_at<=now()
-			  and (ends_at is null or ends_at>now())
-			  and revoked_at is null
-		)
+		select coalesce(
+			report_muted_at is not null and (report_mute_expires_at is null or report_mute_expires_at > now()),
+			false
+		) from users where id=$1
 	`, userID).Scan(&activeSanction); err != nil {
 		return contracts.MapUploadQuota{}, err
 	}

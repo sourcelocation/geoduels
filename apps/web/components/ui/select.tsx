@@ -2,26 +2,30 @@ import * as React from "react";
 
 import { cn } from "../../lib/cn";
 
-type FieldVariant = "operational" | "game";
+export type FieldVariant = "operational" | "game";
 
 const variantClass: Record<FieldVariant, string> = {
-  operational: "border-slate-700 bg-slate-950 text-slate-100 focus:border-emerald-400",
-  game: "border-white/10 bg-[#101a20]/90 text-white focus:border-accentPrimary/60",
+  operational: "border-border-default bg-surface-grouped text-content-primary focus:border-border-focus focus:bg-surface-fill",
+  game: "border-border-default bg-surface-grouped text-content-primary focus:border-border-focus focus:bg-surface-fill",
 };
 
 export type SelectProps = React.SelectHTMLAttributes<HTMLSelectElement> & {
   variant?: FieldVariant;
 };
 
-export function Select({ className, variant = "operational", ...props }: SelectProps) {
+export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(function Select(
+  { className, variant = "operational", ...props },
+  ref,
+) {
   return (
     <select
+      ref={ref}
       className={cn(
-        "min-h-10 rounded-md border px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-50",
+        "min-h-11 rounded-md border px-3.5 text-body-sm outline-none transition focus-visible:ring-2 focus-visible:ring-border-focus/40 disabled:cursor-not-allowed disabled:opacity-50",
         variantClass[variant],
         className,
       )}
       {...props}
     />
   );
-}
+});

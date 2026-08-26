@@ -1,5 +1,5 @@
-import { RESULT_ANIMATION_CONFIG } from '../../../components/ui/round-result-animation-config';
-import type { ResultPhase } from '../../../components/ui/types';
+import { RESULT_ANIMATION_CONFIG } from './round-result-animation-config';
+import type { ResultPhase } from '../model/types';
 
 export class ResultAnimation {
   private timers: Array<ReturnType<typeof setTimeout>> = [];

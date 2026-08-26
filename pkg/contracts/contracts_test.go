@@ -41,6 +41,46 @@ func TestClientSnapshotForPlayerKeepsLiveGuessesOutOfSharedPlayers(t *testing.T)
 	}
 }
 
+func TestClientSnapshotForPlayerIncludesIndividualDamageMultipliers(t *testing.T) {
+	snap := &MatchSnapshot{
+		Players: map[string]PlayerState{
+			"u1": {UserID: "u1", DamageMultiplier: 2},
+			"u2": {UserID: "u2", DamageMultiplier: 1.5},
+		},
+	}
+
+	client := ClientSnapshotForPlayer(snap, "u1")
+
+	if got := client.Players["u1"].DamageMultiplier; got != 2 {
+		t.Fatalf("own DamageMultiplier = %v, want 2", got)
+	}
+	if got := client.Players["u2"].DamageMultiplier; got != 1.5 {
+		t.Fatalf("opponent DamageMultiplier = %v, want 1.5", got)
+	}
+	encoded, err := json.Marshal(client)
+	if err != nil {
+		t.Fatalf("marshal client snapshot: %v", err)
+	}
+	if payload := string(encoded); !strings.Contains(payload, `"damageMultiplier":2`) || !strings.Contains(payload, `"damageMultiplier":1.5`) {
+		t.Fatalf("expected individual damage multipliers in client payload, got %s", payload)
+	}
+}
+
+func TestClientSnapshotForPlayerSharesOnlyTeammateGuesses(t *testing.T) {
+	snap := &MatchSnapshot{Mode: ModeTeamDuel, Phase: PhaseLive, RoundPhase: RoundPhaseLive, Players: map[string]PlayerState{
+		"self":  {UserID: "self", TeamID: "a"},
+		"mate":  {UserID: "mate", TeamID: "a", HasGuess: true, LastGuessLat: 12, LastGuessLng: 34},
+		"enemy": {UserID: "enemy", TeamID: "b", HasGuess: true, LastGuessLat: 56, LastGuessLng: 78},
+	}}
+	client := ClientSnapshotForPlayer(snap, "self")
+	if client.Team == nil || client.Team.Guesses["mate"].Lat != 12 {
+		t.Fatalf("expected teammate guess, got %#v", client.Team)
+	}
+	if _, ok := client.Team.Guesses["enemy"]; ok {
+		t.Fatal("opponent guess leaked into private team state")
+	}
+}
+
 func TestClientSnapshotForPlayerStripsLiveRoundCoordinatesAndKeepsPanoID(t *testing.T) {
 	panoID := "pano-123"
 	heading := 90.0
@@ -144,6 +184,31 @@ func TestNormalizeMatchConfigDoesNotChooseMap(t *testing.T) {
 	}
 	if config.StreetNames != StreetNamesShown {
 		t.Fatalf("StreetNames = %q, want %q", config.StreetNames, StreetNamesShown)
+	}
+	if config.MultiplierMode != MultiplierShared {
+		t.Fatalf("MultiplierMode = %q, want %q", config.MultiplierMode, MultiplierShared)
+	}
+}
+
+func TestNormalizeMatchReturnTargetDoesNotInferFromMatchConfig(t *testing.T) {
+	target := NormalizeMatchReturnTarget(nil)
+	if target.Kind != MatchReturnHome {
+		t.Fatalf("nil target kind = %q, want home", target.Kind)
+	}
+	mapTarget := NormalizeMatchReturnTarget(&MatchReturnTarget{Kind: MatchReturnMap, MapID: "map-1"})
+	if mapTarget.Kind != MatchReturnMap || mapTarget.MapID != "map-1" {
+		t.Fatalf("map target = %+v", mapTarget)
+	}
+	invalid := NormalizeMatchReturnTarget(&MatchReturnTarget{Kind: MatchReturnMap})
+	if invalid.Kind != MatchReturnHome {
+		t.Fatalf("invalid map target kind = %q, want home", invalid.Kind)
+	}
+}
+
+func TestNormalizeMatchConfigKeepsIndividualMultipliers(t *testing.T) {
+	config := NormalizeMatchConfig(MatchConfig{MultiplierMode: MultiplierIndividual})
+	if config.MultiplierMode != MultiplierIndividual {
+		t.Fatalf("MultiplierMode = %q, want %q", config.MultiplierMode, MultiplierIndividual)
 	}
 }
 

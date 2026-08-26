@@ -86,10 +86,13 @@ describe("party-client", () => {
       }),
     }) as Response) as typeof fetch;
 
-    await fetchParty(runtimeConfig, "ABC123");
+    await fetchParty(runtimeConfig, "ABC123", "access-token");
 
     expect(global.fetch).toHaveBeenCalledWith(
       "http://coordinator.example.test/parties/ABC123",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer access-token" },
+      }),
     );
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Snapshot } from "../../../components/ui/types";
+import type { Snapshot } from "../../game/model/types";
 import type { PartyRuntimeState } from "../../lobby/controllers/party-controller";
 import type { MatchState } from "../../matchmaking/controllers/match-controller";
 import { selectActiveChatConversationId } from "./chat-scope";
@@ -10,6 +10,7 @@ function partyState(patch: Partial<PartyRuntimeState> = {}): PartyRuntimeState {
     partyId: "",
     inviteCode: "",
     snapshot: null,
+    self: null,
     error: "",
     ...patch,
   };
@@ -29,8 +30,10 @@ function matchState(patch: Partial<MatchState> = {}): MatchState {
     sourcePartyId: "",
     sourcePartyInviteCode: "",
     queueError: "",
+    singleplayerError: "",
     connectionIssue: "",
     onlinePlayers: 0,
+    teamPings: [],
     ...patch,
   };
 }
@@ -74,6 +77,12 @@ describe("selectActiveChatConversationId", () => {
                 connected: true,
               },
             ],
+          },
+          self: {
+            userId: "u1",
+            displayName: "One",
+            role: "owner",
+            connected: true,
           },
         }),
         match: matchState(),

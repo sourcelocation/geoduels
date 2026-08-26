@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRuntimeConfigFixture } from '../../../test/runtime-config.fixture';
-import { bootstrapMatchSession, fetchMatchSession, resolveMatchRoute } from './queue-client';
+import { bootstrapMatchSession, fetchMatchSession, normalizeMatchReturnTarget, resolveMatchRoute } from './queue-client';
 
 describe('queue-client match bootstrap', () => {
   const originalFetch = global.fetch;
   const runtimeConfig = createRuntimeConfigFixture();
+
+  it('accepts only symbolic match return targets', () => {
+    expect(normalizeMatchReturnTarget({ kind: 'home', mapId: 'ignored' })).toEqual({ kind: 'home' });
+    expect(normalizeMatchReturnTarget({ kind: 'map', mapId: 'map-1' })).toEqual({ kind: 'map', mapId: 'map-1' });
+    expect(normalizeMatchReturnTarget({ kind: 'map' })).toBeUndefined();
+  });
 
   afterEach(() => {
     global.fetch = originalFetch;

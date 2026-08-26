@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/sync/errgroup"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"geoduels/pkg/contracts"
 )
@@ -16,21 +16,19 @@ func (s *pgStore) ListUserRoles() ([]UserRoleGrant, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		select
-			ur.user_id,
-			coalesce(nullif(u.display_name, ''), u.id::text),
-			coalesce(u.email, ''),
-			ur.role,
-			coalesce(ur.granted_by::text, ''),
-			ur.granted_at,
-			ur.revoked_at,
-			coalesce(ur.reason, '')
-		from user_roles ur
-		left join users u on u.id = ur.user_id
-		where ur.revoked_at is null
-		order by
-			case ur.role when 'admin' then 0 when 'moderator' then 1 else 2 end,
-			ur.granted_at desc
+		select u.id, coalesce(nullif(u.display_name, ''), u.id::text), coalesce(u.email, ''),
+			case when u.is_admin then 'admin' else 'moderator' end,
+			coalesce(last_grant.actor_user_id::text, ''), coalesce(last_grant.created_at, u.created_at),
+			null::timestamptz, coalesce(last_grant.reason, '')
+		from users u
+		left join lateral (
+			select actor_user_id, created_at, reason
+			from moderation_log
+			where subject_user_id = u.id and action = 'role_granted'
+			order by created_at desc, id desc limit 1
+		) last_grant on true
+		where u.is_admin or u.is_moderator
+		order by u.is_admin desc, coalesce(last_grant.created_at, u.created_at) desc
 	`)
 	if err != nil {
 		return nil, err
@@ -90,12 +88,9 @@ func (s *pgStore) GrantUserRole(userID, role, grantedBy, reason string) error {
 		return errors.New("user not found")
 	}
 	if _, err := tx.Exec(ctx, `
-		insert into user_roles(user_id, role, granted_by, granted_at, reason)
-		values($1, $2, nullif($3, '')::uuid, now(), nullif($4, ''))
-		on conflict (user_id, role) where revoked_at is null do update set
-			granted_by = excluded.granted_by,
-			reason = excluded.reason
-	`, userID, role, strings.TrimSpace(grantedBy), strings.TrimSpace(reason)); err != nil {
+		insert into moderation_log(subject_user_id, actor_user_id, action, reason, metadata)
+		values($1, nullif($2, '')::uuid, 'role_granted', nullif($3, ''), jsonb_build_object('role', $4::text))
+	`, userID, strings.TrimSpace(grantedBy), strings.TrimSpace(reason), role); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -117,24 +112,10 @@ func (s *pgStore) RevokeUserRole(userID, role, revokedBy, reason string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `
-		update user_roles
-		set revoked_at = coalesce(revoked_at, now()),
-			reason = coalesce(nullif($3, ''), reason)
-		where user_id = $1 and role = $2 and revoked_at is null
-	`, userID, role, strings.TrimSpace(reason)); err != nil {
-		return err
-	}
 	tag, err := tx.Exec(ctx, `
 		update users
 		set is_admin = case when $2 = 'admin' then false else is_admin end,
-			is_moderator = case
-				when not exists (
-					select 1 from user_roles
-					where user_id = $1 and role in ('admin', 'moderator') and revoked_at is null
-				) then false
-				else is_moderator
-			end
+			is_moderator = case when $2 = 'admin' then false when is_admin then true else false end
 		where id = $1
 	`, userID, role)
 	if err != nil {
@@ -144,19 +125,19 @@ func (s *pgStore) RevokeUserRole(userID, role, revokedBy, reason string) error {
 		return errors.New("user not found")
 	}
 	var hasTeamRole bool
-	if err := tx.QueryRow(ctx, `
-		select exists (
-			select 1
-			from user_roles
-			where user_id = $1 and role in ('admin', 'moderator') and revoked_at is null
-		)
-	`, userID).Scan(&hasTeamRole); err != nil {
+	if err := tx.QueryRow(ctx, `select is_admin or is_moderator from users where id = $1`, userID).Scan(&hasTeamRole); err != nil {
 		return err
 	}
 	if !hasTeamRole {
 		if err := removeGeoDuelsTeamBadgeTx(ctx, tx, userID); err != nil {
 			return err
 		}
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into moderation_log(subject_user_id, actor_user_id, action, reason, metadata)
+		values($1, nullif($2, '')::uuid, 'role_revoked', nullif($3, ''), jsonb_build_object('role', $4::text))
+	`, userID, strings.TrimSpace(revokedBy), strings.TrimSpace(reason), role); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -195,8 +176,14 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 				coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false),
 				coalesce(u.ban_reason, ''),
 			u.banned_at,
-			coalesce(latest_session.ip_address, ''),
-			rep.muted_until
+			u.ban_expires_at,
+			u.chat_muted_at,
+			coalesce(u.chat_mute_reason, ''),
+			u.chat_mute_expires_at,
+			u.report_muted_at,
+			coalesce(u.report_mute_reason, ''),
+			u.report_mute_expires_at,
+			coalesce(latest_session.ip_address, '')
 		from users u
 		left join lateral (
 			select provider_name, avatar_url
@@ -215,7 +202,6 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 		left join ranks r on r.user_id = u.id and r.mode = $1 and r.season_id = $2
 		left join user_stats us on us.user_id = u.id
 		left join ranked_stats rs on rs.user_id = u.id and rs.mode = $1 and rs.season_id = $2
-		left join moderation_reporter_state rep on rep.user_id = u.id
 		where $4 = '%%'
 		   or lower(u.id::text) like $4
 		   or lower(coalesce(u.email, '')) like $4
@@ -241,8 +227,7 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 	result := make([]AdminPlayerSummary, 0, limit)
 	for rows.Next() {
 		var item AdminPlayerSummary
-		var bannedAt *time.Time
-		var reportMutedUntil *time.Time
+		var bannedAt, banExpiresAt, chatMutedAt, chatMutedUntil, reportMutedAt, reportMutedUntil *time.Time
 		if err := rows.Scan(
 			&item.UserID,
 			&item.Email,
@@ -258,13 +243,31 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 			&item.IsBanned,
 			&item.BanReason,
 			&bannedAt,
-			&item.LastIPAddress,
+			&banExpiresAt,
+			&chatMutedAt,
+			&item.ChatMuteReason,
+			&chatMutedUntil,
+			&reportMutedAt,
+			&item.ReportMuteReason,
 			&reportMutedUntil,
+			&item.LastIPAddress,
 		); err != nil {
 			return nil, err
 		}
 		if bannedAt != nil {
 			item.BannedAt = *bannedAt
+		}
+		if banExpiresAt != nil {
+			item.BanExpiresAt = *banExpiresAt
+		}
+		if chatMutedAt != nil {
+			item.ChatMutedAt = *chatMutedAt
+		}
+		if chatMutedUntil != nil {
+			item.ChatMutedUntil = *chatMutedUntil
+		}
+		if reportMutedAt != nil {
+			item.ReportMutedAt = *reportMutedAt
 		}
 		if reportMutedUntil != nil {
 			item.ReportMutedUntil = *reportMutedUntil
@@ -282,8 +285,7 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 
 func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (AdminPlayerSummary, error) {
 	var item AdminPlayerSummary
-	var bannedAt *time.Time
-	var reportMutedUntil *time.Time
+	var bannedAt, banExpiresAt, chatMutedAt, chatMutedUntil, reportMutedAt, reportMutedUntil *time.Time
 	seasonID, err := s.activeSeasonID(ctx)
 	if err != nil {
 		return item, err
@@ -304,8 +306,14 @@ func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (Adm
 				coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false),
 			coalesce(u.ban_reason, ''),
 			u.banned_at,
-			coalesce(latest_session.ip_address, ''),
-			rep.muted_until
+			u.ban_expires_at,
+			u.chat_muted_at,
+			coalesce(u.chat_mute_reason, ''),
+			u.chat_mute_expires_at,
+			u.report_muted_at,
+			coalesce(u.report_mute_reason, ''),
+			u.report_mute_expires_at,
+			coalesce(latest_session.ip_address, '')
 		from users u
 		left join lateral (
 			select provider_name, avatar_url
@@ -324,7 +332,6 @@ func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (Adm
 		left join ranks r on r.user_id = u.id and r.mode = $2 and r.season_id = $3
 		left join user_stats us on us.user_id = u.id
 		left join ranked_stats rs on rs.user_id = u.id and rs.mode = $2 and rs.season_id = $3
-		left join moderation_reporter_state rep on rep.user_id = u.id
 		where u.id = $1
 	`, userID, modeDuel, seasonID, initialMMR).Scan(
 		&item.UserID,
@@ -341,14 +348,32 @@ func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (Adm
 		&item.IsBanned,
 		&item.BanReason,
 		&bannedAt,
-		&item.LastIPAddress,
+		&banExpiresAt,
+		&chatMutedAt,
+		&item.ChatMuteReason,
+		&chatMutedUntil,
+		&reportMutedAt,
+		&item.ReportMuteReason,
 		&reportMutedUntil,
+		&item.LastIPAddress,
 	)
 	if err != nil {
 		return AdminPlayerSummary{}, err
 	}
 	if bannedAt != nil {
 		item.BannedAt = *bannedAt
+	}
+	if banExpiresAt != nil {
+		item.BanExpiresAt = *banExpiresAt
+	}
+	if chatMutedAt != nil {
+		item.ChatMutedAt = *chatMutedAt
+	}
+	if chatMutedUntil != nil {
+		item.ChatMutedUntil = *chatMutedUntil
+	}
+	if reportMutedAt != nil {
+		item.ReportMutedAt = *reportMutedAt
 	}
 	if reportMutedUntil != nil {
 		item.ReportMutedUntil = *reportMutedUntil
@@ -372,27 +397,23 @@ func (s *pgStore) GetAdminPlayerDetail(userID string) (AdminPlayerDetail, error)
 	if err != nil {
 		return AdminPlayerDetail{}, err
 	}
-	var stats AdminPlayerStats
-	var eloHistory []AdminPlayerEloPoint
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.Go(func() error {
-		var queryErr error
-		stats, queryErr = s.adminPlayerStats(groupCtx, userID)
-		return queryErr
-	})
-	group.Go(func() error {
-		var queryErr error
-		eloHistory, queryErr = s.adminPlayerEloHistory(groupCtx, userID, 7)
-		return queryErr
-	})
-	if err := group.Wait(); err != nil {
+	stats, err := s.adminPlayerStats(ctx, userID)
+	if err != nil {
 		return AdminPlayerDetail{}, err
 	}
-	return AdminPlayerDetail{
-		Player:     player,
-		Stats:      stats,
-		EloHistory: eloHistory,
-	}, nil
+	applyAdminPlayerStats(&player, stats)
+	return AdminPlayerDetail{Player: player}, nil
+}
+
+func applyAdminPlayerStats(player *AdminPlayerSummary, stats AdminPlayerStats) {
+	player.TrackedMatches = stats.TotalMatches
+	player.RankedMatches = stats.RankedMatches
+	player.DuelMatches = stats.DuelMatches
+	player.SingleplayerRuns = stats.SingleplayerRuns
+	player.Losses = stats.Losses
+	if stats.Wins > player.Wins {
+		player.Wins = stats.Wins
+	}
 }
 
 func (s *pgStore) adminPlayerStats(ctx context.Context, userID string) (AdminPlayerStats, error) {
@@ -417,53 +438,6 @@ func (s *pgStore) adminPlayerStats(ctx context.Context, userID string) (AdminPla
 		&stats.Losses,
 	)
 	return stats, err
-}
-
-func (s *pgStore) adminPlayerEloHistory(ctx context.Context, userID string, days int) ([]AdminPlayerEloPoint, error) {
-	if days <= 0 {
-		days = 7
-	}
-	since := time.Now().AddDate(0, 0, -days)
-	rows, err := s.pool.Query(ctx, `
-		with ranked_matches as (
-			select
-				h.ended_at,
-				coalesce(p.rating_after, p.rating_before, p.mmr)::int as rating_after,
-				coalesce(p.final_ranked_delta, 0)::int as delta
-			from match_history h
-			join match_players p on p.match_id = h.match_id
-			where p.user_id = $1
-			  and h.mode = $2
-			  and h.ranked
-			  and h.ended_at >= $3
-		),
-		latest_per_day as (
-			select distinct on (date_trunc('day', ended_at))
-				date_trunc('day', ended_at) as day,
-				rating_after,
-				sum(delta) over (partition by date_trunc('day', ended_at))::int as delta,
-				count(*) over (partition by date_trunc('day', ended_at))::int as played,
-				ended_at
-			from ranked_matches
-			order by date_trunc('day', ended_at), ended_at desc
-		)
-		select day, rating_after, delta, played
-		from latest_per_day
-		order by day asc
-	`, userID, modeDuel, since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []AdminPlayerEloPoint{}
-	for rows.Next() {
-		var point AdminPlayerEloPoint
-		if err := rows.Scan(&point.Date, &point.MMR, &point.Delta, &point.Played); err != nil {
-			return nil, err
-		}
-		out = append(out, point)
-	}
-	return out, rows.Err()
 }
 
 func (s *pgStore) populateAdminPlayerIdentities(ctx context.Context, players []AdminPlayerSummary) error {
@@ -518,7 +492,7 @@ func (s *pgStore) populateAdminPlayerIdentities(ctx context.Context, players []A
 	return rows.Err()
 }
 
-func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
+func (s *pgStore) SetPlayerBan(userID, reason, actorUserID string, banned bool) error {
 	if userID == "" {
 		return errors.New("user id required")
 	}
@@ -554,12 +528,6 @@ func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
 		if err := banUserOAuthIdentities(ctx, tx, userID, strings.TrimSpace(reason), ""); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			insert into enforcement_actions(target_user_id, action_type, reason_code, reason_note)
-			values($1, 'permanent_ban', 'manual', nullif($2, ''))
-		`, userID, strings.TrimSpace(reason)); err != nil {
-			return err
-		}
 	} else {
 		if _, err := tx.Exec(ctx, `
 			update oauth_identity_bans
@@ -569,14 +537,126 @@ func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
 		`, userID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			insert into enforcement_actions(target_user_id, action_type, reason_code, reason_note)
-			values($1, 'unban', 'manual', nullif($2, ''))
-		`, userID, strings.TrimSpace(reason)); err != nil {
-			return err
-		}
+	}
+	action := "unban"
+	if banned {
+		action = "permanent_ban"
+	}
+	var logID int64
+	if err := tx.QueryRow(ctx, `
+		insert into moderation_log(subject_user_id, actor_user_id, action, reason)
+		values($1, nullif($2, '')::uuid, $3, nullif($4, ''))
+		returning id
+	`, userID, strings.TrimSpace(actorUserID), action, strings.TrimSpace(reason)).Scan(&logID); err != nil {
+		return err
+	}
+	if err := notifyAccountEnforcement(ctx, tx, userID, action, reason, logID, nil); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
+}
+
+const communityPardonCandidatesSQL = `
+	with latest_ban as (
+		select distinct on (subject_user_id) subject_user_id, created_at
+		from moderation_log
+		where action in ('permanent_ban', 'temporary_ban')
+		order by subject_user_id, created_at desc, id desc
+	), latest_unban as (
+		select distinct on (subject_user_id) subject_user_id, created_at
+		from moderation_log
+		where action = 'unban'
+		order by subject_user_id, created_at desc, id desc
+	)
+	select u.id, coalesce(lb.created_at, u.banned_at) as sanction_started_at
+	from users u
+	left join latest_ban lb on lb.subject_user_id = u.id
+	left join latest_unban lu on lu.subject_user_id = u.id
+	where u.banned_at is not null
+	  and (u.ban_expires_at is null or u.ban_expires_at > now())
+	  and coalesce(lb.created_at, u.banned_at) < $1
+	  and (lb.subject_user_id is null or lu.created_at is null or lu.created_at < lb.created_at)
+`
+
+func (s *pgStore) PreviewCommunityPardon(olderThan time.Duration) (CommunityPardonSummary, error) {
+	if olderThan <= 0 {
+		olderThan = 7 * 24 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cutoff := time.Now().Add(-olderThan)
+	var eligible int
+	if err := s.pool.QueryRow(ctx, `select count(*) from (`+communityPardonCandidatesSQL+`) candidates`, cutoff).Scan(&eligible); err != nil {
+		return CommunityPardonSummary{}, err
+	}
+	return CommunityPardonSummary{Eligible: eligible, Cutoff: cutoff}, nil
+}
+
+func (s *pgStore) PardonBannedPlayers(olderThan time.Duration, actorUserID string) (CommunityPardonSummary, error) {
+	if olderThan <= 0 {
+		olderThan = 7 * 24 * time.Hour
+	}
+	actorUserID = strings.TrimSpace(actorUserID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CommunityPardonSummary{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	cutoff := time.Now().Add(-olderThan)
+	rows, err := tx.Query(ctx, `
+		with candidates as (`+communityPardonCandidatesSQL+`)
+		update users u
+		set banned_at = null, ban_reason = null, ban_expires_at = null
+	from candidates c
+	where u.id = c.id
+	returning u.id
+	`, cutoff)
+	if err != nil {
+		return CommunityPardonSummary{}, err
+	}
+	var userIDs []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			rows.Close()
+			return CommunityPardonSummary{}, err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return CommunityPardonSummary{}, err
+	}
+	rows.Close()
+
+	for _, userID := range userIDs {
+		if _, err := tx.Exec(ctx, `
+			update oauth_identity_bans
+			set revoked_at = coalesce(revoked_at, now())
+			where banned_user_id = $1 and revoked_at is null
+		`, userID); err != nil {
+			return CommunityPardonSummary{}, err
+		}
+		var logID int64
+		if err := tx.QueryRow(ctx, `
+			insert into moderation_log(subject_user_id, actor_user_id, action, reason, metadata)
+			values($1, nullif($2, '')::uuid, 'unban', 'v2 community pardon',
+				jsonb_build_object('release', 'v2', 'policy', 'active ban older than 7 days'))
+			returning id
+		`, userID, actorUserID).Scan(&logID); err != nil {
+			return CommunityPardonSummary{}, err
+		}
+		if err := notifyAccountEnforcement(ctx, tx, userID, "unban", "v2 community pardon", logID, nil); err != nil {
+			return CommunityPardonSummary{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CommunityPardonSummary{}, err
+	}
+	return CommunityPardonSummary{Eligible: len(userIDs), Pardoned: len(userIDs), Cutoff: cutoff}, nil
 }
 
 func banUserOAuthIdentities(ctx context.Context, tx pgx.Tx, userID, reason, actorUserID string) error {
@@ -611,21 +691,74 @@ func (s *pgStore) ClearReporterMute(userID string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `
-		update moderation_reporter_state
-		set muted_until = null,
-			report_weight = greatest(report_weight, 0.05),
-			updated_at = now()
-		where user_id = $1
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
+		update users set report_muted_at = null, report_mute_reason = null, report_mute_expires_at = null where id = $1
 	`, userID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		_, err = s.pool.Exec(ctx, `
-			insert into moderation_reporter_state(user_id, muted_until, report_weight, updated_at)
-			values($1, null, 1, now())
-		`, userID)
+		return errors.New("user not found")
 	}
-	return err
+	if _, err := tx.Exec(ctx, `insert into moderation_log(subject_user_id, action) values($1, 'report_unmute')`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *pgStore) SetPlayerMute(userID, kind, reason, actorUserID string, until time.Time, muted bool) error {
+	userID = strings.TrimSpace(userID)
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if userID == "" {
+		return errors.New("user id required")
+	}
+	if kind != "chat" && kind != "report" {
+		return errors.New("unsupported mute kind")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var tag pgconn.CommandTag
+	if muted {
+		if until.IsZero() {
+			until = time.Now().Add(7 * 24 * time.Hour)
+		}
+		if kind == "chat" {
+			tag, err = tx.Exec(ctx, `update users set chat_muted_at=now(), chat_mute_reason=nullif($2,''), chat_mute_expires_at=$3 where id=$1`, userID, strings.TrimSpace(reason), until)
+		} else {
+			tag, err = tx.Exec(ctx, `update users set report_muted_at=now(), report_mute_reason=nullif($2,''), report_mute_expires_at=$3 where id=$1`, userID, strings.TrimSpace(reason), until)
+		}
+	} else if kind == "chat" {
+		tag, err = tx.Exec(ctx, `update users set chat_muted_at=null, chat_mute_reason=null, chat_mute_expires_at=null where id=$1`, userID)
+	} else {
+		tag, err = tx.Exec(ctx, `update users set report_muted_at=null, report_mute_reason=null, report_mute_expires_at=null where id=$1`, userID)
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("user not found")
+	}
+	action := kind + "_unmute"
+	var expiresAt any
+	if muted {
+		action = kind + "_mute"
+		expiresAt = until
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into moderation_log(subject_user_id, actor_user_id, action, reason, expires_at)
+		values($1, nullif($2,'')::uuid, $3, nullif($4,''), $5)
+	`, userID, strings.TrimSpace(actorUserID), action, strings.TrimSpace(reason), expiresAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

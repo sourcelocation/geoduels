@@ -1,20 +1,22 @@
 import type React from "react";
 
-import { Surface } from "./Surface";
+import { cn } from "../../lib/cn";
+import { SectionCard } from "./compositions";
 import { MutedText } from "./typography";
 
 type EmptyStateProps = {
   title?: string;
   message: string;
   action?: React.ReactNode;
+  className?: string;
 };
 
-export function EmptyState({ title, message, action }: EmptyStateProps) {
+export function EmptyState({ title, message, action, className }: EmptyStateProps) {
   return (
-    <Surface variant="subtle" className="p-6 text-center">
-      {title ? <h3 className="font-black text-white">{title}</h3> : null}
+    <SectionCard className={cn("border-dashed p-6 text-center", className)}>
+      {title ? <h3 className="text-body font-strong text-content-primary">{title}</h3> : null}
       <MutedText className={title ? "mt-2" : ""}>{message}</MutedText>
       {action ? <div className="mt-4">{action}</div> : null}
-    </Surface>
+    </SectionCard>
   );
 }

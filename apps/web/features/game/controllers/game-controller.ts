@@ -1,4 +1,4 @@
-import type { ResultPhase, RoundResult, Snapshot } from '../../../components/ui/types';
+import type { ResultPhase, RoundResult, Snapshot } from '../model/types';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 import type { SfxController } from '../../../lib/audio/sfx';
 import { ObservableStore } from '../../../lib/observable-store';
@@ -616,6 +616,17 @@ export class GameController extends ObservableStore<GameState> {
     if (!sent) return;
     this.matchController.setConnectionIssue('');
     this.patchState({ guess: { lat, lng } });
+  };
+
+  pingTeam = (lat: number, lng: number) => {
+    const snapshot = this.matchController.getState().snapshot;
+    const userId = this.sessionController.getState().userId;
+    if (snapshot?.mode !== 'team_duel' || snapshot.phase !== 'live' || snapshot.roundPhase !== 'round_live' || !snapshot.currentRound || !snapshot.players[userId]?.finalized) return;
+    this.matchController.sendGameCommand(
+      'team.ping',
+      { roundId: snapshot.currentRound.roundId, lat, lng },
+      { errorMessage: this.config.gameConnectionErrorMessage, forceReconnect: true }
+    );
   };
 
   finalizeGuess = () => {

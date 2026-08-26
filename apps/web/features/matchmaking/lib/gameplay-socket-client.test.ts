@@ -39,12 +39,14 @@ describe('GameplaySocketClient', () => {
 
   it('uses the websocket event serverTs as the snapshot clock sync timestamp', () => {
     const onSnapshot = vi.fn();
+    const onTeamPing = vi.fn();
     const client = new GameplaySocketClient(createRuntimeConfigFixture(), {
       onOpen: vi.fn(),
       onClose: vi.fn(),
       onError: vi.fn(),
       onActivity: vi.fn(),
       onSnapshot,
+      onTeamPing,
       onAckError: vi.fn(),
       onProtocolError: vi.fn()
     });
@@ -75,6 +77,17 @@ describe('GameplaySocketClient', () => {
     });
 
     expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ serverUnixMs: 2_000 }));
+  });
+
+  it('delivers team ping events separately from snapshots', () => {
+    const onTeamPing = vi.fn();
+    const client = new GameplaySocketClient(createRuntimeConfigFixture(), {
+      onOpen: vi.fn(), onClose: vi.fn(), onError: vi.fn(), onActivity: vi.fn(),
+      onSnapshot: vi.fn(), onTeamPing, onAckError: vi.fn(), onProtocolError: vi.fn()
+    });
+    client.connect({ userId: 'self', accessToken: 'access', nicknameRequired: false, nicknameInput: 'Self' }, 'node-1', '/ws/node-1', 'ticket-1');
+    MockWebSocket.instances[0]?.emitMessage({ kind: 'event', type: 'team.ping', payload: { id: 'ping-1', roundId: 'round-1', senderUserId: 'mate', lat: 1, lng: 2, expiresAt: 7_000 } });
+    expect(onTeamPing).toHaveBeenCalledWith(expect.objectContaining({ id: 'ping-1', senderUserId: 'mate' }));
   });
 
 });

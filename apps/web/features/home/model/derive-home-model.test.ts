@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Snapshot } from '../../../components/ui/types';
+import type { Snapshot } from '../../game/model/types';
 import { createRuntimeConfigFixture } from '../../../test/runtime-config.fixture';
 import type { SessionState } from '../../auth/controllers/session-controller';
 import type { GameState } from '../../game/controllers/game-controller';
@@ -98,8 +98,10 @@ function createMatchState(
 	    sourcePartyId: '',
     sourcePartyInviteCode: '',
     queueError: '',
+    singleplayerError: '',
     connectionIssue: '',
     onlinePlayers: 42,
+    teamPings: [],
     ...overrides
   };
 }
@@ -516,7 +518,8 @@ describe('deriveHomeModel', () => {
       auth: createAuthState(),
       match: createMatchState(snapshot, {
         sourcePartyId: 'party-1',
-        sourcePartyInviteCode: 'PARTY1'
+        sourcePartyInviteCode: 'PARTY1',
+        returnTarget: { kind: 'party', partyId: 'party-1', partyInviteCode: 'PARTY1' }
       }),
       game: createGameState({ showMatchEndPage: true }),
       config,
@@ -528,6 +531,29 @@ describe('deriveHomeModel', () => {
     if (model.overlays.endMatch.open) {
       expect(model.overlays.endMatch.matchConfig).toEqual(matchConfig);
       expect(model.overlays.endMatch.backLabel).toBe('Back to party');
+    }
+  });
+
+  it('returns home when a completed match has no navigation target', () => {
+    const snapshot = createSnapshot({
+      mode: 'singleplayer',
+      config: { mapId: 'map-custom', mapName: 'Custom World' },
+      state: 'ended',
+      phase: 'ended',
+      roundPhase: 'ended'
+    });
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(snapshot),
+      game: createGameState({ showMatchEndPage: true }),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.backLabel).toBe('Back to lobby');
+    expect(model.overlays.endMatch.open).toBe(true);
+    if (model.overlays.endMatch.open) {
+      expect(model.overlays.endMatch.backLabel).toBe('Back to lobby');
     }
   });
 

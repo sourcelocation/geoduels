@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/controlplane"
 	"geoduels/pkg/coordinator"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchlaunch"
@@ -31,18 +33,22 @@ import (
 )
 
 type matchCoordinator struct {
-	store      matchstore.Store
-	state      *coordinator.Store
-	persist    persistence.Store
-	redis      *redis.Client
-	httpClient *http.Client
-	appSecret  []byte
-	ticketAuth []byte
-	internal   string
-	metrics    *observability.APIMetrics
-	draining   atomic.Bool
-	chatMu     sync.Mutex
-	chatRecent map[string][]time.Time
+	store           matchstore.Store
+	state           *coordinator.Store
+	persist         persistence.Store
+	redis           *redis.Client
+	httpClient      *http.Client
+	appSecret       []byte
+	ticketAuth      []byte
+	internal        string
+	metrics         *observability.APIMetrics
+	draining        atomic.Bool
+	matchmakerOwner atomic.Bool
+	leaseStore      controlplane.LeaseStore
+	lease           controlplane.Lease
+	leaseClose      func()
+	chatMu          sync.Mutex
+	chatRecent      map[string][]time.Time
 }
 
 var queueUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
@@ -61,7 +67,7 @@ func main() {
 		log.Fatal(err)
 	}
 	singleplayerTTL := getenvDuration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
-	if err := persist.ExpireStaleRuntimeMatches(string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
+	if err := persist.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
 		log.Fatal(err)
 	}
 	if err := persist.ExpireOpenParties(); err != nil {
@@ -97,6 +103,10 @@ func main() {
 	}
 	defer q.persist.Close()
 	defer redisCleanup()
+	if err := q.acquireMatchmakerLease(); err != nil {
+		log.Fatal(err)
+	}
+	defer q.releaseMatchmakerLease()
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", q.healthLive).Methods(http.MethodGet)
@@ -133,6 +143,7 @@ func main() {
 		getenvDuration("PARTY_CLEANUP_INTERVAL", getenvDuration("LOBBY_CLEANUP_INTERVAL", 30*time.Second)),
 		getenvDuration("PARTY_INACTIVITY_TTL", getenvDuration("LOBBY_INACTIVITY_TTL", 5*time.Minute)),
 	)
+	go q.runMatchmakerLeaseLoop()
 	go q.runMatchmakingLoop(
 		getenvDuration("MATCHMAKING_INTERVAL", 500*time.Millisecond),
 		getenvInt("MATCHMAKING_BATCH_SIZE", 50),
@@ -153,7 +164,7 @@ func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if q.draining.Load() {
+		if q.draining.Load() || !q.isMatchmakerOwner() {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), interval)
@@ -170,9 +181,85 @@ func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize 
 	}
 }
 
+const matchmakerLeaseName = "matchmaker"
+
+func (q *matchCoordinator) acquireMatchmakerLease() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	owner, err := os.Hostname()
+	if err != nil || strings.TrimSpace(owner) == "" {
+		owner = "match-coordinator"
+	}
+	owner += ":" + strconv.Itoa(os.Getpid())
+	store, closeStore, err := controlplane.OpenPostgresLeaseStore(ctx, os.Getenv("POSTGRES_URL"))
+	if err != nil {
+		return fmt.Errorf("open matchmaker durable lease: %w", err)
+	}
+	ttl := getenvDuration("MATCHMAKER_LEASE_TTL", 15*time.Second)
+	lease, acquired, err := store.Acquire(ctx, matchmakerLeaseName, owner, ttl)
+	if err != nil {
+		closeStore()
+		return fmt.Errorf("acquire matchmaker durable lease: %w", err)
+	}
+	q.leaseStore, q.lease, q.leaseClose = store, lease, closeStore
+	q.matchmakerOwner.Store(acquired)
+	if !acquired {
+		observability.Log("warn", "matchmaker standby", map[string]any{"owner": owner})
+		return nil
+	}
+	observability.Log("info", "matchmaker lease acquired", map[string]any{"owner": owner, "fencingToken": lease.Token})
+	return nil
+}
+
+func (q *matchCoordinator) runMatchmakerLeaseLoop() {
+	ttl := getenvDuration("MATCHMAKER_LEASE_TTL", 15*time.Second)
+	interval := ttl / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if q.draining.Load() || q.leaseStore == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), interval)
+		if q.matchmakerOwner.Load() {
+			renewed, err := q.leaseStore.Renew(ctx, q.lease, ttl)
+			if err != nil || !renewed {
+				q.matchmakerOwner.Store(false)
+				observability.Log("error", "matchmaker lease lost", map[string]any{"error": err})
+			}
+		} else {
+			lease, acquired, err := q.leaseStore.Acquire(ctx, matchmakerLeaseName, q.lease.Owner, ttl)
+			if err == nil && acquired {
+				q.lease = lease
+				q.matchmakerOwner.Store(true)
+				observability.Log("info", "matchmaker lease acquired", map[string]any{"fencingToken": lease.Token})
+			}
+		}
+		cancel()
+	}
+}
+
+func (q *matchCoordinator) releaseMatchmakerLease() {
+	if q.leaseStore != nil && q.matchmakerOwner.Load() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = q.leaseStore.Release(ctx, q.lease)
+		cancel()
+	}
+	if q.leaseClose != nil {
+		q.leaseClose()
+	}
+}
+
 func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 	if q.draining.Load() {
 		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
+	if !q.isMatchmakerOwner() {
+		http.Error(w, "matchmaker unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	status, err := q.maintenanceStatus(r.Context())
@@ -184,18 +271,8 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, maintenanceQueueMessage(status), http.StatusServiceUnavailable)
 		return
 	}
-	claims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	identity, err := q.persist.GetIdentity(claims.Sub)
-	if err != nil {
-		http.Error(w, "identity not found", http.StatusUnauthorized)
-		return
-	}
-	if identity.IsBanned {
-		http.Error(w, "account is banned", http.StatusForbidden)
+	claims, identity, ok := q.requireActiveAccount(w, r)
+	if !ok {
 		return
 	}
 	if identity.NicknameRequired {
@@ -381,15 +458,15 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// A nil lease store is used only by focused handler tests and older embedding
+// programs. The production composition root always installs a durable lease.
+func (q *matchCoordinator) isMatchmakerOwner() bool {
+	return q.leaseStore == nil || q.matchmakerOwner.Load()
+}
+
 func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
-	claims, err := q.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	identity, err := q.persist.GetIdentity(claims.Sub)
-	if err != nil {
-		http.Error(w, "identity not found", http.StatusUnauthorized)
+	claims, identity, ok := q.requireActiveAccount(w, r)
+	if !ok {
 		return
 	}
 	if identity.NicknameRequired {
@@ -418,6 +495,9 @@ func parseQueueVariants(rawQueues string, legacyRulesets string) []matchstore.Qu
 	seen := map[matchstore.QueueVariant]bool{}
 	for _, part := range strings.Split(rawQueues, ",") {
 		queue := matchstore.NormalizeQueueVariant(matchstore.QueueVariant(strings.TrimSpace(strings.ToLower(part))))
+		if !matchstore.IsRankedQueueVariant(queue) {
+			continue
+		}
 		if seen[queue] {
 			continue
 		}
@@ -436,11 +516,8 @@ func parseLegacyQueueRulesets(raw string) []matchstore.QueueVariant {
 	}
 	out := []matchstore.QueueVariant{}
 	seen := map[matchstore.QueueVariant]bool{}
-	for _, part := range strings.Split(raw, ",") {
+	for range strings.Split(raw, ",") {
 		variant := matchstore.QueueMoving
-		if strings.TrimSpace(strings.ToLower(part)) == string(contracts.RulesetNMPZ) {
-			variant = matchstore.QueueNMPZ
-		}
 		if !seen[variant] {
 			seen[variant] = true
 			out = append(out, variant)
@@ -453,7 +530,7 @@ func (q *matchCoordinator) matchEnded(matchID string) bool {
 	if matchID == "" {
 		return false
 	}
-	rec, ok, err := q.persist.GetRuntimeMatch(matchID)
+	rec, ok, err := q.persist.GetRuntimeMatch(context.Background(), matchID)
 	if err != nil {
 		log.Printf("runtime match lookup failed for %s: %v", matchID, err)
 		return false
@@ -531,15 +608,27 @@ func (q *matchCoordinator) authenticatedClaims(r *http.Request) (auth.AppClaims,
 	if err != nil {
 		return auth.AppClaims{}, err
 	}
-	if resolver, ok := q.persist.(interface {
-		ResolveLegacyEntityID(entityType, legacyID string) (string, bool, error)
-	}); ok {
-		if id, found, resolveErr := resolver.ResolveLegacyEntityID("user", claims.Sub); resolveErr == nil && found {
-			claims.Sub = id
-			claims.Subject = id
-		}
-	}
 	return claims, nil
+}
+
+func (q *matchCoordinator) requireActiveAccount(w http.ResponseWriter, r *http.Request) (auth.AppClaims, persistence.Identity, bool) {
+	claims, err := q.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return auth.AppClaims{}, persistence.Identity{}, false
+	}
+	identity, err := q.persist.GetIdentity(claims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return auth.AppClaims{}, persistence.Identity{}, false
+	}
+	if identity.IsBanned {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "user is banned", "code": "account_banned"})
+		return auth.AppClaims{}, persistence.Identity{}, false
+	}
+	return claims, identity, true
 }
 
 func (q *matchCoordinator) writeQueueMessage(conn *websocket.Conn, writeMu *sync.Mutex, event string, payload any) bool {
@@ -567,10 +656,26 @@ func (q *matchCoordinator) healthReady(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "draining", http.StatusServiceUnavailable)
 		return
 	}
+	if !q.isMatchmakerOwner() {
+		http.Error(w, "matchmaker standby", http.StatusServiceUnavailable)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := q.redis.Ping(ctx).Err(); err != nil {
 		http.Error(w, "redis not ready", http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := q.persist.ResolveGameplayMapID(contracts.ModeDuel, contracts.RulesetMoving, ""); err != nil {
+		http.Error(w, "moving map is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := q.persist.ResolveGameplayMapID(contracts.ModeDuel, contracts.RulesetNoMove, ""); err != nil {
+		http.Error(w, "no-move map is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := q.persist.ResolveGameplayMapID(contracts.ModeSingleplayer, contracts.RulesetNMPZ, ""); err != nil {
+		http.Error(w, "nmpz map is not configured", http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

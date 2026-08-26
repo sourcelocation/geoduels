@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
+import { Table, TableHead } from "../../../components/ui/Table";
+import { Heading, Text } from "../../../components/ui/typography";
 import { toPublicEntityId } from "../../../lib/entity-id";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { requestModeratorSignals } from "../lib/moderator-client";
@@ -17,12 +19,12 @@ export function SignalsRoute(props: { config: RuntimeConfig; accessToken: string
   return (
     <div className="space-y-4">
       <header>
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-300">Signals</p>
-        <h2 className="mt-1 text-3xl font-black text-white">Signal Stream</h2>
+        <Text as="p" variant="label" className="text-status-success">Signals</Text>
+        <Heading as="h2" variant="display-md" className="mt-1">Signal Stream</Heading>
       </header>
       <Panel className="overflow-x-auto">
-        <table className="w-full min-w-[960px] text-left text-sm">
-          <thead className="border-b border-slate-800 text-xs uppercase tracking-[0.12em] text-slate-500">
+        <Table className="w-full min-w-[960px] text-left text-body-sm">
+          <TableHead className="border-b border-border-default text-label uppercase text-content-secondary">
             <tr>
               <th className="px-4 py-3">Subject</th>
               <th className="px-4 py-3">Source</th>
@@ -32,35 +34,35 @@ export function SignalsRoute(props: { config: RuntimeConfig; accessToken: string
               <th className="px-4 py-3">Match</th>
               <th className="px-4 py-3">When</th>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-900">
+          </TableHead>
+          <tbody className="divide-y divide-border-default">
             {signals.map((signal) => (
               <tr key={signal.id}>
                 <td className="px-4 py-3">
-                  <Link className="font-bold text-white hover:text-emerald-300" href={`/players/${encodeURIComponent(toPublicEntityId(signal.subjectUserId))}?staff=1`}>
+				  <Link className="font-strong text-content-primary hover:text-status-success" href={`/moderator/subjects/${encodeURIComponent(toPublicEntityId(signal.subjectUserId))}`}>
                     {signal.subjectName || signal.subjectUserId}
                   </Link>
-                  <p className="text-xs text-slate-500">{signal.subjectUserId}</p>
+                  <p className="text-body-sm text-content-secondary">{signal.subjectUserId}</p>
                 </td>
-                <td className="px-4 py-3 text-slate-300">{signal.source}</td>
-                <td className="px-4 py-3 font-semibold text-white">{signal.severity}</td>
-                <td className="px-4 py-3 text-slate-300">{signal.evidenceStrength}</td>
-                <td className="px-4 py-3 text-slate-400">{signal.reasonCode}</td>
+                <td className="px-4 py-3 text-content-secondary">{signal.source}</td>
+                <td className="px-4 py-3 font-semibold text-content-primary">{signal.severity}</td>
+                <td className="px-4 py-3 text-content-secondary">{signal.evidenceStrength}</td>
+                <td className="px-4 py-3 text-content-secondary">{signal.reasonCode}</td>
                 <td className="px-4 py-3">
                   {signal.matchId ? (
-                    <Link className="text-sky-300 hover:text-white" href={`/match/${encodeURIComponent(toPublicEntityId(signal.matchId))}`}>
+                    <Link className="text-status-info hover:text-content-primary" href={`/match/${encodeURIComponent(toPublicEntityId(signal.matchId))}`}>
                       Match
                     </Link>
                   ) : (
-                    <span className="text-slate-500">-</span>
+                    <span className="text-content-secondary">-</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-slate-500">{new Date(signal.occurredAt).toLocaleString()}</td>
+                <td className="px-4 py-3 text-content-secondary">{new Date(signal.occurredAt).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
-        </table>
-        {!signalsQuery.isLoading && signals.length === 0 ? <p className="p-4 text-sm text-slate-400">No moderation signals yet.</p> : null}
+        </Table>
+        {!signalsQuery.isLoading && signals.length === 0 ? <p className="p-4 text-body-sm text-content-secondary">No moderation signals yet.</p> : null}
       </Panel>
     </div>
   );

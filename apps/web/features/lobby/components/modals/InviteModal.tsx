@@ -1,10 +1,11 @@
-import { Loader2, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
+import { Spinner } from "../../../../components/ui/Spinner";
 import AppModalShell from "../../../../components/ui/AppModalShell";
+import { Button } from "../../../../components/ui/button";
 import {
-  LobbyActionButton,
   LobbyFieldLabel,
   LobbyInput,
-  LobbyInset,
+  LobbySection,
 } from "../lobby-primitives";
 
 type InviteModalProps = {
@@ -43,7 +44,8 @@ export function InviteModal({
   return (
     <AppModalShell title="Private Party" onClose={onClose}>
       <div className="space-y-4">
-        <LobbyActionButton
+        <Button
+          variant="primary"
           type="button"
           onClick={() => {
             void (async () => {
@@ -53,12 +55,12 @@ export function InviteModal({
           disabled={inviteActionsDisabled || playPaused}
           className="min-h-12 w-full rounded-xl"
         >
-          {busy ? <Loader2 className="mr-2 animate-spin" size={18} /> : <UserPlus className="mr-2" size={18} />}
+          {busy ? <Spinner size="sm" label="Joining party" color="current" className="mr-2" /> : <UserPlus className="mr-2" size={18} />}
           Create Party
-        </LobbyActionButton>
-        {authError ? <p className="text-center text-xs font-semibold text-red-300">{authError}</p> : null}
+        </Button>
+        {authError ? <p className="text-center text-body-sm font-semibold text-status-danger">{authError}</p> : null}
 
-        <LobbyInset className="rounded-2xl">
+        <LobbySection className="rounded-2xl">
           <LobbyFieldLabel htmlFor="invite-code-input" className="mb-2 block">
             Join With Code
           </LobbyFieldLabel>
@@ -71,22 +73,22 @@ export function InviteModal({
                 if (event.key === "Enter") void join();
               }}
               disabled={inviteActionsDisabled}
-              className="min-h-[46px] min-w-0 flex-1 rounded-xl font-mono text-[15px] font-black uppercase tracking-[0.16em]"
+              className="min-h-[46px] min-w-0 flex-1 rounded-lg font-mono text-body-sm font-strong uppercase tracking-eyebrow-wide"
               placeholder="CODE"
               maxLength={16}
               autoComplete="off"
             />
-            <LobbyActionButton
+            <Button
               type="button"
               variant="secondary"
               onClick={() => void join()}
               disabled={inviteActionsDisabled || !normalizedInviteCode}
-              className="min-h-[46px] rounded-xl px-5 text-xs"
+              className="min-h-[46px] rounded-xl px-5 text-label"
             >
               Join
-            </LobbyActionButton>
+            </Button>
           </div>
-        </LobbyInset>
+        </LobbySection>
       </div>
     </AppModalShell>
   );

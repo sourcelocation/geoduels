@@ -3,6 +3,16 @@ import type { RuntimeConfig } from "../../../lib/runtime-config";
 import type { ChangelogPost, ChangelogPostInput } from "../../changelog/types";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 
+export type AdminBadgeDefinition = {
+  id: string;
+  kind: string;
+  label: string;
+  description: string;
+  imageUrl: string;
+  rarity?: string;
+  maxLevel: number;
+};
+
 export async function requestAdminBootstrap(
   config: RuntimeConfig,
   accessToken: string,
@@ -38,6 +48,38 @@ export async function requestAdminPlayers(
   return resp.json();
 }
 
+export async function requestAdminBadgeDefinitions(
+  config: RuntimeConfig,
+  accessToken: string,
+) {
+  const resp = await apiFetch(config, `/v1/admin/badges`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to load grantable badges"));
+  }
+  return (await resp.json()) as { badges: AdminBadgeDefinition[] };
+}
+
+export async function requestAdminGrantBadge(
+  config: RuntimeConfig,
+  accessToken: string,
+  payload: { nickname: string; badgeId: string },
+) {
+  const resp = await apiFetch(config, `/v1/admin/badges/grant`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to grant badge"));
+  }
+  return resp.json() as Promise<{ badge: AdminBadgeDefinition; changed: boolean }>;
+}
+
 export async function requestAdminPlayerDetail(
   config: RuntimeConfig,
   accessToken: string,
@@ -52,6 +94,22 @@ export async function requestAdminPlayerDetail(
   );
   if (!resp.ok) {
     throw new Error(await readError(resp, "Failed to load player detail"));
+  }
+  return resp.json();
+}
+
+export async function requestAdminPlayerMatches(
+  config: RuntimeConfig,
+  accessToken: string,
+  userId: string,
+) {
+  const resp = await apiFetch(
+    config,
+    `/v1/admin/players/${encodeURIComponent(userId)}/matches`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to load match history"));
   }
   return resp.json();
 }
@@ -96,6 +154,27 @@ export async function requestAdminUnbanPlayer(
   if (!resp.ok) {
     throw new Error(await readError(resp, "Failed to unban player"));
   }
+}
+
+export async function requestAdminCommunityPardonPreview(config: RuntimeConfig, accessToken: string) {
+  const resp = await apiFetch(config, `/v1/admin/moderation/community-pardon`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) throw new Error(await readError(resp, "Failed to preview community pardon"));
+  return resp.json() as Promise<{ eligible: number; pardoned: number; cutoff: string }>;
+}
+
+export async function requestAdminCommunityPardon(config: RuntimeConfig, accessToken: string) {
+  const resp = await apiFetch(config, `/v1/admin/moderation/community-pardon`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ confirm: true }),
+  });
+  if (!resp.ok) throw new Error(await readError(resp, "Failed to pardon banned players"));
+  return resp.json() as Promise<{ eligible: number; pardoned: number; cutoff: string }>;
 }
 
 export async function requestAdminClearReporterMute(

@@ -9,7 +9,7 @@ This document describes the current runtime implemented in this repository. Olde
 - `services/match-coordinator`: duel queue websocket endpoint, parties, party presence/chat coordination, gameplay-node assignment, online count, and maintenance exposure.
 - `services/realtime-gateway`: public websocket gateway for `/ws/{node}`.
 - `services/gameplay-node`: authoritative in-memory duel and singleplayer execution for assigned matches.
-- `services/moderation-worker`: background moderation projection and enforcement processing.
+- `services/moderation-worker`: background moderation signal notifications and risk-engine work.
 - private `risk-engine`, when deployed: opaque ranked-integrity signal generation for moderation.
 - `services/discord-worker`: Discord membership/role reconciliation and badge synchronization.
 - `workers/storage-maintenance`: bounded replay compression and retention cleanup.
@@ -17,7 +17,9 @@ This document describes the current runtime implemented in this repository. Olde
 ## Data ownership
 
 - PostgreSQL is the durable source of truth for users, identities, sessions, profiles, stats, ranks, maps and their current location datasets, parties, chat, moderation, runtime match metadata, compact match summaries, and retained replays.
-- Redis is used for queue state, gameplay-node registration, route assignment, presence/pubsub, and maintenance status.
+- Current bans and chat/report mutes are projected directly on users. `moderation_signals` stores reports and detector observations; the append-only `moderation_log` stores moderator and system actions.
+- PostgreSQL also owns friendships, friend requests and blocks, expiring friend codes, targeted party invitations, notification history, last-seen projections, and sequenced user events.
+- Redis is used for queue state, gameplay-node registration, route assignment, ephemeral party/global presence, user-event fanout, and maintenance status.
 - `pkg/persistence` owns Postgres persistence behavior.
 - `pkg/coordinator` owns Redis-backed node registration, assignment, and presence.
 - `pkg/duel` and `pkg/singleplayer` own match rules and round progression.
@@ -26,22 +28,23 @@ This document describes the current runtime implemented in this repository. Olde
 ## Entity identifiers
 
 - Durable users, auth sessions, matches, maps, parties, comments, chat conversations, and chat messages use PostgreSQL `uuid` keys.
-- New keys are UUIDv7 for index locality. Deterministic UUIDs are used only for compatibility keys such as chat conversation scopes and migrated legacy identifiers.
+- New keys are UUIDv7 for index locality. Chat conversation keys are deterministic UUIDs derived from their canonical UUID-backed scope.
 - Service contracts, JWT subjects, Redis values, and websocket payloads carry canonical UUID strings.
 - Browser routes render UUIDs as reversible 26-character Crockford Base32 values. Human map slugs and party invite codes remain text.
-- `legacy_id_aliases` resolves links and access tokens issued before the UUID migration.
+- Legacy entity aliases are no longer resolved by application or database code.
 - Match mode is explicit state; identifier prefixes are not used to determine gameplay behavior.
-- Text fields ending in `_id` are reserved for external identifiers, semantic keys, or polymorphic scope values; internal entity and foreign keys use `uuid`.
+- Text fields ending in `_id` are reserved for external identifiers or semantic keys; internal entity and foreign keys use `uuid`.
 
 ## End-to-end flows
 
 ### Auth
 
 1. Browser loads `apps/web`.
-2. Web bootstraps auth through `GET /v1/auth/session`.
-3. `services/api` validates the `HttpOnly` refresh-session cookie and returns a short-lived app access JWT without rotating the refresh token.
-4. Explicit refresh through `POST /v1/auth/refresh` rotates the refresh token and returns a new app access JWT.
-5. The browser keeps the access JWT in memory only.
+2. Web restores auth through a single `GET /v1/auth/session` bootstrap. No refresh cookie is an anonymous viewer; it does not create an account.
+3. Playable actions (singleplayer, queue, party) mint a guest through `POST /v1/auth/guest` when no session exists, after Turnstile when configured.
+4. `services/api` validates the `HttpOnly` refresh-session cookie and returns a short-lived app access JWT without rotating the refresh token.
+5. Explicit refresh through `POST /v1/auth/refresh` rotates the refresh token and returns a new app access JWT.
+6. The browser keeps the access JWT in memory only.
 
 ### Duel
 
@@ -73,6 +76,17 @@ authority.
 3. Party chat uses the durable `party` conversation scope and remains available while a party-sourced match is active.
 4. The party owner selects a permitted ready map and starts the configured duel, team duel, or free-for-all match.
 5. Match session/history responses retain the source party identifiers so players can return to the party.
+
+### Friends, presence, and notifications
+
+1. Registered users manage durable friend requests, friendships, blocks, friend codes, party invitations, and notification history through `services/api`.
+2. Each signed-in browser keeps one global user-events websocket separate from queue, party, and gameplay sockets.
+3. Redis stores per-connection presence with TTLs so multiple tabs and devices collapse into one online/away state.
+4. PostgreSQL stores coarse `last_seen_at` transitions rather than heartbeat writes.
+5. Durable user-scoped event sequences let reconnecting clients detect gaps and reconcile authoritative HTTP queries.
+6. `match-coordinator` remains the authority for accepting party membership; social party invitations resolve to the existing party join flow.
+7. Authenticated guest sockets receive only public global-status events. Global sockets refresh the coordinator presence set, while each API instance reads the aggregate online count and maintenance state once every ten seconds and fans changes out to its local sockets.
+8. Signed-out pages use the API's slow `/v1/status` fallback; lobby pages do not run their former per-browser `/queue/online` polling loop.
 
 ### Match route bootstrap
 
@@ -148,5 +162,5 @@ authority.
 - The committed snapshot returned to the gameplay node contains authoritative post-match ratings. Redis assignment cleanup happens only after that snapshot is broadcast.
 - Compact match summaries and participant projections are retained durably for profiles, rankings, moderation, and match lists.
 - Full replay snapshots are Zstandard-compressed when written and retained for 30 days by default.
-- Replays referenced by moderation reports/evidence are pinned by clearing their expiration.
+- Replays referenced by moderation signals are pinned by clearing their expiration.
 - `workers/storage-maintenance` compresses legacy JSON replays and clears expired replay payloads without deleting compact match history.

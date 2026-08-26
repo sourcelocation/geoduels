@@ -56,12 +56,12 @@ func (a *api) resolveOAuthIdentity(r *http.Request, state oauthStateClaims, prov
 	if provider == "" || providerUserID == "" {
 		return persistence.Identity{}, errors.New("provider identity unavailable")
 	}
-	if banned, _, err := a.store.IsProviderIdentityBanned(provider, providerUserID); err != nil {
+	intent := normalizeOAuthIntent(state.Intent)
+	identityExists, err := a.store.ProviderIdentityExists(provider, providerUserID)
+	if err != nil {
 		return persistence.Identity{}, err
-	} else if banned {
-		return persistence.Identity{}, errors.New("provider identity banned")
 	}
-	switch normalizeOAuthIntent(state.Intent) {
+	switch intent {
 	case oauthIntentLink:
 		if state.LinkSub == "" {
 			return persistence.Identity{}, errors.New("link requires sign in")
@@ -83,10 +83,6 @@ func (a *api) resolveOAuthIdentity(r *http.Request, state oauthStateClaims, prov
 			return persistence.Identity{}, errors.New("provider account already exists")
 		}
 		return identity, err
-	}
-	identityExists, err := a.store.ProviderIdentityExists(provider, providerUserID)
-	if err != nil {
-		return persistence.Identity{}, err
 	}
 	if !identityExists {
 		if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {

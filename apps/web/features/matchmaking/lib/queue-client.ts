@@ -1,11 +1,12 @@
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 import { normalizeHTTPBase, normalizeWSBase } from '../../../lib/runtime-config';
 import { apiFetch, authHeaders, mergeHeaders } from '../../../lib/http';
-import type { Snapshot } from '../../../components/ui/types';
+import type { Snapshot } from '../../game/model/types';
 import type { AuthSessionSnapshot } from '../../auth/session';
 
 export type GameRuleset = 'moving' | 'no_move' | 'nmpz';
 export type StreetNamesVisibility = 'shown' | 'hidden';
+export type MultiplierMode = 'shared' | 'individual';
 export type QueueVariant =
   | 'moving'
   | 'no_move'
@@ -22,11 +23,17 @@ export type MatchConfig = {
   roundTimerMode?: 'none' | 'pressure' | 'fixed';
   roundTimeLimitMs?: number;
   pressureTimeLimitMs?: number;
+  multiplierMode?: MultiplierMode;
 };
+
+export type MatchReturnTarget =
+  | { kind: 'home' }
+  | { kind: 'map'; mapId: string }
+  | { kind: 'party'; partyId: string; partyInviteCode?: string };
 
 export type QueueEvent =
   | { type: 'queue_status'; status: string; queuedAt?: number }
-  | { type: 'match_assigned'; matchId: string; mode?: string; config?: MatchConfig; node: string; ticket: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string }
+  | { type: 'match_assigned'; matchId: string; mode?: string; config?: MatchConfig; node: string; ticket: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget }
   | { type: 'queue_error'; message: string };
 
 export type MaintenancePhase = 'normal' | 'warning' | 'active';
@@ -38,11 +45,6 @@ export type MaintenanceStatus = {
   queuePaused: boolean;
   playPaused: boolean;
   message: string;
-};
-
-export type LobbyStatus = {
-  onlinePlayers: number | null;
-  maintenance: MaintenanceStatus | null;
 };
 
 export async function heartbeatQueue(
@@ -64,42 +66,6 @@ export async function heartbeatQueue(
     return status;
   }
   throw new Error('Queue unavailable');
-}
-
-function normalizeMaintenanceStatus(data: any): MaintenanceStatus | null {
-  if (!data || typeof data !== 'object') {
-    return null;
-  }
-  const rawPhase = typeof data.phase === 'string' ? data.phase : 'normal';
-  const phase: MaintenancePhase = rawPhase === 'warning' || rawPhase === 'active' ? rawPhase : 'normal';
-  const status: MaintenanceStatus = {
-    phase,
-    startsAt: typeof data.startsAt === 'string' ? data.startsAt : '',
-    endsAt: typeof data.endsAt === 'string' ? data.endsAt : '',
-    queuePaused: !!data.queuePaused,
-    playPaused: !!data.playPaused,
-    message: typeof data.message === 'string' ? data.message : ''
-  };
-  if (status.phase === 'normal' && !status.queuePaused && !status.playPaused && !status.message && !status.startsAt && !status.endsAt) {
-    return null;
-  }
-  return status;
-}
-
-export async function fetchLobbyStatus(config: RuntimeConfig): Promise<LobbyStatus> {
-  try {
-    const resp = await fetch(`${normalizeHTTPBase(config.queueURL).replace(/\/$/, '')}/queue/online`);
-    if (!resp.ok) {
-      return { onlinePlayers: null, maintenance: null };
-    }
-    const data = await resp.json();
-    return {
-      onlinePlayers: typeof data?.online === 'number' ? data.online : null,
-      maintenance: normalizeMaintenanceStatus(data?.maintenance)
-    };
-  } catch {
-    return { onlinePlayers: null, maintenance: null };
-  }
 }
 
 export async function streamQueue(
@@ -188,7 +154,8 @@ export async function streamQueue(
             ticket: typeof payload?.ticket === 'string' ? payload.ticket : '',
             wsPath: typeof payload?.wsPath === 'string' ? payload.wsPath : '',
             sourcePartyId: typeof payload?.sourcePartyId === 'string' ? payload.sourcePartyId : '',
-            sourcePartyInviteCode: typeof payload?.sourcePartyInviteCode === 'string' ? payload.sourcePartyInviteCode : ''
+            sourcePartyInviteCode: typeof payload?.sourcePartyInviteCode === 'string' ? payload.sourcePartyInviteCode : '',
+            returnTarget: normalizeMatchReturnTarget(payload?.returnTarget)
           });
           return;
         }
@@ -229,16 +196,17 @@ export async function fetchResumableSession(
 }
 
 export type MatchSessionResponse =
-  | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string }
+  | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget }
   | { status: 'live_auth_required'; matchId: string }
-  | { status: 'history'; matchId: string; snapshot: Snapshot; replacementMatchId?: string; sourcePartyId?: string; sourcePartyInviteCode?: string }
+  | { status: 'history'; matchId: string; snapshot: Snapshot; replacementMatchId?: string; sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget }
   | {
       status: 'replaced';
       matchId: string;
       replacementMatchId: string;
-      replacement?: { matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string };
+      replacement?: { matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget };
       sourcePartyId?: string;
       sourcePartyInviteCode?: string;
+      returnTarget?: MatchReturnTarget;
     }
   | { status: 'missing' | 'forbidden'; matchId: string };
 
@@ -255,6 +223,22 @@ export type MatchBootstrapResponse = {
   match: MatchSessionResponse;
 };
 
+export function normalizeMatchReturnTarget(value: any): MatchReturnTarget | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (value.kind === 'home') return { kind: 'home' };
+  if (value.kind === 'map' && typeof value.mapId === 'string' && value.mapId.trim()) {
+    return { kind: 'map', mapId: value.mapId };
+  }
+  if (value.kind === 'party' && typeof value.partyId === 'string' && value.partyId.trim()) {
+    return {
+      kind: 'party',
+      partyId: value.partyId,
+      ...(typeof value.partyInviteCode === 'string' && value.partyInviteCode ? { partyInviteCode: value.partyInviteCode } : {})
+    };
+  }
+  return undefined;
+}
+
 function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): MatchSessionResponse {
   const status = typeof data?.status === 'string' ? data.status : 'missing';
   const sourceParty =
@@ -264,6 +248,7 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
           sourcePartyInviteCode: data.sourcePartyInviteCode
         }
       : {};
+  const returnTarget = normalizeMatchReturnTarget(data?.returnTarget);
   if (status === 'live_connectable') {
     return {
       status,
@@ -273,7 +258,8 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       ticket: typeof data?.ticket === 'string' ? data.ticket : '',
       node: typeof data?.node === 'string' ? data.node : '',
       wsPath: typeof data?.wsPath === 'string' ? data.wsPath : '',
-      ...sourceParty
+      ...sourceParty,
+      ...(returnTarget ? { returnTarget } : {})
     };
   }
   if (status === 'history') {
@@ -282,7 +268,8 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId,
       snapshot: (data?.snapshot || null) as Snapshot,
       replacementMatchId: typeof data?.replacementMatchId === 'string' ? data.replacementMatchId : '',
-      ...sourceParty
+      ...sourceParty,
+      ...(returnTarget ? { returnTarget } : {})
     };
   }
   if (status === 'replaced') {
@@ -300,6 +287,9 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
                   sourcePartyId: typeof data.replacement.sourcePartyId === 'string' ? data.replacement.sourcePartyId : '',
                   sourcePartyInviteCode: data.replacement.sourcePartyInviteCode
                 }
+                : {}),
+            ...(normalizeMatchReturnTarget(data.replacement.returnTarget)
+              ? { returnTarget: normalizeMatchReturnTarget(data.replacement.returnTarget) }
               : {})
           }
         : undefined;
@@ -308,7 +298,8 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId,
       replacementMatchId: typeof data?.replacementMatchId === 'string' ? data.replacementMatchId : '',
       replacement: replacementPayload,
-      ...sourceParty
+      ...sourceParty,
+      ...(returnTarget ? { returnTarget } : {})
     };
   }
   if (status === 'forbidden') {
@@ -387,11 +378,13 @@ export async function startSingleplayerSession(
   accessToken: string,
   signal: AbortSignal,
   matchConfig?: MatchConfig,
-): Promise<{ matchId: string; mode?: string; ticket: string; node: string; wsPath: string }> {
+  returnTarget?: MatchReturnTarget,
+): Promise<{ matchId: string; mode?: string; ticket: string; node: string; wsPath: string; returnTarget?: MatchReturnTarget }> {
+  const body = returnTarget ? JSON.stringify({ config: matchConfig || {}, returnTarget }) : matchConfig ? JSON.stringify(matchConfig) : undefined;
   const resp = await apiFetch(config, '/v1/singleplayer/session', {
     method: 'POST',
-    headers: mergeHeaders(authHeaders(accessToken), matchConfig ? { 'Content-Type': 'application/json' } : undefined),
-    body: matchConfig ? JSON.stringify(matchConfig) : undefined,
+    headers: mergeHeaders(authHeaders(accessToken), body ? { 'Content-Type': 'application/json' } : undefined),
+    body,
     signal,
   });
   if (!resp.ok) {
@@ -403,6 +396,7 @@ export async function startSingleplayerSession(
     mode: typeof data?.mode === 'string' ? data.mode : '',
     ticket: typeof data?.ticket === 'string' ? data.ticket : '',
     node: typeof data?.node === 'string' ? data.node : '',
-    wsPath: typeof data?.wsPath === 'string' ? data.wsPath : ''
+    wsPath: typeof data?.wsPath === 'string' ? data.wsPath : '',
+    returnTarget: normalizeMatchReturnTarget(data?.returnTarget)
   };
 }

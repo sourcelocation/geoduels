@@ -38,21 +38,21 @@ The release workflow does not apply PostgreSQL migrations. Migration execution i
 
 For each release:
 
-1. Review every migration added since the currently deployed schema version, including its down migration and application compatibility window.
+1. Review every migration added since the currently deployed schema version and its application compatibility window.
 2. Back up PostgreSQL and confirm sufficient free disk space before table rewrites or `VACUUM FULL`.
 3. Pause writes or enter maintenance mode when a migration requires it.
-4. Apply migrations with the release's `db/migrations` directory before rolling out code that requires the new schema.
+4. Apply migrations with the release's `db/migrations` directory before rolling out code that requires the new schema. Fresh installations start at the v2 version-2000 schema; an existing database below version 2000 must be advanced through the version-2000 cutover with `./scripts/migrate.sh --legacy up` before using the default path.
 5. Run database and API smoke tests, then allow Flux to roll out the new images.
-6. Roll back application images only when the previous application is compatible with the migrated schema. Run down migrations only as a separately reviewed operation.
+6. Roll back application images only when the previous application is compatible with the migrated schema. Correct schema problems with a new forward migration.
 
-Migration 42 is a special staged operation: `scripts/compact-storage.sh` only runs while the schema version is exactly `42`. Apply migration 42, smoke-test compatible code, stop writes and compact, then continue with migration 43 and later. A database already beyond version 42 requires a separately planned PostgreSQL maintenance operation.
+Migration 42 is a special staged operation in `db/migrations-legacy`: `scripts/compact-storage.sh` only runs while the schema version is exactly `42`. On a legacy upgrade at version 41, use `./scripts/migrate.sh --legacy up 1` to apply only migration 42, smoke-test compatible code, stop writes and compact, then continue with migration 43 and later. A database already beyond version 42 requires a separately planned PostgreSQL maintenance operation.
 
 Migration 47 rewrites entity primary keys, foreign keys, and their indexes from
 `text` to `uuid`. Put the application in maintenance mode, stop all writers,
 take a verified backup, apply the migration, and deploy UUID-compatible
 application images before reopening traffic. The migration preserves old route
-identifiers in `legacy_id_aliases`; do not remove that table during the
-compatibility window. Drain active matches first and clear stale queue,
+identifiers in `legacy_id_aliases` for the original compatibility window.
+Migration 61 removes that expired compatibility table. Drain active matches first and clear stale queue,
 assignment, and presence data from Redis before traffic resumes.
 When migrations 42 and 47 are performed in the same maintenance window, keep
 all writers stopped from storage compaction through the UUID migration and
@@ -67,6 +67,13 @@ window. Monitor database write failures during the rollout. Do not shorten
 `MATCH_SESSION_STALE_GRACE` below the expected
 deployment and transient database-recovery time without reviewing the
 abandonment behavior.
+
+Migration 59 adds the durable matchmaker fencing lease. Apply it before an
+image that uses the updated coordinator. A standby coordinator will report
+queue unavailability until it acquires the lease; this is expected and avoids
+two active queue consumers during rollout. See
+[`docs/backend-rework.md`](backend-rework.md) for the failover verification
+procedure.
 
 ## Post-Deploy Checks
 

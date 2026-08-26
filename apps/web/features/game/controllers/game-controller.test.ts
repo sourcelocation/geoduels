@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { RESULT_ANIMATION_CONFIG } from '../../../components/ui/round-result-animation-config';
-import type { Snapshot } from '../../../components/ui/types';
+import { RESULT_ANIMATION_CONFIG } from '../lib/round-result-animation-config';
+import type { Snapshot } from '../model/types';
 import { createRuntimeConfigFixture } from '../../../test/runtime-config.fixture';
 import { GameController } from './game-controller';
 import type { SfxController } from '../../../lib/audio/sfx';

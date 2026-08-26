@@ -1,4 +1,4 @@
-import type { Snapshot } from '../../../components/ui/types';
+import type { Snapshot } from '../../game/model/types';
 import { ObservableStore } from '../../../lib/observable-store';
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
@@ -170,7 +170,8 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
                 sourcePartyId: resolved.sourcePartyId,
                 sourcePartyInviteCode: resolved.sourcePartyInviteCode
               }
-            : {})
+            : {}),
+          ...(resolved.returnTarget ? { returnTarget: resolved.returnTarget } : {})
         });
         if (seq !== this.resolveSeq || this.state.targetMatchId !== matchId) return;
         this.patchState({ status: ok ? 'awaiting_first_snapshot' : 'missing' });

@@ -42,6 +42,37 @@ func TestCreateAndGuessFlow(t *testing.T) {
 	}
 }
 
+func TestIndividualMultiplierOnlyRisesForRoundWinner(t *testing.T) {
+	e := New(func(_ string, _ int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{Lat: 10, Lng: 10, Country: "US"}, nil
+	})
+	m, err := e.CreateMatchWithOptions("m-individual", []string{"u1", "u2"}, nil, MatchOptions{
+		Config: contracts.MatchConfig{MultiplierMode: contracts.MultiplierIndividual},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.RoundStartedAt = time.Now().Add(-roundIntro)
+	snap, _ := e.GetSnapshot(m.ID)
+	_, err = e.SubmitGuess(contracts.GuessPayload{UserID: "u1", MatchID: m.ID, RoundID: snap.CurrentRound.RoundID, Lat: 10, Lng: 10, Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.SubmitGuess(contracts.GuessPayload{UserID: "u2", MatchID: m.ID, RoundID: snap.CurrentRound.RoundID, Lat: 30, Lng: 30, Finalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.LastRoundResult.DamageMultiplier; got != 1 {
+		t.Fatalf("applied multiplier = %v, want 1", got)
+	}
+	if got := result.Players["u1"].DamageMultiplier; got != 1.5 {
+		t.Fatalf("winner multiplier = %v, want 1.5", got)
+	}
+	if got := result.Players["u2"].DamageMultiplier; got != 1 {
+		t.Fatalf("loser multiplier = %v, want 1", got)
+	}
+}
+
 func TestCreateMatchIncludesRatingPreview(t *testing.T) {
 	rounds := []contracts.LocationPoint{{Lat: 10, Lng: 10, Country: "US"}}
 	e := New(func(_ string, _ int) (contracts.LocationPoint, error) { return rounds[0], nil })
@@ -700,5 +731,22 @@ func TestRoundScoreIsMonotonicDecreasing(t *testing.T) {
 			t.Fatalf("score increased at distance %.2fkm: got=%d prev=%d", d, got, prev)
 		}
 		prev = got
+	}
+}
+
+func TestEngineUsesInjectedClockForAuthoritativeSnapshot(t *testing.T) {
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	e := NewWithClock(func(string, int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{Lat: 1, Lng: 2}, nil
+	}, func() time.Time { return now })
+	if _, err := e.CreateMatch("clocked", []string{"a", "b"}, map[string]contracts.PlayerProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := e.GetSnapshot("clocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ServerUnixMS != now.UnixMilli() || snapshot.PhaseStartedAt != now.UnixMilli() {
+		t.Fatalf("snapshot did not use injected clock: %+v", snapshot)
 	}
 }

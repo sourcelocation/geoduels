@@ -11,6 +11,7 @@ import (
 type oauthIntentTestStore struct {
 	persistence.Store
 	providerExists bool
+	providerBanned bool
 	signupIPBanned bool
 	identity       persistence.Identity
 	upsertCalls    int
@@ -19,8 +20,30 @@ type oauthIntentTestStore struct {
 	linkErr        error
 }
 
-func (s *oauthIntentTestStore) IsProviderIdentityBanned(provider, providerUserID string) (bool, string, error) {
-	return false, "", nil
+func TestOAuthSigninAllowsExistingBannedAccount(t *testing.T) {
+	store := &oauthIntentTestStore{providerExists: true, providerBanned: true}
+	a := &api{store: store}
+
+	identity, err := a.resolveOAuthIdentity(httptest.NewRequest("GET", "/", nil), oauthStateClaims{Intent: oauthIntentSignIn}, "discord", "discord-sub", "player@example.com", "Player", "")
+	if err != nil {
+		t.Fatalf("resolveOAuthIdentity: %v", err)
+	}
+	if identity.Sub != "existing-user" || store.upsertCalls != 1 {
+		t.Fatalf("identity=%q upsertCalls=%d, want existing-user/1", identity.Sub, store.upsertCalls)
+	}
+}
+
+func TestOAuthBannedIdentityCannotCreateOrLinkAccount(t *testing.T) {
+	for _, state := range []oauthStateClaims{
+		{Intent: oauthIntentSignIn},
+		{Intent: oauthIntentLink, LinkSub: "user-1"},
+	} {
+		store := &oauthIntentTestStore{providerBanned: true}
+		a := &api{store: store}
+		if _, err := a.resolveOAuthIdentity(httptest.NewRequest("GET", "/", nil), state, "discord", "discord-sub", "player@example.com", "Player", ""); err == nil || err.Error() != "provider identity banned" {
+			t.Fatalf("intent %q err=%v, want provider identity banned", state.Intent, err)
+		}
+	}
 }
 
 func (s *oauthIntentTestStore) ProviderIdentityExists(provider, providerUserID string) (bool, error) {
@@ -33,12 +56,18 @@ func (s *oauthIntentTestStore) IsSignupIPBanned(ipAddress string) (bool, error) 
 
 func (s *oauthIntentTestStore) UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (persistence.Identity, error) {
 	s.upsertCalls++
+	if s.providerBanned && !s.providerExists {
+		return persistence.Identity{}, errors.New("provider identity banned")
+	}
 	return persistence.Identity{Sub: "existing-user", AccountType: "registered"}, nil
 }
 
 func (s *oauthIntentTestStore) LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (persistence.Identity, error) {
 	s.linkCalls++
 	s.lastLinkUserID = linkUserID
+	if s.providerBanned {
+		return persistence.Identity{}, errors.New("provider identity banned")
+	}
 	if s.linkErr != nil {
 		return persistence.Identity{}, s.linkErr
 	}

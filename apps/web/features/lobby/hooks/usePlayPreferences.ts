@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import type {
   GameRuleset,
+  QueueVariant,
   StreetNamesVisibility,
 } from "../../matchmaking/lib/queue-client";
 
-export type DuelStreetNamesChoice = StreetNamesVisibility | "any";
-
 type DuelPreferences = {
-  modes: GameRuleset[];
-  streetNames: DuelStreetNamesChoice;
+  queues: QueueVariant[];
 };
 
 type SingleplayerPreferences = {
@@ -25,12 +23,25 @@ const supportedModes = new Set<GameRuleset>(["moving", "no_move", "nmpz"]);
 function parseModes(value: unknown): GameRuleset[] {
   if (!Array.isArray(value)) return [];
   return Array.from(
-    new Set(value.filter((item): item is GameRuleset => supportedModes.has(item))),
+    new Set(
+      value.filter((item): item is GameRuleset => supportedModes.has(item)),
+    ),
+  );
+}
+
+const rankedQueues = new Set<QueueVariant>(["moving", "no_move_hidden"]);
+
+function parseRankedQueues(value: unknown): QueueVariant[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value.filter((item): item is QueueVariant => rankedQueues.has(item)),
+    ),
   );
 }
 
 function readPreferences() {
-  let duel: DuelPreferences = { modes: ["moving"], streetNames: "shown" };
+  let duel: DuelPreferences = { queues: ["moving"] };
   let singleplayer: SingleplayerPreferences = {
     mode: "moving",
     streetNames: "shown",
@@ -40,19 +51,24 @@ function readPreferences() {
       window.localStorage.getItem(DUEL_STORAGE_KEY) || "null",
     );
     if (storedDuel && typeof storedDuel === "object") {
-      duel = {
-        modes: parseModes(storedDuel.modes),
-        streetNames:
-          storedDuel.streetNames === "hidden" ||
-          storedDuel.streetNames === "any"
-            ? storedDuel.streetNames
-            : "shown",
-      };
+      const queues = parseRankedQueues(storedDuel.queues);
+      if (queues.length) {
+        duel = { queues };
+      } else {
+        const modes = parseModes(storedDuel.modes);
+        const streetNames = storedDuel.streetNames;
+        const migrated: QueueVariant[] = [];
+        if (modes.includes("moving") && streetNames !== "hidden")
+          migrated.push("moving");
+        if (modes.includes("no_move") && streetNames !== "shown")
+          migrated.push("no_move_hidden");
+        if (migrated.length) duel = { queues: migrated };
+      }
     } else {
       const legacy = parseModes(
         JSON.parse(window.localStorage.getItem(LEGACY_STORAGE_KEY) || "null"),
-      ).filter((mode) => mode !== "no_move");
-      if (legacy.length) duel.modes = legacy;
+      );
+      if (legacy.includes("moving")) duel.queues = ["moving"];
     }
 
     const storedSingleplayer = JSON.parse(
@@ -72,30 +88,16 @@ function readPreferences() {
   } catch {
     // Defaults keep the launcher usable when storage is unavailable or invalid.
   }
-  if (!duel.modes.length) duel.modes = ["moving"];
+  if (!duel.queues.length) duel.queues = ["moving"];
   return { duel, singleplayer };
 }
 
-export function usePlayPreferences(extensionAvailable: boolean | null) {
+export function usePlayPreferences() {
   const [initial] = useState(readPreferences);
   const [duel, setDuel] = useState<DuelPreferences>(initial.duel);
-  const [singleplayer, setSingleplayer] =
-    useState<SingleplayerPreferences>(initial.singleplayer);
-
-  useEffect(() => {
-    if (extensionAvailable !== false) return;
-    setDuel((current) => {
-      const modes = current.modes.filter((mode) => mode !== "no_move");
-      return {
-        modes: modes.length ? modes : ["moving"],
-        streetNames: "shown",
-      };
-    });
-    setSingleplayer((current) => ({
-      mode: current.mode === "no_move" ? "moving" : current.mode,
-      streetNames: "shown",
-    }));
-  }, [extensionAvailable]);
+  const [singleplayer, setSingleplayer] = useState<SingleplayerPreferences>(
+    initial.singleplayer,
+  );
 
   useEffect(() => {
     try {

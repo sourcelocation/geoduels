@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { InfoButton } from "../InfoButton";
 import { Tooltip, TooltipProvider } from "../Tooltip";
 
 afterEach(() => {
@@ -48,5 +49,16 @@ describe("Tooltip", () => {
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("Ranked map");
     expect(screen.getByRole("button", { name: "Ranked" })).toHaveAttribute("aria-describedby", tooltip.id);
+  });
+
+  it("provides a reusable information button", () => {
+    render(
+      <TooltipProvider>
+        <InfoButton label="About chat alerts" content="Play an alert for incoming messages." />
+      </TooltipProvider>,
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "About chat alerts" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Play an alert for incoming messages.");
   });
 });

@@ -13,9 +13,9 @@ describe("entity route ids", () => {
     expect(fromPublicEntityId(publicId.toLowerCase())).toBe(uuid);
   });
 
-  it("preserves slugs and legacy ids", () => {
+  it("preserves semantic slugs for display but rejects legacy route ids", () => {
     expect(toPublicEntityId("a-source-world")).toBe("a-source-world");
-    expect(normalizeEntityRouteId("match-legacy")).toBe("match-legacy");
+    expect(normalizeEntityRouteId("match-legacy")).toBe("");
   });
 
   it("accepts Crockford ambiguous characters", () => {

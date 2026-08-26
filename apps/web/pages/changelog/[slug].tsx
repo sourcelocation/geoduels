@@ -55,11 +55,11 @@ export default function ChangelogPostPage({ post }: ChangelogPostPageProps) {
       </Head>
       <PageShell variant="operational" backHref="/changelog" backLabel="Changelog" maxWidthClassName="max-w-3xl">
         <article>
-          <header className="border-b border-white/10 pb-8">
-            <time dateTime={post.updatedAt} className="text-xs font-bold uppercase tracking-[0.16em] text-[#77f0be]">
+          <header className="border-b border-border-default pb-8">
+            <time dateTime={post.updatedAt} className="text-label font-strong text-status-success">
               Updated {formatDate(post.updatedAt)}
             </time>
-            <h1 className="mt-3 text-4xl font-black tracking-tight text-white sm:text-5xl">
+            <h1 className="mt-3 text-display-md font-strong tracking-heading text-content-primary">
               {post.title}
             </h1>
           </header>

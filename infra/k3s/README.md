@@ -56,8 +56,8 @@ MIGRATIONS_DB_URL='postgres://geoduels:geoduels@127.0.0.1:5432/geoduels?sslmode=
 ./scripts/migrate.sh up
 ```
 
-For a pre-v2 database, run `./scripts/migrate.sh --legacy up` first. Once it
-reaches version 63, the default command applies the v2 migration path.
+For a pre-v2 database, check out the `v2.0.1` tag and complete its migration
+path before returning to this release.
 
 Apply the overlay:
 

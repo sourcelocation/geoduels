@@ -41,11 +41,11 @@ For each release:
 1. Review every migration added since the currently deployed schema version and its application compatibility window.
 2. Back up PostgreSQL and confirm sufficient free disk space before table rewrites or `VACUUM FULL`.
 3. Pause writes or enter maintenance mode when a migration requires it.
-4. Apply migrations with the release's `db/migrations` directory before rolling out code that requires the new schema. Fresh installations start at the v2 version-2000 schema; an existing database below version 2000 must be advanced through the version-2000 cutover with `./scripts/migrate.sh --legacy up` before using the default path.
+4. Apply migrations with the release's `db/migrations` directory before rolling out code that requires the new schema. This release requires the database to already be at v2 schema version 2000 or later. For an older database, check out the `v2.0.1` tag and complete its migration path first.
 5. Run database and API smoke tests, then allow Flux to roll out the new images.
 6. Roll back application images only when the previous application is compatible with the migrated schema. Correct schema problems with a new forward migration.
 
-Migration 42 is a special staged operation in `db/migrations-legacy`: `scripts/compact-storage.sh` only runs while the schema version is exactly `42`. On a legacy upgrade at version 41, use `./scripts/migrate.sh --legacy up 1` to apply only migration 42, smoke-test compatible code, stop writes and compact, then continue with migration 43 and later. A database already beyond version 42 requires a separately planned PostgreSQL maintenance operation.
+Migration 42 is a historical staged operation. `scripts/compact-storage.sh` only runs while the schema version is exactly `42`; use the `v2.0.1` tag for its historical instructions. A database already beyond version 42 requires a separately planned PostgreSQL maintenance operation.
 
 Migration 47 rewrites entity primary keys, foreign keys, and their indexes from
 `text` to `uuid`. Put the application in maintenance mode, stop all writers,

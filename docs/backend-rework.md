@@ -25,7 +25,7 @@ The lease has a fencing token; future launch writes must persist that token in
 the same transaction as their terminal/idempotency transition before Redis Lua
 launch code can be removed.
 
-Apply legacy migration 59 (via `./scripts/migrate.sh --legacy`) before deploying this change. Use a lease TTL comfortably
+Migration 59 is included in the historical `v2.0.1` migration path. Use a lease TTL comfortably
 larger than normal PostgreSQL failover latency (`MATCHMAKER_LEASE_TTL`, default
 15 seconds). Verify failover by stopping the active coordinator, waiting one
 TTL, then checking that exactly one standby begins accepting `/queue`.

@@ -171,9 +171,9 @@ Triggered by git tag push.
 
 1. Provision k3s cluster, ingress, DNS, and TLS.
 2. Create namespace and required secrets (`geoduels-secrets`, `ghcr-creds`) in the private ops flow.
-3. Apply DB migrations with `./scripts/migrate.sh up`. Fresh databases use the
-   GeoDuels v2 version-2000 schema in `db/migrations`; existing databases below
-   version 2000 must first be upgraded with `./scripts/migrate.sh --legacy up`.
+3. Apply DB migrations with `./scripts/migrate.sh up`. This release requires an
+   existing GeoDuels v2 schema at version 2000 or later. To migrate a pre-v2
+   database, check out the `v2.0.1` tag and complete its migration path first.
 4. Configure the release workflow variables/secrets, especially `OPS_REPO_TOKEN`.
 5. Push a release tag (for example `v1.2.3`) to build images and open the Flux release PR.
 6. Merge the generated release PR to trigger production rollout through Flux.
@@ -181,9 +181,10 @@ Triggered by git tag push.
 
 ### Storage optimization migration
 
-Migration 42 removes redundant match guesses/indexes, converts map locations to compact fixed-width values, and stores new replays as Zstandard-compressed PostgreSQL blobs with 30-day retention. Apply it during a write maintenance window.
+Migration 42 was part of the historical pre-v2 migration path. To perform that
+historical upgrade or maintenance, check out the `v2.0.1` tag.
 
-The compaction helper intentionally requires the database to be exactly at schema version 42. Migration 42 is part of the historical path, so when the legacy database is at version 41, use `./scripts/migrate.sh --legacy up 1` to apply only migration 42, start the migration-42-compatible application, run smoke tests, stop writes, compact, and only then continue the legacy migrations through the version-2000 v2 cutover:
+The compaction helper intentionally requires the database to be exactly at schema version 42. It is retained for historical operations only and is not available from this release.
 
 ```bash
 CONFIRM_STORAGE_COMPACTION=yes \

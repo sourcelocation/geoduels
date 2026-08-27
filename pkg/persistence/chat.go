@@ -31,6 +31,15 @@ func (s *pgStore) RecordChatMessage(conversationID, scopeKind, scopeID string, m
 func (s *pgStore) recordChatMessage(ctx context.Context, conversationID, scopeKind, scopeID string, message ChatMessage, createdAt time.Time) error {
 	body := nullable(message.Body)
 	emote := nullable(string(message.Emote))
+	// team_match_id is the authorization context for team-only messages. It
+	// must remain null for public messages, even when the conversation itself
+	// is a match conversation.
+	teamMatchID := ""
+	teamID := ""
+	if message.Audience == contracts.ChatAudienceTeam {
+		teamMatchID = message.MatchID
+		teamID = message.TeamID
+	}
 	storageConversationID := entityid.Derive("conversation", conversationID)
 	_, err := s.pool.Exec(ctx, `
 		insert into chat_conversations (id, scope_kind, scope_id)
@@ -46,7 +55,7 @@ func (s *pgStore) recordChatMessage(ctx context.Context, conversationID, scopeKi
 		)
 		values ($1, $2, nullif($3, '')::uuid, $4, $5, $6, $7, $8, $9, nullif($10, '')::gd_team_id, $11)
 		on conflict (id) do nothing
-	`, message.ID, storageConversationID, message.MatchID, message.SenderUserID, message.SenderDisplayName, string(message.Kind), body, emote, string(message.Audience), message.TeamID, createdAt)
+	`, message.ID, storageConversationID, teamMatchID, message.SenderUserID, message.SenderDisplayName, string(message.Kind), body, emote, string(message.Audience), teamID, createdAt)
 	return err
 }
 

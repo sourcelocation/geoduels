@@ -77,34 +77,26 @@ Start local PostgreSQL container:
 docker compose up -d postgres
 ```
 
-Run migrations with the repository helper, which uses the pinned migration container. The default path applies the clean GeoDuels v2 version-2000 schema to a fresh database and future v2 migrations. It also refuses to apply that schema to an existing pre-v2 database:
+Run migrations with the repository helper, which uses the pinned migration container. This release applies only forward migrations to an existing GeoDuels v2 database at schema version 2000 or later:
 
 ```bash
 MIGRATIONS_DB_URL='postgres://geoduels:geoduels@127.0.0.1:5432/geoduels?sslmode=disable' \
 ./scripts/migrate.sh up
 ```
 
-For an existing database below migration 2000, finish the historical upgrade
-chain explicitly, then switch back to the default path:
+For a database below migration 2000, check out the `v2.0.1` tag and complete
+its migration path before returning to this release. Post-v2 migrations belong
+in `db/migrations` at version 2001 or later.
 
-```bash
-./scripts/migrate.sh --legacy up
-./scripts/migrate.sh up
-```
-
-Historical migrations and the version-2000 cutover are kept in
-`db/migrations-legacy`; post-v2 migrations belong in `db/migrations` at version
-2001 or later.
-
-To verify both fresh-install paths and their required reference settings using
-disposable PostgreSQL containers, run:
+To verify v2 forward migrations from schema version 2000 using a disposable
+PostgreSQL container, run:
 
 ```bash
 ./scripts/test-migrations-local.sh
 ```
 
-The check also confirms that the default v2 path refuses a partially
-initialized public schema.
+The check confirms that forward migrations apply cleanly from the published
+version-2000 baseline.
 
 Set backend DB URL in `.env`:
 

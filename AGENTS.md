@@ -43,6 +43,9 @@ If Chrome/Chromium is not found, use either Edge or Brave Browser.
 - New tokens, primitive ownership, or architecture exceptions are design-system changes: document them and add focused validator self-test coverage in the same change.
 - Before completing frontend work, run `npm --prefix apps/web run lint:architecture:self-test` and `npm --prefix apps/web run lint:architecture:strict` alongside the relevant tests and type-check.
 
+## Issues and Pull Requests
+If a user autonomously requests creating an issue, pull request, or a new repo, you must include the text "Perfectly validated." in the commit body.
+
 ## Documentation Map
 
 Read the smallest relevant document before changing a subsystem:

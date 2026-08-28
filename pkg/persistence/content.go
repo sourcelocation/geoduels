@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
+	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *pgStore) GetLobbyChangelog(defaultContent LobbyChangelogContent) (LobbyChangelogContent, error) {
+func (s *DB) GetLobbyChangelog(defaultContent LobbyChangelogContent) (LobbyChangelogContent, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	posts, err := s.ListChangelogPosts(false)
@@ -25,11 +26,7 @@ func (s *pgStore) GetLobbyChangelog(defaultContent LobbyChangelogContent) (Lobby
 		}, nil
 	}
 	var raw string
-	err = s.pool.QueryRow(ctx, `
-		select value_json::text
-		from site_settings
-		where key = 'lobby_changelog'
-	`).Scan(&raw)
+	raw, err = s.db.GetSetting(ctx, "lobby_changelog")
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return defaultContent, nil
@@ -52,142 +49,65 @@ func (s *pgStore) GetLobbyChangelog(defaultContent LobbyChangelogContent) (Lobby
 	return content, nil
 }
 
-func (s *pgStore) SetLobbyChangelog(content LobbyChangelogContent) error {
+func (s *DB) SetLobbyChangelog(content LobbyChangelogContent) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	payload, err := json.Marshal(content)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
-		insert into site_settings(key, value_json, updated_at)
-		values('lobby_changelog', $1::jsonb, now())
-		on conflict (key) do update set
-			value_json = excluded.value_json,
-			updated_at = now()
-	`, string(payload))
-	return err
+	return s.db.SetSetting(ctx, db.SetSettingParams{Key: "lobby_changelog", Column2: payload})
 }
 
-func (s *pgStore) ListChangelogPosts(includeUnpublished bool) ([]ChangelogPost, error) {
+func (s *DB) ListChangelogPosts(includeUnpublished bool) ([]ChangelogPost, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	query := `
-		select id, slug, title, markdown, published, created_at, updated_at
-		from changelog_posts
-		where ($1::boolean or published = true)
-		order by updated_at desc, id desc
-	`
-	rows, err := s.pool.Query(ctx, query, includeUnpublished)
-	if err != nil {
-		return nil, err
+	rows, err := s.db.ListChangelogPosts(ctx, includeUnpublished)
+	posts := make([]ChangelogPost, len(rows))
+	for i, post := range rows {
+		posts[i] = ChangelogPost{ID: post.ID, Slug: post.Slug, Title: post.Title, Markdown: post.Markdown, Published: post.Published, CreatedAt: post.CreatedAt.Time, UpdatedAt: post.UpdatedAt.Time}
 	}
-	defer rows.Close()
-	var posts []ChangelogPost
-	for rows.Next() {
-		var post ChangelogPost
-		if err := rows.Scan(
-			&post.ID,
-			&post.Slug,
-			&post.Title,
-			&post.Markdown,
-			&post.Published,
-			&post.CreatedAt,
-			&post.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		posts = append(posts, post)
-	}
-	return posts, rows.Err()
+	return posts, err
 }
 
-func (s *pgStore) GetChangelogPostBySlug(slug string, publishedOnly bool) (ChangelogPost, bool, error) {
+func (s *DB) GetChangelogPostBySlug(slug string, publishedOnly bool) (ChangelogPost, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var post ChangelogPost
-	err := s.pool.QueryRow(ctx, `
-		select id, slug, title, markdown, published, created_at, updated_at
-		from changelog_posts
-		where slug = $1 and ($2::boolean = false or published = true)
-	`, slug, publishedOnly).Scan(
-		&post.ID,
-		&post.Slug,
-		&post.Title,
-		&post.Markdown,
-		&post.Published,
-		&post.CreatedAt,
-		&post.UpdatedAt,
-	)
+	post, err := s.db.GetChangelogPost(ctx, db.GetChangelogPostParams{Slug: slug, Column2: publishedOnly})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ChangelogPost{}, false, nil
 		}
 		return ChangelogPost{}, false, err
 	}
-	return post, true, nil
+	return ChangelogPost{ID: post.ID, Slug: post.Slug, Title: post.Title, Markdown: post.Markdown, Published: post.Published, CreatedAt: post.CreatedAt.Time, UpdatedAt: post.UpdatedAt.Time}, true, nil
 }
 
-func (s *pgStore) CreateChangelogPost(input ChangelogPostInput) (ChangelogPost, error) {
+func (s *DB) CreateChangelogPost(input ChangelogPostInput) (ChangelogPost, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var post ChangelogPost
-	err := s.pool.QueryRow(ctx, `
-		insert into changelog_posts(slug, title, markdown, published, updated_at)
-		values($1, $2, $3, $4, now())
-		returning id, slug, title, markdown, published, created_at, updated_at
-	`, input.Slug, input.Title, input.Markdown, input.Published).Scan(
-		&post.ID,
-		&post.Slug,
-		&post.Title,
-		&post.Markdown,
-		&post.Published,
-		&post.CreatedAt,
-		&post.UpdatedAt,
-	)
-	return post, err
+	post, err := s.db.CreateChangelogPost(ctx, db.CreateChangelogPostParams{Slug: input.Slug, Title: input.Title, Markdown: input.Markdown, Published: input.Published})
+	return ChangelogPost{ID: post.ID, Slug: post.Slug, Title: post.Title, Markdown: post.Markdown, Published: post.Published, CreatedAt: post.CreatedAt.Time, UpdatedAt: post.UpdatedAt.Time}, err
 }
 
-func (s *pgStore) UpdateChangelogPost(id int64, input ChangelogPostInput) (ChangelogPost, bool, error) {
+func (s *DB) UpdateChangelogPost(id int64, input ChangelogPostInput) (ChangelogPost, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var post ChangelogPost
-	err := s.pool.QueryRow(ctx, `
-		update changelog_posts
-		set slug = $2,
-			title = $3,
-			markdown = $4,
-			published = $5,
-			updated_at = now()
-		where id = $1
-		returning id, slug, title, markdown, published, created_at, updated_at
-	`, id, input.Slug, input.Title, input.Markdown, input.Published).Scan(
-		&post.ID,
-		&post.Slug,
-		&post.Title,
-		&post.Markdown,
-		&post.Published,
-		&post.CreatedAt,
-		&post.UpdatedAt,
-	)
+	post, err := s.db.UpdateChangelogPost(ctx, db.UpdateChangelogPostParams{ID: id, Slug: input.Slug, Title: input.Title, Markdown: input.Markdown, Published: input.Published})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ChangelogPost{}, false, nil
 		}
 		return ChangelogPost{}, false, err
 	}
-	return post, true, nil
+	return ChangelogPost{ID: post.ID, Slug: post.Slug, Title: post.Title, Markdown: post.Markdown, Published: post.Published, CreatedAt: post.CreatedAt.Time, UpdatedAt: post.UpdatedAt.Time}, true, nil
 }
 
-func (s *pgStore) GetModerationSettings() (ModerationSettings, error) {
+func (s *DB) GetModerationSettings() (ModerationSettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	var raw string
-	err := s.pool.QueryRow(ctx, `
-		select value_json::text
-		from site_settings
-		where key = 'moderation_settings'
-	`).Scan(&raw)
+	raw, err := s.db.GetSetting(ctx, "moderation_settings")
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ModerationSettings{}, nil
@@ -202,7 +122,7 @@ func (s *pgStore) GetModerationSettings() (ModerationSettings, error) {
 	return settings, nil
 }
 
-func (s *pgStore) SetModerationSettings(settings ModerationSettings) error {
+func (s *DB) SetModerationSettings(settings ModerationSettings) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	settings.DiscordWebhookURL = strings.TrimSpace(settings.DiscordWebhookURL)
@@ -210,25 +130,14 @@ func (s *pgStore) SetModerationSettings(settings ModerationSettings) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
-		insert into site_settings(key, value_json, updated_at)
-		values('moderation_settings', $1::jsonb, now())
-		on conflict (key) do update set
-			value_json = excluded.value_json,
-			updated_at = now()
-	`, string(payload))
-	return err
+	return s.db.SetSetting(ctx, db.SetSettingParams{Key: "moderation_settings", Column2: payload})
 }
 
-func (s *pgStore) GetDiscordIntegrationSettings() (DiscordIntegrationSettings, error) {
+func (s *DB) GetDiscordIntegrationSettings() (DiscordIntegrationSettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	var raw string
-	err := s.pool.QueryRow(ctx, `
-		select value_json::text
-		from site_settings
-		where key = 'discord_integration'
-	`).Scan(&raw)
+	raw, err := s.db.GetSetting(ctx, "discord_integration")
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return normalizeDiscordIntegrationSettings(DiscordIntegrationSettings{}), nil
@@ -242,7 +151,7 @@ func (s *pgStore) GetDiscordIntegrationSettings() (DiscordIntegrationSettings, e
 	return normalizeDiscordIntegrationSettings(settings), nil
 }
 
-func (s *pgStore) SetDiscordIntegrationSettings(settings DiscordIntegrationSettings) error {
+func (s *DB) SetDiscordIntegrationSettings(settings DiscordIntegrationSettings) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	current, err := s.GetDiscordIntegrationSettings()
@@ -260,32 +169,13 @@ func (s *pgStore) SetDiscordIntegrationSettings(settings DiscordIntegrationSetti
 	if err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `
-		insert into site_settings(key, value_json, updated_at)
-		values('discord_integration', $1::jsonb, now())
-		on conflict (key) do update set
-			value_json = excluded.value_json,
-			updated_at = now()
-	`, string(payload)); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `
-		insert into discord_sync_outbox(action, discord_user_id)
-		select $1, provider_user_id
-		from user_identities
-		where provider = $2
-		on conflict (action, discord_user_id) where processed_at is null do update set
-			next_attempt_at = least(discord_sync_outbox.next_attempt_at, excluded.next_attempt_at),
-			last_error = null
-	`, DiscordSyncActionSync, IdentityProviderDiscord); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		q := s.db.WithTx(tx)
+		if err := q.SetSetting(ctx, db.SetSettingParams{Key: "discord_integration", Column2: payload}); err != nil {
+			return err
+		}
+		return q.EnqueueDiscordSyncAll(ctx, db.EnqueueDiscordSyncAllParams{Action: DiscordSyncActionSync, Provider: IdentityProviderDiscord})
+	})
 }
 
 func normalizeDiscordIntegrationSettings(settings DiscordIntegrationSettings) DiscordIntegrationSettings {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/jackc/pgx/v5"
 )
 
 type playerMatchesCursor struct {
@@ -20,9 +19,9 @@ type playerMatchesCursor struct {
 
 func (a *api) publicPlayerProfile(w http.ResponseWriter, r *http.Request) {
 	nickname := strings.TrimSpace(mux.Vars(r)["nickname"])
-	profile, err := a.store.GetPublicPlayerProfileByNickname(nickname)
+	profile, err := a.profiles.GetPublicPlayerProfileByNickname(nickname)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, ErrNoRows) {
 			http.Error(w, "player not found", http.StatusNotFound)
 			return
 		}
@@ -43,9 +42,9 @@ func (a *api) publicPlayerMatches(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	profile, err := a.store.GetPublicPlayerProfileByNickname(strings.TrimSpace(mux.Vars(r)["nickname"]))
+	profile, err := a.profiles.GetPublicPlayerProfileByNickname(strings.TrimSpace(mux.Vars(r)["nickname"]))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, ErrNoRows) {
 			http.Error(w, "player not found", http.StatusNotFound)
 			return
 		}
@@ -69,7 +68,7 @@ func (a *api) publicPlayerMatches(w http.ResponseWriter, r *http.Request) {
 		}
 		beforeMatchID = a.resolveEntityID("match", cursor.MatchID)
 	}
-	page, err := a.store.ListPlayerMatchHistoryPage(profile.UserID, limit, beforeEndedAt, beforeMatchID, rankedOnly)
+	page, err := a.matchStore.ListPlayerMatchHistoryPage(profile.UserID, limit, beforeEndedAt, beforeMatchID, rankedOnly)
 	if err != nil {
 		http.Error(w, "match history unavailable", http.StatusInternalServerError)
 		return

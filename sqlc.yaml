@@ -1,16 +1,16 @@
 version: "2"
 sql:
+  # Single sqlc module for the whole store layer: one file per domain under
+  # db/queries, regenerated in bulk. Directory paths are not walked by sqlc,
+  # so the flat glob is explicit.
   - engine: postgresql
-    queries: db/queries/controlplane
-    # Query packages consume a reviewed current-schema projection instead of
-    # historical migrations. Some migrations intentionally inspect pg_catalog,
-    # which is valid at migration time but not parseable by sqlc.
-    schema: db/schema/controlplane.sql
+    queries: "db/queries/*.sql"
+    schema: db/migrations
     gen:
       go:
-        package: controlplanequeries
-        out: pkg/persistence/sqlc/controlplane
+        package: db
+        out: pkg/persistence/sqlc/db
         sql_package: pgx/v5
-        emit_json_tags: true
         emit_interface: true
+        emit_json_tags: true
         emit_empty_slices: true

@@ -1,7 +1,6 @@
 package persistence
 
 import (
-	"encoding/json"
 	"time"
 
 	"geoduels/pkg/contracts"
@@ -135,12 +134,7 @@ type CreatePlayerReportSignalParams struct {
 	Reason         string
 }
 
-type NotificationOutboxItem struct {
-	ID          int64
-	Type        string
-	PayloadJSON []byte
-	Attempts    int
-}
+type NotificationOutboxItem = contracts.NotificationOutboxItem
 
 type ChatRestriction struct {
 	ActionType string
@@ -180,14 +174,7 @@ type AdminPlayerDetail struct {
 	Player AdminPlayerSummary `json:"player"`
 }
 
-type UserNotification struct {
-	ID        int64           `json:"id"`
-	Type      string          `json:"type"`
-	Category  string          `json:"category,omitempty"`
-	Payload   json.RawMessage `json:"payload"`
-	ReadAt    *time.Time      `json:"readAt,omitempty"`
-	CreatedAt time.Time       `json:"createdAt"`
-}
+type UserNotification = contracts.UserNotification
 
 type SignupIPBan struct {
 	ID        int64     `json:"id"`
@@ -250,17 +237,7 @@ type RankedSeasonResetResult struct {
 	ResetAt          string `json:"resetAt"`
 }
 
-type RefreshTokenRecord struct {
-	ID               string
-	UserID           string
-	RefreshTokenHash string
-	ExpiresAt        time.Time
-	CreatedAt        time.Time
-	LastUsedAt       time.Time
-	RevokedAt        *time.Time
-	UserAgent        string
-	IPAddress        string
-}
+type RefreshTokenRecord = contracts.RefreshTokenRecord
 type DiscordSyncOutboxItem struct {
 	ID            int64
 	Action        string
@@ -274,24 +251,10 @@ type DiscordLinkedUser struct {
 	HighestEloBadgeMMR int
 }
 
-type AuthSessionParams struct {
-	UserAgent string
-	IPAddress string
-}
+type AuthSessionParams = contracts.AuthSessionParams
 
-type RuntimeMatch struct {
-	MatchID    string
-	State      string
-	OwnerEpoch int64
-	StartedAt  time.Time
-	EndedAt    time.Time
-}
+type RuntimeMatch = contracts.RuntimeMatch
 
-type MatchSessionUpsert struct {
-	Found       contracts.MatchFound
-	NodeID      string
-	NodeEpoch   int64
-	PublicRoute string
-}
+type MatchSessionUpsert = contracts.MatchSessionUpsert
 
 type ChatMessage = contracts.ChatMessage

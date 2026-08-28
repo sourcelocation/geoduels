@@ -13,11 +13,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/jackc/pgx/v5"
 
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/maintenance"
-	"geoduels/pkg/persistence"
 )
 
 const defaultLobbyChangelog = `
@@ -42,30 +40,30 @@ Thank you everyone! And keep Dueling ⚔️
 _Posted on March 19, 2026 by sourcelocation_
 `
 
-var defaultLobbyChangelogContent = persistence.LobbyChangelogContent{
+var defaultLobbyChangelogContent = LobbyChangelogContent{
 	Eyebrow:  "Latest News",
 	Title:    "GeoDuels v1.1",
 	Markdown: strings.TrimSpace(defaultLobbyChangelog),
 }
 
-func (a *api) adminIdentity(r *http.Request) (persistence.Identity, error) {
+func (a *api) adminIdentity(r *http.Request) (Identity, error) {
 	identity, err := a.authenticatedIdentity(r)
 	if err != nil {
-		return persistence.Identity{}, err
+		return Identity{}, err
 	}
 	if identity.IsBanned || !identity.IsAdmin {
-		return persistence.Identity{}, errors.New("forbidden")
+		return Identity{}, errors.New("forbidden")
 	}
 	return identity, nil
 }
 
-func (a *api) moderatorIdentity(r *http.Request) (persistence.Identity, error) {
+func (a *api) moderatorIdentity(r *http.Request) (Identity, error) {
 	identity, err := a.authenticatedIdentity(r)
 	if err != nil {
-		return persistence.Identity{}, err
+		return Identity{}, err
 	}
 	if identity.IsBanned || (!identity.IsAdmin && !identity.IsModerator) {
-		return persistence.Identity{}, errors.New("forbidden")
+		return Identity{}, errors.New("forbidden")
 	}
 	return identity, nil
 }
@@ -86,11 +84,11 @@ func (a *api) adminBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !identity.IsAdmin {
-		if err := a.store.SetUserAdmin(identity.Sub, true); err != nil {
+		if err := a.admin.SetUserAdmin(identity.Sub, true); err != nil {
 			http.Error(w, "failed to promote account", http.StatusInternalServerError)
 			return
 		}
-		identity, err = a.store.GetIdentity(claims.Sub)
+		identity, err = a.accounts.GetIdentity(claims.Sub)
 		if err != nil {
 			http.Error(w, "identity not found", http.StatusUnauthorized)
 			return
@@ -111,7 +109,7 @@ func (a *api) adminPlayers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	players, err := a.store.SearchPlayers(r.URL.Query().Get("query"), 30)
+	players, err := a.admin.SearchPlayers(r.URL.Query().Get("query"), 30)
 	if err != nil {
 		http.Error(w, "player search unavailable", http.StatusInternalServerError)
 		return
@@ -129,9 +127,9 @@ func (a *api) adminPlayerDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	detail, err := a.store.GetAdminPlayerDetail(a.resolveEntityID("user", mux.Vars(r)["id"]))
+	detail, err := a.admin.GetAdminPlayerDetail(a.resolveEntityID("user", mux.Vars(r)["id"]))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, ErrNoRows) {
 			http.Error(w, "player not found", http.StatusNotFound)
 			return
 		}
@@ -150,7 +148,7 @@ func (a *api) adminPlayerMatches(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	matches, err := a.store.ListPlayerMatchHistory(a.resolveEntityID("user", mux.Vars(r)["id"]), 50)
+	matches, err := a.matchStore.ListPlayerMatchHistory(a.resolveEntityID("user", mux.Vars(r)["id"]), 50)
 	if err != nil {
 		http.Error(w, "match history unavailable", http.StatusInternalServerError)
 		return
@@ -174,7 +172,7 @@ func (a *api) adminMatchChat(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 	matchID := a.resolveEntityID("match", mux.Vars(r)["id"])
-	messages, err := a.store.ListChatMessages("match:"+matchID, limit)
+	messages, err := a.chatStore.ListChatMessages("match:"+matchID, limit)
 	if err != nil {
 		http.Error(w, "chat log unavailable", http.StatusInternalServerError)
 		return
@@ -183,13 +181,13 @@ func (a *api) adminMatchChat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages})
 }
 
-func sanitizeAdminPlayerSummariesForModerator(players []persistence.AdminPlayerSummary) {
+func sanitizeAdminPlayerSummariesForModerator(players []AdminPlayerSummary) {
 	for i := range players {
 		sanitizeAdminPlayerSummaryForModerator(&players[i])
 	}
 }
 
-func sanitizeAdminPlayerSummaryForModerator(player *persistence.AdminPlayerSummary) {
+func sanitizeAdminPlayerSummaryForModerator(player *AdminPlayerSummary) {
 	if player == nil {
 		return
 	}
@@ -203,7 +201,7 @@ func (a *api) moderatorSubject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	profile, err := a.store.ListSubjectModerationProfile(a.resolveEntityID("user", mux.Vars(r)["userId"]))
+	profile, err := a.moderation.ListSubjectModerationProfile(a.resolveEntityID("user", mux.Vars(r)["userId"]))
 	if err != nil {
 		http.Error(w, "moderation subject unavailable", http.StatusInternalServerError)
 		return
@@ -218,7 +216,7 @@ func (a *api) moderatorSignals(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	signals, err := a.store.ListModerationSignals(100)
+	signals, err := a.moderation.ListModerationSignals(100)
 	if err != nil {
 		http.Error(w, "moderation signals unavailable", http.StatusInternalServerError)
 		return
@@ -258,7 +256,7 @@ func (a *api) moderatorSubjectUnban(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.SetPlayerBan(a.resolveEntityID("user", mux.Vars(r)["userId"]), req.Reason, moderator.Sub, false); err != nil {
+	if err := a.moderation.SetPlayerBan(a.resolveEntityID("user", mux.Vars(r)["userId"]), req.Reason, moderator.Sub, false); err != nil {
 		http.Error(w, "failed to unban player", http.StatusInternalServerError)
 		return
 	}
@@ -282,7 +280,7 @@ func (a *api) moderatorSubjectMute(w http.ResponseWriter, r *http.Request) {
 	if req.DurationHours <= 0 {
 		req.DurationHours = 7 * 24
 	}
-	if err := a.store.SetPlayerMute(a.resolveEntityID("user", mux.Vars(r)["userId"]), mux.Vars(r)["kind"], req.Reason, moderator.Sub, time.Now().Add(time.Duration(req.DurationHours)*time.Hour), true); err != nil {
+	if err := a.moderation.SetPlayerMute(a.resolveEntityID("user", mux.Vars(r)["userId"]), mux.Vars(r)["kind"], req.Reason, moderator.Sub, time.Now().Add(time.Duration(req.DurationHours)*time.Hour), true); err != nil {
 		http.Error(w, "failed to mute player", http.StatusBadRequest)
 		return
 	}
@@ -295,7 +293,7 @@ func (a *api) moderatorSubjectUnmute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.SetPlayerMute(a.resolveEntityID("user", mux.Vars(r)["userId"]), mux.Vars(r)["kind"], "", moderator.Sub, time.Time{}, false); err != nil {
+	if err := a.moderation.SetPlayerMute(a.resolveEntityID("user", mux.Vars(r)["userId"]), mux.Vars(r)["kind"], "", moderator.Sub, time.Time{}, false); err != nil {
 		http.Error(w, "failed to unmute player", http.StatusBadRequest)
 		return
 	}
@@ -310,7 +308,7 @@ func (a *api) banPlayerForCheating(w http.ResponseWriter, r *http.Request, rawUs
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	summary, err := a.store.BanPlayerForCheating(a.resolveEntityID("user", rawUserID), req.Reason, actorUserID)
+	summary, err := a.moderation.BanPlayerForCheating(a.resolveEntityID("user", rawUserID), req.Reason, actorUserID)
 	if err != nil {
 		http.Error(w, "failed to ban player", http.StatusInternalServerError)
 		return
@@ -325,7 +323,7 @@ func (a *api) adminUnbanPlayer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.SetPlayerBan(a.resolveEntityID("user", mux.Vars(r)["id"]), "", admin.Sub, false); err != nil {
+	if err := a.moderation.SetPlayerBan(a.resolveEntityID("user", mux.Vars(r)["id"]), "", admin.Sub, false); err != nil {
 		http.Error(w, "failed to unban player", http.StatusInternalServerError)
 		return
 	}
@@ -337,7 +335,7 @@ func (a *api) adminCommunityPardonPreview(w http.ResponseWriter, r *http.Request
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	summary, err := a.store.PreviewCommunityPardon(7 * 24 * time.Hour)
+	summary, err := a.moderation.PreviewCommunityPardon(7 * 24 * time.Hour)
 	if err != nil {
 		http.Error(w, "failed to preview community pardon", http.StatusInternalServerError)
 		return
@@ -359,7 +357,7 @@ func (a *api) adminCommunityPardon(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "explicit confirmation required", http.StatusBadRequest)
 		return
 	}
-	summary, err := a.store.PardonBannedPlayers(7*24*time.Hour, admin.Sub)
+	summary, err := a.moderation.PardonBannedPlayers(7*24*time.Hour, admin.Sub)
 	if err != nil {
 		http.Error(w, "failed to pardon banned players", http.StatusInternalServerError)
 		return
@@ -373,7 +371,7 @@ func (a *api) adminClearReporterMute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.ClearReporterMute(a.resolveEntityID("user", mux.Vars(r)["id"])); err != nil {
+	if err := a.moderation.ClearReporterMute(a.resolveEntityID("user", mux.Vars(r)["id"])); err != nil {
 		http.Error(w, "failed to unmute reporter", http.StatusInternalServerError)
 		return
 	}
@@ -386,7 +384,7 @@ func (a *api) adminPromoteModerator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := a.resolveEntityID("user", mux.Vars(r)["id"])
-	if err := a.store.SetUserModerator(userID, true); err != nil {
+	if err := a.admin.SetUserModerator(userID, true); err != nil {
 		http.Error(w, "failed to promote moderator", http.StatusInternalServerError)
 		return
 	}
@@ -398,7 +396,7 @@ func (a *api) adminDemoteModerator(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := a.store.SetUserModerator(a.resolveEntityID("user", mux.Vars(r)["id"]), false); err != nil {
+	if err := a.admin.SetUserModerator(a.resolveEntityID("user", mux.Vars(r)["id"]), false); err != nil {
 		http.Error(w, "failed to demote moderator", http.StatusInternalServerError)
 		return
 	}
@@ -433,13 +431,9 @@ func (a *api) adminSetMapCreatorTier(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tier must be auto, base, trusted, or established", http.StatusBadRequest)
 		return
 	}
-	repository, ok := a.store.(persistence.MapCreatorAdminRepository)
-	if !ok {
-		http.Error(w, "map creator administration unavailable", http.StatusServiceUnavailable)
-		return
-	}
+	repository := a.db
 	quota, err := repository.SetMapCreatorTierOverride(a.resolveEntityID("user", mux.Vars(r)["id"]), tier)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, ErrNoRows) {
 		http.NotFound(w, r)
 		return
 	}
@@ -455,7 +449,7 @@ func (a *api) adminListRoles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	roles, err := a.store.ListUserRoles()
+	roles, err := a.admin.ListUserRoles()
 	if err != nil {
 		http.Error(w, "roles unavailable", http.StatusInternalServerError)
 		return
@@ -479,7 +473,7 @@ func (a *api) adminGrantRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.GrantUserRole(a.resolveEntityID("user", req.UserID), req.Role, admin.Sub, req.Reason); err != nil {
+	if err := a.admin.GrantUserRole(a.resolveEntityID("user", req.UserID), req.Role, admin.Sub, req.Reason); err != nil {
 		http.Error(w, "failed to grant role", http.StatusInternalServerError)
 		return
 	}
@@ -499,7 +493,7 @@ func (a *api) adminRevokeRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.RevokeUserRole(a.resolveEntityID("user", mux.Vars(r)["id"]), strings.TrimSpace(mux.Vars(r)["role"]), admin.Sub, req.Reason); err != nil {
+	if err := a.admin.RevokeUserRole(a.resolveEntityID("user", mux.Vars(r)["id"]), strings.TrimSpace(mux.Vars(r)["role"]), admin.Sub, req.Reason); err != nil {
 		http.Error(w, "failed to revoke role", http.StatusInternalServerError)
 		return
 	}
@@ -512,7 +506,7 @@ func (a *api) adminBadgeDefinitions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"badges": a.store.ListAdminGrantableBadges()})
+	_ = json.NewEncoder(w).Encode(map[string]any{"badges": a.admin.ListAdminGrantableBadges()})
 }
 
 func (a *api) adminGrantBadge(w http.ResponseWriter, r *http.Request) {
@@ -538,12 +532,12 @@ func (a *api) adminGrantBadge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "badge id required", http.StatusBadRequest)
 		return
 	}
-	badge, changed, err := a.store.GrantBadgeToUser(nickname, req.BadgeID, admin.Sub)
+	badge, changed, err := a.admin.GrantBadgeToUser(nickname, req.BadgeID, admin.Sub)
 	if err != nil {
 		switch {
-		case errors.Is(err, persistence.ErrBadgeUserNotFound):
+		case errors.Is(err, ErrBadgeUserNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
-		case errors.Is(err, persistence.ErrBadgeUnavailable), errors.Is(err, persistence.ErrBadgeNicknameRequired):
+		case errors.Is(err, ErrBadgeUnavailable), errors.Is(err, ErrBadgeNicknameRequired):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
 			http.Error(w, "failed to grant badge", http.StatusInternalServerError)
@@ -559,7 +553,7 @@ func (a *api) moderatorLog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	entries, err := a.store.ListModerationLog(100)
+	entries, err := a.moderation.ListModerationLog(100)
 	if err != nil {
 		http.Error(w, "moderation log unavailable", http.StatusInternalServerError)
 		return
@@ -573,7 +567,7 @@ func (a *api) adminListSignupIPBans(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	bans, err := a.store.ListSignupIPBans(100)
+	bans, err := a.moderation.ListSignupIPBans(100)
 	if err != nil {
 		http.Error(w, "ip bans unavailable", http.StatusInternalServerError)
 		return
@@ -596,7 +590,7 @@ func (a *api) adminAddSignupIPBan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.AddSignupIPBan(strings.TrimSpace(req.IPAddress), req.Reason, admin.Sub); err != nil {
+	if err := a.moderation.AddSignupIPBan(strings.TrimSpace(req.IPAddress), req.Reason, admin.Sub); err != nil {
 		http.Error(w, "failed to ban ip", http.StatusInternalServerError)
 		return
 	}
@@ -613,7 +607,7 @@ func (a *api) adminRemoveSignupIPBan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid ip", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.RemoveSignupIPBan(ip); err != nil {
+	if err := a.moderation.RemoveSignupIPBan(ip); err != nil {
 		http.Error(w, "failed to remove ip ban", http.StatusInternalServerError)
 		return
 	}
@@ -683,7 +677,7 @@ func (a *api) adminGetModerationSettings(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	settings, err := a.store.GetModerationSettings()
+	settings, err := a.content.GetModerationSettings()
 	if err != nil {
 		http.Error(w, "moderation settings unavailable", http.StatusInternalServerError)
 		return
@@ -697,7 +691,7 @@ func (a *api) adminPutModerationSettings(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	var req persistence.ModerationSettings
+	var req ModerationSettings
 	if err := decodeJSONBody(r, &req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
@@ -707,8 +701,8 @@ func (a *api) adminPutModerationSettings(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	settings := persistence.ModerationSettings{DiscordWebhookURL: webhookURL}
-	if err := a.store.SetModerationSettings(settings); err != nil {
+	settings := ModerationSettings{DiscordWebhookURL: webhookURL}
+	if err := a.content.SetModerationSettings(settings); err != nil {
 		http.Error(w, "failed to save moderation settings", http.StatusInternalServerError)
 		return
 	}
@@ -721,7 +715,7 @@ func (a *api) adminGetDiscordIntegrationSettings(w http.ResponseWriter, r *http.
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	settings, err := a.store.GetDiscordIntegrationSettings()
+	settings, err := a.content.GetDiscordIntegrationSettings()
 	if err != nil {
 		http.Error(w, "discord integration settings unavailable", http.StatusInternalServerError)
 		return
@@ -735,7 +729,7 @@ func (a *api) adminPutDiscordIntegrationSettings(w http.ResponseWriter, r *http.
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	var settings persistence.DiscordIntegrationSettings
+	var settings DiscordIntegrationSettings
 	if err := decodeJSONBody(r, &settings); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
@@ -759,11 +753,11 @@ func (a *api) adminPutDiscordIntegrationSettings(w http.ResponseWriter, r *http.
 	// Managed role history is server-owned so old configured roles can be
 	// removed safely after an administrator changes a role ID.
 	settings.ManagedRoleIDs = nil
-	if err := a.store.SetDiscordIntegrationSettings(settings); err != nil {
+	if err := a.content.SetDiscordIntegrationSettings(settings); err != nil {
 		http.Error(w, "failed to save discord integration settings", http.StatusInternalServerError)
 		return
 	}
-	saved, err := a.store.GetDiscordIntegrationSettings()
+	saved, err := a.content.GetDiscordIntegrationSettings()
 	if err != nil {
 		http.Error(w, "discord integration settings unavailable", http.StatusInternalServerError)
 		return
@@ -793,7 +787,7 @@ func (a *api) adminGetRankedSeason(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	settings, err := a.store.GetRankedSeasonSettings()
+	settings, err := a.seasons.GetRankedSeasonSettings()
 	if err != nil {
 		http.Error(w, "season settings unavailable", http.StatusInternalServerError)
 		return
@@ -814,7 +808,7 @@ func (a *api) adminPutRankedSeasonResetRule(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	settings, err := a.store.SetRankedSeasonResetRule(req.MonthlyResetDay)
+	settings, err := a.seasons.SetRankedSeasonResetRule(req.MonthlyResetDay)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "reset day") {
@@ -851,7 +845,7 @@ func normalizeDiscordWebhookURL(raw string) (string, error) {
 }
 
 func (a *api) publicLobbyChangelog(w http.ResponseWriter, r *http.Request) {
-	content, err := a.store.GetLobbyChangelog(defaultLobbyChangelogContent)
+	content, err := a.content.GetLobbyChangelog(defaultLobbyChangelogContent)
 	if err != nil {
 		http.Error(w, "changelog unavailable", http.StatusInternalServerError)
 		return
@@ -861,7 +855,7 @@ func (a *api) publicLobbyChangelog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) publicChangelogPosts(w http.ResponseWriter, r *http.Request) {
-	posts, err := a.store.ListChangelogPosts(false)
+	posts, err := a.content.ListChangelogPosts(false)
 	if err != nil {
 		http.Error(w, "changelog unavailable", http.StatusInternalServerError)
 		return
@@ -872,7 +866,7 @@ func (a *api) publicChangelogPosts(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) publicChangelogPost(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimSpace(mux.Vars(r)["slug"])
-	post, ok, err := a.store.GetChangelogPostBySlug(slug, true)
+	post, ok, err := a.content.GetChangelogPostBySlug(slug, true)
 	if err != nil {
 		http.Error(w, "changelog unavailable", http.StatusInternalServerError)
 		return
@@ -890,7 +884,7 @@ func (a *api) adminGetChangelog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	posts, err := a.store.ListChangelogPosts(true)
+	posts, err := a.content.ListChangelogPosts(true)
 	if err != nil {
 		http.Error(w, "changelog unavailable", http.StatusInternalServerError)
 		return
@@ -899,7 +893,7 @@ func (a *api) adminGetChangelog(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"posts": posts})
 }
 
-func normalizeChangelogPostInput(req persistence.ChangelogPostInput) (persistence.ChangelogPostInput, error) {
+func normalizeChangelogPostInput(req ChangelogPostInput) (ChangelogPostInput, error) {
 	req.Title = strings.TrimSpace(req.Title)
 	req.Markdown = strings.TrimSpace(req.Markdown)
 	req.Slug = slugifyChangelogPost(req.Slug)
@@ -907,16 +901,16 @@ func normalizeChangelogPostInput(req persistence.ChangelogPostInput) (persistenc
 		req.Slug = slugifyChangelogPost(req.Title)
 	}
 	if req.Title == "" {
-		return persistence.ChangelogPostInput{}, errors.New("title is required")
+		return ChangelogPostInput{}, errors.New("title is required")
 	}
 	if req.Slug == "" {
-		return persistence.ChangelogPostInput{}, errors.New("slug is required")
+		return ChangelogPostInput{}, errors.New("slug is required")
 	}
 	if len(req.Slug) > 120 {
-		return persistence.ChangelogPostInput{}, errors.New("slug is too long")
+		return ChangelogPostInput{}, errors.New("slug is too long")
 	}
 	if len(req.Title) > 160 {
-		return persistence.ChangelogPostInput{}, errors.New("title is too long")
+		return ChangelogPostInput{}, errors.New("title is too long")
 	}
 	return req, nil
 }
@@ -944,7 +938,7 @@ func (a *api) adminCreateChangelogPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	var req persistence.ChangelogPostInput
+	var req ChangelogPostInput
 	if err := decodeJSONBody(r, &req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
@@ -954,7 +948,7 @@ func (a *api) adminCreateChangelogPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	post, err := a.store.CreateChangelogPost(input)
+	post, err := a.content.CreateChangelogPost(input)
 	if err != nil {
 		http.Error(w, "failed to save changelog", http.StatusInternalServerError)
 		return
@@ -974,7 +968,7 @@ func (a *api) adminUpdateChangelogPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid post id", http.StatusBadRequest)
 		return
 	}
-	var req persistence.ChangelogPostInput
+	var req ChangelogPostInput
 	if err := decodeJSONBody(r, &req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
@@ -984,7 +978,7 @@ func (a *api) adminUpdateChangelogPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	post, ok, err := a.store.UpdateChangelogPost(id, input)
+	post, ok, err := a.content.UpdateChangelogPost(id, input)
 	if err != nil {
 		http.Error(w, "failed to save changelog", http.StatusInternalServerError)
 		return
@@ -1013,7 +1007,7 @@ func (a *api) adminImportOfficialMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer closeFile()
-	input := persistence.OfficialMapImportInput{
+	input := OfficialMapImportInput{
 		MapKey:             r.FormValue("mapKey"),
 		DisplayName:        r.FormValue("displayName"),
 		Description:        r.FormValue("description"),
@@ -1066,7 +1060,7 @@ func (a *api) uploadMap(w http.ResponseWriter, r *http.Request, mapKey string) {
 		http.Error(w, "failed to read file", http.StatusBadRequest)
 		return
 	}
-	summary, err := a.store.ReplaceMapLocations(mapKey, mapKey, dataset)
+	summary, err := a.seasons.ReplaceMapLocations(mapKey, mapKey, dataset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

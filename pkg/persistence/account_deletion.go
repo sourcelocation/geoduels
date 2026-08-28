@@ -3,177 +3,87 @@ package persistence
 import (
 	"context"
 	"errors"
+	db "geoduels/pkg/persistence/sqlc/db"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
-func (s *pgStore) DeleteAccount(userID string) error {
+func deletionUUID(s string) (pgtype.UUID, error) { var u pgtype.UUID; return u, u.Scan(s) }
+func (s *DB) DeleteAccount(userID string) error {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return errors.New("userID required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
+	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
+	defer c()
+	tx, e := s.pool.Begin(ctx)
+	if e != nil {
+		return e
 	}
 	defer tx.Rollback(ctx)
-
-	var isBanned bool
-	var banReason string
-	if err := tx.QueryRow(ctx, `
-		select coalesce(banned_at is not null and (ban_expires_at is null or ban_expires_at > now()), false), coalesce(ban_reason, '')
-		from users
-		where id = $1
-	`, userID).Scan(&isBanned, &banReason); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	q := db.New(tx)
+	id, e := deletionUUID(userID)
+	if e != nil {
+		return e
+	}
+	u, e := q.GetDeletionUser(ctx, id)
+	if e != nil {
+		if errors.Is(e, pgx.ErrNoRows) {
 			return errors.New("user not found")
 		}
-		return err
+		return e
 	}
-	if isBanned {
-		if strings.TrimSpace(banReason) == "" {
-			banReason = "account deleted while banned"
+	if banned, ok := u.Coalesce.(bool); ok && banned {
+		r := strings.TrimSpace(u.BanReason)
+		if r == "" {
+			r = "account deleted while banned"
 		}
-		if err := banUserOAuthIdentities(ctx, tx, userID, banReason, ""); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(ctx, `
-		update auth_sessions
-		set revoked_at = coalesce(revoked_at, now())
-		where user_id = $1 and revoked_at is null
-	`, userID); err != nil {
-		return err
-	}
-	rows, err := tx.Query(ctx, `
-		select provider_user_id
-		from user_identities
-		where user_id = $1
-		  and provider = $2
-	`, userID, IdentityProviderDiscord)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var discordUserID string
-		if err := rows.Scan(&discordUserID); err != nil {
-			rows.Close()
-			return err
-		}
-		if err := enqueueDiscordSyncTx(ctx, tx, DiscordSyncActionCleanupRoles, discordUserID); err != nil {
-			rows.Close()
-			return err
+		if e = db.New(tx).BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: id, Column2: r}); e != nil {
+			return e
 		}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
+	if e = q.RevokeDeletionSessions(ctx, id); e != nil {
+		return e
 	}
-	rows.Close()
-	if _, err := tx.Exec(ctx, `
-		insert into user_identity_history(user_id, provider, provider_user_id, email, provider_name, first_seen_at, last_seen_at, deleted_at)
-		select user_id, provider, provider_user_id, email, provider_name, created_at, last_seen_at, now()
-		from user_identities
-		where user_id = $1
-		on conflict (user_id, provider, provider_user_id) do update set
-			email = excluded.email,
-			provider_name = excluded.provider_name,
-			last_seen_at = greatest(user_identity_history.last_seen_at, excluded.last_seen_at),
-			deleted_at = coalesce(user_identity_history.deleted_at, excluded.deleted_at)
-	`, userID); err != nil {
-		return err
+	xs, e := q.ListDeletionDiscordIdentities(ctx, db.ListDeletionDiscordIdentitiesParams{UserID: id, Provider: db.GdOauthProvider(IdentityProviderDiscord)})
+	if e != nil {
+		return e
 	}
-	if _, err := tx.Exec(ctx, `
-		delete from user_identities
-		where user_id = $1
-	`, userID); err != nil {
-		return err
+	for _, x := range xs {
+		if e = enqueueDiscordSyncTx(ctx, tx, DiscordSyncActionCleanupRoles, x); e != nil {
+			return e
+		}
 	}
-	tag, err := tx.Exec(ctx, `
-		update users
-		set email = null,
-			display_name = 'Deleted player',
-			avatar_url = null,
-			nickname_claimed_at = null,
-			account_type = 'guest',
-			is_admin = false,
-			is_moderator = false,
-			deleted_at = coalesce(deleted_at, now())
-		where id = $1
-	`, userID)
-	if err != nil {
-		return err
+	if e = q.ArchiveDeletionIdentities(ctx, id); e != nil {
+		return e
 	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("user not found")
+	if e = q.DeleteDeletionIdentities(ctx, id); e != nil {
+		return e
+	}
+	if _, e = q.AnonymizeDeletedUser(ctx, id); e != nil {
+		return e
 	}
 	return tx.Commit(ctx)
 }
-
-func (s *pgStore) DeleteGuestAccountsOlderThan(ttl time.Duration, limit int) (int, error) {
+func (s *DB) DeleteGuestAccountsOlderThan(ttl time.Duration, limit int) (int, error) {
 	if ttl <= 0 || limit <= 0 {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
+	ctx, c := context.WithTimeout(context.Background(), 30*time.Second)
+	defer c()
+	tx, e := s.pool.Begin(ctx)
+	if e != nil {
+		return 0, e
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `
-		with batch as materialized (
-			select id
-			from users
-			where account_type = 'guest'
-			  and deleted_at is null
-			  and created_at < now() - ($1::double precision * interval '1 second')
-			order by created_at asc
-			limit $2
-		),
-		del_ranked as (
-			delete from ranked_stats
-			using batch
-			where ranked_stats.user_id = batch.id
-		),
-		del_ranks as (
-			delete from ranks
-			using batch
-			where ranks.user_id = batch.id
-		),
-		del_stats as (
-			delete from user_stats
-			using batch
-			where user_stats.user_id = batch.id
-		)
-		delete from users
-		using batch
-		where users.id = batch.id
-		returning users.id
-	`, ttl.Seconds(), limit)
-	if err != nil {
-		return 0, err
+	xs, e := db.New(tx).DeleteOldGuestAccounts(ctx, db.DeleteOldGuestAccountsParams{TtlSeconds: ttl.Seconds(), AccountLimit: int32(limit)})
+	if e != nil {
+		return 0, e
 	}
-	deleted := 0
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		deleted++
+	if e = tx.Commit(ctx); e != nil {
+		return 0, e
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return deleted, nil
+	return len(xs), nil
 }

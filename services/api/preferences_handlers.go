@@ -6,12 +6,12 @@ import (
 	"errors"
 	"net/http"
 
-	"geoduels/pkg/persistence"
+	preferencesdomain "geoduels/pkg/preferences"
 )
 
 const maxPreferencesBytes = 32 * 1024
 
-func writePreferences(w http.ResponseWriter, preferences persistence.UserPreferences) {
+func writePreferences(w http.ResponseWriter, preferences preferencesdomain.UserPreferences) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Preferences json.RawMessage `json:"preferences"`
@@ -28,12 +28,11 @@ func (a *api) userPreferences(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	store, ok := a.store.(persistence.PreferenceRepository)
-	if !ok {
+	if a.preferences == nil {
 		http.Error(w, "preferences unavailable", http.StatusNotImplemented)
 		return
 	}
-	preferences, err := store.GetUserPreferences(claims.Sub)
+	preferences, err := a.preferences.Get(r.Context(), claims.Sub)
 	if err != nil {
 		http.Error(w, "failed to load preferences", http.StatusInternalServerError)
 		return
@@ -64,17 +63,20 @@ func (a *api) updateUserPreferences(w http.ResponseWriter, r *http.Request) {
 	var header struct {
 		Version int `json:"version"`
 	}
-	if json.Unmarshal(req.Preferences, &header) != nil || header.Version != 1 {
-		http.Error(w, "unsupported preference version", http.StatusBadRequest)
-		return
-	}
-	store, ok := a.store.(persistence.PreferenceRepository)
-	if !ok {
+	if a.preferences == nil {
 		http.Error(w, "preferences unavailable", http.StatusNotImplemented)
 		return
 	}
-	preferences, err := store.UpdateUserPreferences(claims.Sub, header.Version, req.Preferences, req.Revision)
-	if errors.Is(err, persistence.ErrPreferenceRevisionConflict) {
+	if json.Unmarshal(req.Preferences, &header) != nil {
+		http.Error(w, "unsupported preference version", http.StatusBadRequest)
+		return
+	}
+	preferences, err := a.preferences.Update(r.Context(), claims.Sub, header.Version, req.Preferences, req.Revision)
+	if errors.Is(err, preferencesdomain.ErrUnsupportedVersion) {
+		http.Error(w, "unsupported preference version", http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, preferencesdomain.ErrRevisionConflict) {
 		http.Error(w, "preferences changed in another session", http.StatusConflict)
 		return
 	}

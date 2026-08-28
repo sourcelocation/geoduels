@@ -15,7 +15,6 @@ import (
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	"geoduels/pkg/observability"
-	"geoduels/pkg/persistence"
 )
 
 const (
@@ -282,7 +281,7 @@ func (q *matchCoordinator) canViewChatMessage(userID string, message contracts.C
 	return err == nil && ok && teamID == message.TeamID
 }
 
-func chatRestrictionErrorMessage(restriction persistence.ChatRestriction) string {
+func chatRestrictionErrorMessage(restriction chatRestriction) string {
 	switch restriction.ActionType {
 	case "temporary_ban", "permanent_ban":
 		if restriction.EndsAt.IsZero() {

@@ -57,7 +57,7 @@ func (a *api) resolveOAuthIdentity(r *http.Request, state oauthStateClaims, prov
 		return persistence.Identity{}, errors.New("provider identity unavailable")
 	}
 	intent := normalizeOAuthIntent(state.Intent)
-	identityExists, err := a.store.ProviderIdentityExists(provider, providerUserID)
+	identityExists, err := a.accounts.ProviderIdentityExists(provider, providerUserID)
 	if err != nil {
 		return persistence.Identity{}, err
 	}
@@ -66,32 +66,30 @@ func (a *api) resolveOAuthIdentity(r *http.Request, state oauthStateClaims, prov
 		if state.LinkSub == "" {
 			return persistence.Identity{}, errors.New("link requires sign in")
 		}
-		return a.store.LinkProviderIdentity(provider, providerUserID, email, displayName, avatarURL, state.LinkSub)
+		return a.accounts.LinkProviderIdentity(provider, providerUserID, email, displayName, avatarURL, state.LinkSub)
 	case oauthIntentUpgradeGuest:
 		if state.LinkSub == "" {
 			return persistence.Identity{}, errors.New("guest upgrade requires sign in")
 		}
-		identity, err := a.store.GetIdentity(state.LinkSub)
+		identity, err := a.accounts.GetIdentity(state.LinkSub)
 		if err != nil {
 			return persistence.Identity{}, err
 		}
 		if identity.AccountType != "guest" {
 			return persistence.Identity{}, errors.New("guest upgrade requires guest account")
 		}
-		identity, err = a.store.LinkProviderIdentity(provider, providerUserID, email, displayName, avatarURL, state.LinkSub)
-		if err != nil && strings.Contains(strings.ToLower(err.Error()), "already linked") {
-			return persistence.Identity{}, errors.New("provider account already exists")
-		}
-		return identity, err
+		// Mixed merge/login: attach a brand-new provider to this guest, or
+		// sign into the existing GeoDuels account for that provider.
+		return a.accounts.UpsertProviderIdentity(provider, providerUserID, email, displayName, avatarURL, state.LinkSub)
 	}
 	if !identityExists {
-		if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {
+		if banned, err := a.moderation.IsSignupIPBanned(a.clientIP(r)); err != nil {
 			return persistence.Identity{}, errors.New("signup unavailable")
 		} else if banned {
 			return persistence.Identity{}, errors.New("signup unavailable")
 		}
 	}
-	return a.store.UpsertProviderIdentity(provider, providerUserID, email, displayName, avatarURL, "")
+	return a.accounts.UpsertProviderIdentity(provider, providerUserID, email, displayName, avatarURL, "")
 }
 
 func (a *api) oauthSessionPayload(provider, accessToken string, identity persistence.Identity, fallbackName, returnTo string) map[string]any {
@@ -127,8 +125,6 @@ func oauthUserError(err error) string {
 	switch {
 	case strings.Contains(msg, "already linked"):
 		return "This sign-in method is already linked to another GeoDuels account. Sign out first to use it."
-	case strings.Contains(msg, "provider account already exists"):
-		return "This sign-in method already has a GeoDuels account. Sign out and continue with that provider."
 	case strings.Contains(msg, "link requires sign in"):
 		return "Sign in before linking another method."
 	case strings.Contains(msg, "guest upgrade requires"):

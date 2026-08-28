@@ -104,6 +104,13 @@ Set backend DB URL in `.env`:
 POSTGRES_URL=postgres://geoduels:geoduels@localhost:5432/geoduels?sslmode=disable
 ```
 
+Regenerate the sqlc persistence layer (generated code is gitignored and must
+exist before building or testing any Go service):
+
+```bash
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+```
+
 Restart backend services after changing `.env`:
 
 ```bash

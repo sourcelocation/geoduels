@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/entityid"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 var (
@@ -44,221 +47,187 @@ type SocialRepository interface {
 	ListUserEvents(userID string, after int64, limit int) ([]UserEvent, error)
 }
 
-func (s *pgStore) GetSocialSettings(userID string) (SocialSettings, error) {
-	var settings SocialSettings
-	err := s.pool.QueryRow(context.Background(), `
-		select social_discoverable,social_presence_visible,social_requests_enabled,social_party_invites_enabled
-		from users where id=$1
-	`, userID).Scan(&settings.Discoverable, &settings.PresenceVisible, &settings.RequestsEnabled, &settings.PartyInvitesEnabled)
+func (s *DB) GetSocialSettings(userID string) (SocialSettings, error) {
+	id, err := profileUUID(userID)
+	if err != nil {
+		return SocialSettings{}, err
+	}
+	row, err := s.db.GetSocialSettings(context.Background(), id)
+	settings := SocialSettings{Discoverable: row.SocialDiscoverable, PresenceVisible: row.SocialPresenceVisible, RequestsEnabled: row.SocialRequestsEnabled, PartyInvitesEnabled: row.SocialPartyInvitesEnabled}
 	return settings, err
 }
 
-func (s *pgStore) UpdateSocialSettings(userID string, settings SocialSettings) (SocialSettings, error) {
-	err := s.pool.QueryRow(context.Background(), `
-		update users set social_discoverable=$2,social_presence_visible=$3,
-		  social_requests_enabled=$4,social_party_invites_enabled=$5
-		where id=$1 and account_type='registered'
-		returning social_discoverable,social_presence_visible,social_requests_enabled,social_party_invites_enabled
-	`, userID, settings.Discoverable, settings.PresenceVisible, settings.RequestsEnabled, settings.PartyInvitesEnabled).
-		Scan(&settings.Discoverable, &settings.PresenceVisible, &settings.RequestsEnabled, &settings.PartyInvitesEnabled)
+func (s *DB) UpdateSocialSettings(userID string, settings SocialSettings) (SocialSettings, error) {
+	id, err := profileUUID(userID)
+	if err != nil {
+		return settings, err
+	}
+	row, err := s.db.UpdateSocialSettings(context.Background(), db.UpdateSocialSettingsParams{ID: id, SocialDiscoverable: settings.Discoverable, SocialPresenceVisible: settings.PresenceVisible, SocialRequestsEnabled: settings.RequestsEnabled, SocialPartyInvitesEnabled: settings.PartyInvitesEnabled})
+	settings = SocialSettings{Discoverable: row.SocialDiscoverable, PresenceVisible: row.SocialPresenceVisible, RequestsEnabled: row.SocialRequestsEnabled, PartyInvitesEnabled: row.SocialPartyInvitesEnabled}
 	return settings, err
 }
 
-func (s *pgStore) GetSocialAccount(userID string) (bool, bool, bool, error) {
-	var accountType string
-	var requestsEnabled, invitesEnabled bool
-	err := s.pool.QueryRow(context.Background(), `
-		select account_type, social_requests_enabled, social_party_invites_enabled
-		from users where id=$1
-	`, userID).Scan(&accountType, &requestsEnabled, &invitesEnabled)
-	return accountType == "guest", requestsEnabled, invitesEnabled, err
+func (s *DB) GetSocialAccount(userID string) (bool, bool, bool, error) {
+	id, err := profileUUID(userID)
+	if err != nil {
+		return false, false, false, err
+	}
+	row, err := s.db.GetSocialAccount(context.Background(), id)
+	return string(row.AccountType) == "guest", row.SocialRequestsEnabled, row.SocialPartyInvitesEnabled, err
 }
 
-func (s *pgStore) Relationship(userID, targetID string) (RelationshipState, string, error) {
+func (s *DB) Relationship(userID, targetID string) (RelationshipState, string, error) {
 	if userID == targetID {
 		return RelationshipNone, "", nil
 	}
-	var blockedByViewer, blockedByTarget, friends bool
-	var requestID, senderID string
-	err := s.pool.QueryRow(context.Background(), `
-		select
-			exists(select 1 from user_blocks where blocker_user_id=$1 and blocked_user_id=$2),
-			exists(select 1 from user_blocks where blocker_user_id=$2 and blocked_user_id=$1),
-			exists(select 1 from friendships where user_id_low=least($1::uuid,$2::uuid) and user_id_high=greatest($1::uuid,$2::uuid)),
-			coalesce((select id::text from friend_requests where status='pending'
-				and least(sender_user_id,recipient_user_id)=least($1::uuid,$2::uuid)
-				and greatest(sender_user_id,recipient_user_id)=greatest($1::uuid,$2::uuid) limit 1),''),
-			coalesce((select sender_user_id::text from friend_requests where status='pending'
-				and least(sender_user_id,recipient_user_id)=least($1::uuid,$2::uuid)
-				and greatest(sender_user_id,recipient_user_id)=greatest($1::uuid,$2::uuid) limit 1),'')
-	`, userID, targetID).Scan(&blockedByViewer, &blockedByTarget, &friends, &requestID, &senderID)
+	viewerUUID, err := profileUUID(userID)
 	if err != nil {
 		return RelationshipNone, "", err
 	}
-	if blockedByViewer {
+	targetUUID, err := profileUUID(targetID)
+	if err != nil {
+		return RelationshipNone, "", err
+	}
+	row, err := db.New(s.pool).Relationship(context.Background(), db.RelationshipParams{BlockerUserID: viewerUUID, BlockedUserID: targetUUID})
+	if err != nil {
+		return RelationshipNone, "", err
+	}
+	if row.BlockedByViewer {
 		return RelationshipBlocked, "", nil
 	}
-	if blockedByTarget {
+	if row.BlockedByTarget {
 		return RelationshipNone, "", nil
 	}
-	if friends {
+	if row.Friends {
 		return RelationshipFriends, "", nil
 	}
-	if requestID != "" {
-		if senderID == userID {
-			return RelationshipOutgoing, requestID, nil
+	if row.RequestID != "" {
+		if row.SenderID == userID {
+			return RelationshipOutgoing, row.RequestID, nil
 		}
-		return RelationshipIncoming, requestID, nil
+		return RelationshipIncoming, row.RequestID, nil
 	}
 	return RelationshipNone, "", nil
 }
 
-func (s *pgStore) ListFriends(userID string, limit int) ([]CompactPlayer, error) {
+func (s *DB) ListFriends(userID string, limit int) ([]CompactPlayer, error) {
 	limit = boundedSocialLimit(limit, 100, 500)
-	rows, err := s.pool.Query(context.Background(), `
-		with friend_ids as (
-			select case when user_id_low=$1 then user_id_high else user_id_low end user_id, created_at
-			from friendships where user_id_low=$1 or user_id_high=$1
-		)
-		select u.id::text, coalesce(nullif(u.display_name,''),u.id::text), coalesce(u.avatar_url,''),
-			coalesce(r.mmr,1000), case when u.social_presence_visible then u.last_seen_at end
-		from friend_ids f join users u on u.id=f.user_id
-		left join ranks r on r.user_id=u.id and r.mode='duel'
-		where u.account_type='registered'
-		order by f.created_at desc limit $2
-	`, userID, limit)
+	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []CompactPlayer{}
-	for rows.Next() {
-		var p CompactPlayer
-		if err := rows.Scan(&p.UserID, &p.DisplayName, &p.AvatarURL, &p.MMR, &p.LastSeenAt); err != nil {
-			return nil, err
+	rows, err := db.New(s.pool).ListFriends(context.Background(), db.ListFriendsParams{UserIDLow: id, Limit: int32(limit)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CompactPlayer, 0, len(rows))
+	for _, row := range rows {
+		p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+		if row.LastSeenAt.Valid {
+			value := row.LastSeenAt.Time
+			p.LastSeenAt = &value
 		}
 		p.Relationship = RelationshipFriends
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (s *pgStore) ListFriendRequests(userID, direction string, limit int) ([]FriendRequest, error) {
+func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRequest, error) {
 	limit = boundedSocialLimit(limit, 20, 100)
-	column := "recipient_user_id"
-	playerColumn := "sender_user_id"
-	if direction == "outgoing" {
-		column, playerColumn = "sender_user_id", "recipient_user_id"
-	}
-	rows, err := s.pool.Query(context.Background(), `
-		select fr.id::text, u.id::text, coalesce(nullif(u.display_name,''),u.id::text),
-			coalesce(u.avatar_url,''), coalesce(r.mmr,1000), u.last_seen_at, fr.created_at, fr.expires_at
-		from friend_requests fr
-		join users u on u.id=fr.`+playerColumn+`
-		left join ranks r on r.user_id=u.id and r.mode='duel'
-		where fr.`+column+`=$1 and fr.status='pending' and fr.expires_at>now()
-		order by fr.created_at desc limit $2
-	`, userID, limit)
+	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	q := db.New(s.pool)
 	out := []FriendRequest{}
-	for rows.Next() {
-		var item FriendRequest
-		item.Direction = direction
-		if err := rows.Scan(&item.ID, &item.Player.UserID, &item.Player.DisplayName, &item.Player.AvatarURL,
-			&item.Player.MMR, &item.Player.LastSeenAt, &item.CreatedAt, &item.ExpiresAt); err != nil {
+	if direction == "outgoing" {
+		rows, err := q.ListOutgoingFriendRequests(context.Background(), db.ListOutgoingFriendRequestsParams{SenderUserID: id, Limit: int32(limit)})
+		if err != nil {
 			return nil, err
 		}
-		item.Player.RequestID = item.ID
-		if direction == "outgoing" {
-			item.Player.Relationship = RelationshipOutgoing
-		} else {
-			item.Player.Relationship = RelationshipIncoming
+		for _, row := range rows {
+			item := FriendRequest{ID: row.RequestID, Direction: direction, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+			item.Player = CompactPlayer{UserID: row.UserID, DisplayName: fmt.Sprint(row.DisplayName), AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), RequestID: row.RequestID, Relationship: RelationshipOutgoing}
+			if row.LastSeenAt.Valid {
+				value := row.LastSeenAt.Time
+				item.Player.LastSeenAt = &value
+			}
+			out = append(out, item)
 		}
-		out = append(out, item)
+	} else {
+		rows, err := q.ListIncomingFriendRequests(context.Background(), db.ListIncomingFriendRequestsParams{RecipientUserID: id, Limit: int32(limit)})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			item := FriendRequest{ID: row.RequestID, Direction: direction, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+			item.Player = CompactPlayer{UserID: row.UserID, DisplayName: fmt.Sprint(row.DisplayName), AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), RequestID: row.RequestID, Relationship: RelationshipIncoming}
+			if row.LastSeenAt.Valid {
+				value := row.LastSeenAt.Time
+				item.Player.LastSeenAt = &value
+			}
+			out = append(out, item)
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (s *pgStore) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlayer, error) {
+func (s *DB) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlayer, error) {
 	query = strings.TrimSpace(query)
 	if len([]rune(query)) < 2 {
 		return []CompactPlayer{}, nil
 	}
 	limit = boundedSocialLimit(limit, 10, 20)
-	rows, err := s.pool.Query(context.Background(), `
-		select u.id::text, u.display_name, coalesce(u.avatar_url,''), coalesce(r.mmr,1000), u.last_seen_at
-		from users u left join ranks r on r.user_id=u.id and r.mode='duel'
-		where u.id<>$1 and u.account_type='registered' and u.nickname_claimed_at is not null
-		  and u.social_discoverable and lower(u.display_name) like lower($2)||'%'
-		  and not exists(select 1 from user_blocks b where
-		    (b.blocker_user_id=$1 and b.blocked_user_id=u.id) or
-		    (b.blocker_user_id=u.id and b.blocked_user_id=$1))
-		order by (lower(u.display_name)=lower($2)) desc, length(u.display_name), lower(u.display_name)
-		limit $3
-	`, userID, query, limit)
+	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return s.scanSocialPlayers(rows, userID)
+	rows, err := db.New(s.pool).SearchSocialPlayers(context.Background(), db.SearchSocialPlayersParams{ID: id, Lower: query, Limit: int32(limit)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CompactPlayer, 0, len(rows))
+	for _, row := range rows {
+		p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+		if row.LastSeenAt.Valid {
+			value := row.LastSeenAt.Time
+			p.LastSeenAt = &value
+		}
+		p.Relationship, p.RequestID, _ = s.Relationship(userID, p.UserID)
+		out = append(out, p)
+	}
+	return out, nil
 }
 
-func (s *pgStore) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error) {
+func (s *DB) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error) {
 	limit = boundedSocialLimit(limit, 3, 3)
-	rows, err := s.pool.Query(context.Background(), `
-		with recent as (
-			select mp2.user_id, max(h.ended_at) shared_at
-			from match_players mine
-			join match_history h on h.match_id=mine.match_id
-			join match_players mp2 on mp2.match_id=h.match_id and mp2.user_id<>$1
-			where mine.user_id=$1 and h.ended_at is not null
-			group by mp2.user_id
-		)
-		select u.id::text, u.display_name, coalesce(u.avatar_url,''), coalesce(r.mmr,1000), u.last_seen_at, recent.shared_at
-		from recent join users u on u.id=recent.user_id
-		left join ranks r on r.user_id=u.id and r.mode='duel'
-		where u.account_type='registered' and u.nickname_claimed_at is not null and u.social_discoverable
-		  and not exists(select 1 from friendships f where f.user_id_low=least($1::uuid,u.id) and f.user_id_high=greatest($1::uuid,u.id))
-		  and not exists(select 1 from friend_requests fr where fr.status='pending'
-		    and least(fr.sender_user_id,fr.recipient_user_id)=least($1::uuid,u.id)
-		    and greatest(fr.sender_user_id,fr.recipient_user_id)=greatest($1::uuid,u.id))
-		  and not exists(select 1 from user_blocks b where
-		    (b.blocker_user_id=$1 and b.blocked_user_id=u.id) or (b.blocker_user_id=u.id and b.blocked_user_id=$1))
-		order by recent.shared_at desc limit $2
-	`, userID, limit)
+	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []CompactPlayer{}
-	for rows.Next() {
-		var p CompactPlayer
-		if err := rows.Scan(&p.UserID, &p.DisplayName, &p.AvatarURL, &p.MMR, &p.LastSeenAt, &p.SharedMatchAt); err != nil {
-			return nil, err
+	rows, err := db.New(s.pool).ListRecentPlayers(context.Background(), db.ListRecentPlayersParams{Column1: id, Limit: int32(limit)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CompactPlayer, 0, len(rows))
+	for _, row := range rows {
+		p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+		if row.LastSeenAt.Valid {
+			value := row.LastSeenAt.Time
+			p.LastSeenAt = &value
+		}
+		if row.SharedAt.Valid {
+			value := row.SharedAt.Time
+			p.SharedMatchAt = &value
 		}
 		p.Relationship = RelationshipNone
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (s *pgStore) scanSocialPlayers(rows pgx.Rows, viewerID string) ([]CompactPlayer, error) {
-	out := []CompactPlayer{}
-	for rows.Next() {
-		var p CompactPlayer
-		if err := rows.Scan(&p.UserID, &p.DisplayName, &p.AvatarURL, &p.MMR, &p.LastSeenAt); err != nil {
-			return nil, err
-		}
-		p.Relationship, p.RequestID, _ = s.Relationship(viewerID, p.UserID)
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-func (s *pgStore) SendFriendRequest(userID, targetID string) (FriendRequest, error) {
+func (s *DB) SendFriendRequest(userID, targetID string) (FriendRequest, error) {
 	if userID == targetID {
 		return FriendRequest{}, ErrSocialBlocked
 	}
@@ -269,27 +238,27 @@ func (s *pgStore) SendFriendRequest(userID, targetID string) (FriendRequest, err
 		return FriendRequest{}, err
 	}
 	defer tx.Rollback(ctx)
-	var allowed bool
-	if err := tx.QueryRow(ctx, `
-		select exists(select 1 from users where id=$2 and account_type='registered' and social_requests_enabled)
-		  and not exists(select 1 from user_blocks where
-		    (blocker_user_id=$1 and blocked_user_id=$2) or (blocker_user_id=$2 and blocked_user_id=$1))
-	`, userID, targetID).Scan(&allowed); err != nil || !allowed {
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return FriendRequest{}, err
+	}
+	targetUUID, err := profileUUID(targetID)
+	if err != nil {
+		return FriendRequest{}, err
+	}
+	q := db.New(tx)
+	allowed, err := q.CanSendFriendRequest(ctx, db.CanSendFriendRequestParams{BlockerUserID: userUUID, ID: targetUUID})
+	if err != nil || !allowed.Bool {
 		return FriendRequest{}, ErrSocialBlocked
 	}
-	var friendCount int
-	if err := tx.QueryRow(ctx, `select count(*) from friendships where user_id_low=$1 or user_id_high=$1`, userID).Scan(&friendCount); err != nil {
+	friendCount, err := q.CountFriends(ctx, userUUID)
+	if err != nil {
 		return FriendRequest{}, err
 	}
 	if friendCount >= 500 {
 		return FriendRequest{}, ErrSocialLimit
 	}
-	var crossedID string
-	err = tx.QueryRow(ctx, `
-		select id::text from friend_requests
-		where sender_user_id=$2 and recipient_user_id=$1 and status='pending' and expires_at>now()
-		for update
-	`, userID, targetID).Scan(&crossedID)
+	crossedID, err := q.FindCrossedFriendRequest(ctx, db.FindCrossedFriendRequestParams{RecipientUserID: userUUID, SenderUserID: targetUUID})
 	if err == nil {
 		if err := acceptFriendRequestTx(ctx, tx, crossedID, userID); err != nil {
 			return FriendRequest{}, err
@@ -301,16 +270,15 @@ func (s *pgStore) SendFriendRequest(userID, targetID string) (FriendRequest, err
 	id := entityid.New()
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 	var createdAt time.Time
-	if err := tx.QueryRow(ctx, `
-		insert into friend_requests(id,sender_user_id,recipient_user_id,expires_at)
-		values($1,$2,$3,$4)
-		on conflict (least(sender_user_id,recipient_user_id),greatest(sender_user_id,recipient_user_id))
-		  where status='pending'
-		do update set expires_at=greatest(friend_requests.expires_at,excluded.expires_at)
-		returning id::text,created_at,expires_at
-	`, id, userID, targetID, expiresAt).Scan(&id, &createdAt, &expiresAt); err != nil {
+	requestUUID, err := profileUUID(id)
+	if err != nil {
 		return FriendRequest{}, err
 	}
+	row, err := q.UpsertFriendRequest(ctx, db.UpsertFriendRequestParams{ID: requestUUID, SenderUserID: userUUID, RecipientUserID: targetUUID, ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true}})
+	if err != nil {
+		return FriendRequest{}, err
+	}
+	id, createdAt, expiresAt = row.ID, row.CreatedAt.Time, row.ExpiresAt.Time
 	var notificationID int64
 	_ = upsertUserNotification(ctx, tx, targetID, "friend_request_received", "friend_request:"+id,
 		map[string]any{"requestId": id, "actorUserId": userID}, &notificationID)
@@ -322,23 +290,27 @@ func (s *pgStore) SendFriendRequest(userID, targetID string) (FriendRequest, err
 }
 
 func acceptFriendRequestTx(ctx context.Context, tx pgx.Tx, requestID, recipientID string) error {
-	var senderID string
-	if err := tx.QueryRow(ctx, `
-		update friend_requests set status='accepted',responded_at=now()
-		where id=$1 and recipient_user_id=$2 and status='pending' and expires_at>now()
-		returning sender_user_id::text
-	`, requestID, recipientID).Scan(&senderID); err != nil {
+	requestUUID, err := profileUUID(requestID)
+	if err != nil {
 		return ErrSocialNotFound
 	}
-	_, err := tx.Exec(ctx, `
-		insert into friendships(user_id_low,user_id_high,created_from_request_id)
-		values(least($1::uuid,$2::uuid),greatest($1::uuid,$2::uuid),$3)
-		on conflict do nothing
-	`, senderID, recipientID, requestID)
-	return err
+	recipientUUID, err := profileUUID(recipientID)
+	if err != nil {
+		return ErrSocialNotFound
+	}
+	q := db.New(tx)
+	senderID, err := q.AcceptFriendRequest(ctx, db.AcceptFriendRequestParams{ID: requestUUID, RecipientUserID: recipientUUID})
+	if err != nil {
+		return ErrSocialNotFound
+	}
+	senderUUID, err := profileUUID(senderID)
+	if err != nil {
+		return err
+	}
+	return q.InsertFriendship(ctx, db.InsertFriendshipParams{Column1: senderUUID, Column2: recipientUUID, CreatedFromRequestID: requestUUID})
 }
 
-func (s *pgStore) RespondFriendRequest(userID, requestID, response string) error {
+func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -346,9 +318,19 @@ func (s *pgStore) RespondFriendRequest(userID, requestID, response string) error
 		return err
 	}
 	defer tx.Rollback(ctx)
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return err
+	}
+	requestUUID, err := profileUUID(requestID)
+	if err != nil {
+		return ErrSocialNotFound
+	}
+	q := db.New(tx)
 	var otherID string
 	if response == "accept" {
-		if err := tx.QueryRow(ctx, `select sender_user_id::text from friend_requests where id=$1 and recipient_user_id=$2`, requestID, userID).Scan(&otherID); err != nil {
+		otherID, err = q.FriendRequestSender(ctx, db.FriendRequestSenderParams{ID: requestUUID, RecipientUserID: userUUID})
+		if err != nil {
 			return ErrSocialNotFound
 		}
 		if err := acceptFriendRequestTx(ctx, tx, requestID, userID); err != nil {
@@ -360,28 +342,33 @@ func (s *pgStore) RespondFriendRequest(userID, requestID, response string) error
 		_ = appendUserEventTx(ctx, tx, otherID, "friendship.created", map[string]any{"userId": userID})
 		_ = appendUserEventTx(ctx, tx, userID, "friendship.created", map[string]any{"userId": otherID})
 	} else {
-		status := "declined"
-		ownerColumn := "recipient_user_id"
+		var affected int64
 		if response == "cancel" {
-			status, ownerColumn = "cancelled", "sender_user_id"
+			affected, err = q.CancelFriendRequest(ctx, db.CancelFriendRequestParams{ID: requestUUID, SenderUserID: userUUID})
+		} else {
+			affected, err = q.DeclineFriendRequest(ctx, db.DeclineFriendRequestParams{ID: requestUUID, RecipientUserID: userUUID})
 		}
-		tag, err := tx.Exec(ctx, `update friend_requests set status=$3,responded_at=now() where id=$1 and `+ownerColumn+`=$2 and status='pending'`, requestID, userID, status)
-		if err != nil || tag.RowsAffected() == 0 {
+		if err != nil || affected == 0 {
 			return ErrSocialNotFound
 		}
 	}
-	_, _ = tx.Exec(ctx, `update user_notifications set read_at=coalesce(read_at,now()) where user_id=$1 and dedupe_key='friend_request:'||$2`, userID, requestID)
+	_ = q.MarkFriendRequestNotificationRead(ctx, db.MarkFriendRequestNotificationReadParams{UserID: userUUID, Column2: ingestText(requestID)})
 	return tx.Commit(ctx)
 }
 
-func (s *pgStore) RemoveFriend(userID, targetID string) error {
-	_, err := s.pool.Exec(context.Background(), `
-		delete from friendships where user_id_low=least($1::uuid,$2::uuid) and user_id_high=greatest($1::uuid,$2::uuid)
-	`, userID, targetID)
-	return err
+func (s *DB) RemoveFriend(userID, targetID string) error {
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return err
+	}
+	targetUUID, err := profileUUID(targetID)
+	if err != nil {
+		return err
+	}
+	return db.New(s.pool).RemoveFriend(context.Background(), db.RemoveFriendParams{Column1: userUUID, Column2: targetUUID})
 }
 
-func (s *pgStore) SetUserBlock(userID, targetID string, blocked bool) error {
+func (s *DB) SetUserBlock(userID, targetID string, blocked bool) error {
 	if userID == targetID {
 		return ErrSocialBlocked
 	}
@@ -391,14 +378,23 @@ func (s *pgStore) SetUserBlock(userID, targetID string, blocked bool) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return err
+	}
+	targetUUID, err := profileUUID(targetID)
+	if err != nil {
+		return err
+	}
+	q := db.New(tx)
 	if blocked {
-		if _, err := tx.Exec(ctx, `insert into user_blocks values($1,$2,now()) on conflict do nothing`, userID, targetID); err != nil {
+		if err := q.AddUserBlock(ctx, db.AddUserBlockParams{BlockerUserID: userUUID, BlockedUserID: targetUUID}); err != nil {
 			return err
 		}
-		_, _ = tx.Exec(ctx, `delete from friendships where user_id_low=least($1::uuid,$2::uuid) and user_id_high=greatest($1::uuid,$2::uuid)`, userID, targetID)
-		_, _ = tx.Exec(ctx, `update friend_requests set status='cancelled',responded_at=now() where status='pending' and least(sender_user_id,recipient_user_id)=least($1::uuid,$2::uuid) and greatest(sender_user_id,recipient_user_id)=greatest($1::uuid,$2::uuid)`, userID, targetID)
+		_ = q.RemoveFriend(ctx, db.RemoveFriendParams{Column1: userUUID, Column2: targetUUID})
+		_ = q.CancelPairFriendRequests(ctx, db.CancelPairFriendRequestsParams{Column1: userUUID, Column2: targetUUID})
 	} else {
-		_, err = tx.Exec(ctx, `delete from user_blocks where blocker_user_id=$1 and blocked_user_id=$2`, userID, targetID)
+		err = q.RemoveUserBlock(ctx, db.RemoveUserBlockParams{BlockerUserID: userUUID, BlockedUserID: targetUUID})
 		if err != nil {
 			return err
 		}
@@ -406,11 +402,15 @@ func (s *pgStore) SetUserBlock(userID, targetID string, blocked bool) error {
 	return tx.Commit(ctx)
 }
 
-func (s *pgStore) CreateFriendCode(userID string, ttl time.Duration) (FriendCode, error) {
+func (s *DB) CreateFriendCode(userID string, ttl time.Duration) (FriendCode, error) {
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
 	ctx := context.Background()
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return FriendCode{}, err
+	}
 	for attempt := 0; attempt < 8; attempt++ {
 		code, err := randomFriendCode()
 		if err != nil {
@@ -421,8 +421,9 @@ func (s *pgStore) CreateFriendCode(userID string, ttl time.Duration) (FriendCode
 		if err != nil {
 			return FriendCode{}, err
 		}
-		_, _ = tx.Exec(ctx, `update friend_codes set revoked_at=now() where user_id=$1 and revoked_at is null`, userID)
-		_, err = tx.Exec(ctx, `insert into friend_codes(code,user_id,expires_at) values($1,$2,$3)`, code, userID, expiresAt)
+		q := db.New(tx)
+		_ = q.RevokeFriendCodes(ctx, userUUID)
+		err = q.InsertFriendCode(ctx, db.InsertFriendCodeParams{Code: code, UserID: userUUID, ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true}})
 		if err == nil {
 			err = tx.Commit(ctx)
 			return FriendCode{Code: code, ExpiresAt: expiresAt}, err
@@ -432,20 +433,20 @@ func (s *pgStore) CreateFriendCode(userID string, ttl time.Duration) (FriendCode
 	return FriendCode{}, errors.New("could not allocate friend code")
 }
 
-func (s *pgStore) ResolveFriendCode(userID, code string) (CompactPlayer, error) {
+func (s *DB) ResolveFriendCode(userID, code string) (CompactPlayer, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
-	var p CompactPlayer
-	err := s.pool.QueryRow(context.Background(), `
-		select u.id::text,u.display_name,coalesce(u.avatar_url,''),coalesce(r.mmr,1000),u.last_seen_at
-		from friend_codes fc join users u on u.id=fc.user_id
-		left join ranks r on r.user_id=u.id and r.mode='duel'
-		where fc.code=$1 and fc.revoked_at is null and fc.expires_at>now()
-		  and u.id<>$2 and u.account_type='registered' and u.social_requests_enabled
-		  and not exists(select 1 from user_blocks b where
-		    (b.blocker_user_id=$2 and b.blocked_user_id=u.id) or (b.blocker_user_id=u.id and b.blocked_user_id=$2))
-	`, code, userID).Scan(&p.UserID, &p.DisplayName, &p.AvatarURL, &p.MMR, &p.LastSeenAt)
+	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return CompactPlayer{}, ErrSocialNotFound
+	}
+	row, err := db.New(s.pool).ResolveFriendCode(context.Background(), db.ResolveFriendCodeParams{Code: code, ID: userUUID})
+	if err != nil {
+		return CompactPlayer{}, ErrSocialNotFound
+	}
+	p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+	if row.LastSeenAt.Valid {
+		value := row.LastSeenAt.Time
+		p.LastSeenAt = &value
 	}
 	p.Relationship, p.RequestID, _ = s.Relationship(userID, p.UserID)
 	return p, nil
@@ -463,7 +464,7 @@ func randomFriendCode() (string, error) {
 	return string(buf), nil
 }
 
-func (s *pgStore) CreatePartyInvitation(partyID, inviterID, recipientID string, ttl time.Duration) (PartyInvitation, error) {
+func (s *DB) CreatePartyInvitation(partyID, inviterID, recipientID string, ttl time.Duration) (PartyInvitation, error) {
 	if ttl <= 0 {
 		ttl = 20 * time.Minute
 	}
@@ -473,33 +474,34 @@ func (s *pgStore) CreatePartyInvitation(partyID, inviterID, recipientID string, 
 		return PartyInvitation{}, err
 	}
 	defer tx.Rollback(ctx)
-	var inviteCode, mode string
-	var memberCount int
-	err = tx.QueryRow(ctx, `
-		select p.invite_code,p.mode,count(pm.user_id)::int
-		from parties p join party_members self on self.party_id=p.id and self.user_id=$2 and self.left_at is null
-		left join party_members pm on pm.party_id=p.id and pm.left_at is null
-		where p.id=$1 and p.state='open' and p.expires_at>now()
-		  and exists(select 1 from friendships f where f.user_id_low=least($2::uuid,$3::uuid) and f.user_id_high=greatest($2::uuid,$3::uuid))
-		  and exists(select 1 from users u where u.id=$3 and u.social_party_invites_enabled)
-		  and not exists(select 1 from user_blocks b where
-		    (b.blocker_user_id=$2 and b.blocked_user_id=$3) or (b.blocker_user_id=$3 and b.blocked_user_id=$2))
-		group by p.id
-	`, partyID, inviterID, recipientID).Scan(&inviteCode, &mode, &memberCount)
+	partyUUID, err := profileUUID(partyID)
+	if err != nil {
+		return PartyInvitation{}, ErrSocialBlocked
+	}
+	inviterUUID, err := profileUUID(inviterID)
+	if err != nil {
+		return PartyInvitation{}, ErrSocialBlocked
+	}
+	recipientUUID, err := profileUUID(recipientID)
+	if err != nil {
+		return PartyInvitation{}, ErrSocialBlocked
+	}
+	q := db.New(tx)
+	eligibility, err := q.PartyInvitationEligibility(ctx, db.PartyInvitationEligibilityParams{ID: partyUUID, UserID: inviterUUID, Column3: recipientUUID})
 	if err != nil {
 		return PartyInvitation{}, ErrSocialBlocked
 	}
 	id := entityid.New()
 	expiresAt := time.Now().Add(ttl)
-	if err := tx.QueryRow(ctx, `
-		insert into party_invitations(id,party_id,inviter_user_id,recipient_user_id,expires_at)
-		values($1,$2,$3,$4,$5)
-		on conflict(party_id,recipient_user_id) where status='pending'
-		do update set inviter_user_id=excluded.inviter_user_id,expires_at=excluded.expires_at
-		returning id::text,created_at,expires_at
-	`, id, partyID, inviterID, recipientID, expiresAt).Scan(&id, new(time.Time), &expiresAt); err != nil {
+	invitationUUID, err := profileUUID(id)
+	if err != nil {
 		return PartyInvitation{}, err
 	}
+	row, err := q.UpsertPartyInvitation(ctx, db.UpsertPartyInvitationParams{ID: invitationUUID, PartyID: partyUUID, InviterUserID: inviterUUID, RecipientUserID: recipientUUID, ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true}})
+	if err != nil {
+		return PartyInvitation{}, err
+	}
+	id, expiresAt = row.ID, row.ExpiresAt.Time
 	var notificationID int64
 	_ = upsertUserNotification(ctx, tx, recipientID, "party_invitation_received", "party_invitation:"+id,
 		map[string]any{"invitationId": id, "actorUserId": inviterID}, &notificationID)
@@ -507,63 +509,59 @@ func (s *pgStore) CreatePartyInvitation(partyID, inviterID, recipientID string, 
 	if err := tx.Commit(ctx); err != nil {
 		return PartyInvitation{}, err
 	}
-	return PartyInvitation{ID: id, PartyID: partyID, InviteCode: inviteCode, Mode: mode, MemberCount: memberCount, ExpiresAt: expiresAt}, nil
+	return PartyInvitation{ID: id, PartyID: partyID, InviteCode: eligibility.InviteCode, Mode: string(eligibility.Mode), MemberCount: int(eligibility.MemberCount), ExpiresAt: expiresAt}, nil
 }
 
-func (s *pgStore) ListPartyInvitations(userID string, limit int) ([]PartyInvitation, error) {
+func (s *DB) ListPartyInvitations(userID string, limit int) ([]PartyInvitation, error) {
 	limit = boundedSocialLimit(limit, 10, 50)
-	rows, err := s.pool.Query(context.Background(), `
-		select pi.id::text,p.id::text,p.invite_code,p.mode,count(pm.user_id)::int,
-		  u.id::text,u.display_name,coalesce(u.avatar_url,''),pi.created_at,pi.expires_at
-		from party_invitations pi join parties p on p.id=pi.party_id
-		join users u on u.id=pi.inviter_user_id
-		left join party_members pm on pm.party_id=p.id and pm.left_at is null
-		where pi.recipient_user_id=$1 and pi.status='pending' and pi.expires_at>now()
-		  and p.state='open' and p.expires_at>now()
-		group by pi.id,p.id,u.id order by pi.created_at desc limit $2
-	`, userID, limit)
+	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []PartyInvitation{}
-	for rows.Next() {
-		var item PartyInvitation
-		if err := rows.Scan(&item.ID, &item.PartyID, &item.InviteCode, &item.Mode, &item.MemberCount,
-			&item.Inviter.UserID, &item.Inviter.DisplayName, &item.Inviter.AvatarURL, &item.CreatedAt, &item.ExpiresAt); err != nil {
-			return nil, err
-		}
+	rows, err := db.New(s.pool).ListPartyInvitations(context.Background(), db.ListPartyInvitationsParams{RecipientUserID: userUUID, Limit: int32(limit)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PartyInvitation, 0, len(rows))
+	for _, row := range rows {
+		item := PartyInvitation{ID: row.InvitationID, PartyID: row.PartyID, InviteCode: row.InviteCode, Mode: string(row.Mode), MemberCount: int(row.MemberCount), CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+		item.Inviter = CompactPlayer{UserID: row.InviterID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (s *pgStore) RespondPartyInvitation(userID, invitationID, response string) (PartyInvitation, error) {
+func (s *DB) RespondPartyInvitation(userID, invitationID, response string) (PartyInvitation, error) {
 	status := "declined"
 	if response == "accept" {
 		status = "accepted"
 	}
-	var item PartyInvitation
-	err := s.pool.QueryRow(context.Background(), `
-		update party_invitations pi set status=$3,responded_at=now()
-		from parties p
-		where pi.id=$1 and pi.recipient_user_id=$2 and pi.status='pending' and pi.expires_at>now()
-		  and p.id=pi.party_id and p.state='open' and p.expires_at>now()
-		returning pi.id::text,p.id::text,p.invite_code,p.mode,pi.expires_at
-	`, invitationID, userID, status).Scan(&item.ID, &item.PartyID, &item.InviteCode, &item.Mode, &item.ExpiresAt)
+	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return PartyInvitation{}, ErrSocialNotFound
 	}
-	_, _ = s.pool.Exec(context.Background(), `update user_notifications set read_at=coalesce(read_at,now()) where user_id=$1 and dedupe_key='party_invitation:'||$2`, userID, invitationID)
-	return item, nil
+	invitationUUID, err := profileUUID(invitationID)
+	if err != nil {
+		return PartyInvitation{}, ErrSocialNotFound
+	}
+	q := db.New(s.pool)
+	row, err := q.RespondPartyInvitation(context.Background(), db.RespondPartyInvitationParams{ID: invitationUUID, RecipientUserID: userUUID, Status: db.GdSocialRequestStatus(status)})
+	if err != nil {
+		return PartyInvitation{}, ErrSocialNotFound
+	}
+	_ = q.MarkPartyInvitationNotificationRead(context.Background(), db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, Column2: ingestText(invitationID)})
+	return PartyInvitation{ID: row.PiID, PartyID: row.PID, InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
 }
 
-func (s *pgStore) TouchLastSeen(userID string, seenAt time.Time) error {
-	_, err := s.pool.Exec(context.Background(), `update users set last_seen_at=greatest(coalesce(last_seen_at,$2),$2) where id=$1`, userID, seenAt)
-	return err
+func (s *DB) TouchLastSeen(userID string, seenAt time.Time) error {
+	id, err := profileUUID(userID)
+	if err != nil {
+		return err
+	}
+	return s.db.TouchLastSeen(context.Background(), db.TouchLastSeenParams{ID: id, LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: true}})
 }
 
-func (s *pgStore) AppendUserEvent(userID, eventType string, payload any) (int64, error) {
+func (s *DB) AppendUserEvent(userID, eventType string, payload any) (int64, error) {
 	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -586,39 +584,35 @@ func appendUserEventTxScan(ctx context.Context, tx pgx.Tx, userID, eventType str
 	if err != nil {
 		return err
 	}
-	if err := tx.QueryRow(ctx, `
-		insert into user_event_sequences(user_id,sequence) values($1,1)
-		on conflict(user_id) do update set sequence=user_event_sequences.sequence+1
-		returning sequence
-	`, userID).Scan(sequence); err != nil {
+	userUUID, err := profileUUID(userID)
+	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `insert into user_events(user_id,sequence,type,payload_json) values($1,$2,$3,$4::jsonb)`,
-		userID, *sequence, eventType, string(body))
-	return err
+	q := db.New(tx)
+	value, err := q.NextUserEventSequence(ctx, userUUID)
+	if err != nil {
+		return err
+	}
+	*sequence = value
+	return q.InsertUserEvent(ctx, db.InsertUserEventParams{UserID: userUUID, Sequence: value, Type: db.GdUserEventType(eventType), Column4: body})
 }
 
-func (s *pgStore) ListUserEvents(userID string, after int64, limit int) ([]UserEvent, error) {
+func (s *DB) ListUserEvents(userID string, after int64, limit int) ([]UserEvent, error) {
 	limit = boundedSocialLimit(limit, 100, 500)
-	rows, err := s.pool.Query(context.Background(), `
-		select sequence,type,payload_json::text,created_at from user_events
-		where user_id=$1 and sequence>$2 order by sequence limit $3
-	`, userID, after, limit)
+	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []UserEvent{}
-	for rows.Next() {
-		var event UserEvent
-		var payload string
-		if err := rows.Scan(&event.Sequence, &event.Type, &payload, &event.OccurredAt); err != nil {
-			return nil, err
-		}
-		event.Payload = []byte(payload)
+	rows, err := db.New(s.pool).ListUserEvents(context.Background(), db.ListUserEventsParams{UserID: userUUID, Sequence: after, Limit: int32(limit)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UserEvent, 0, len(rows))
+	for _, row := range rows {
+		event := UserEvent{Sequence: row.Sequence, Type: string(row.Type), Payload: []byte(row.Payload), OccurredAt: row.CreatedAt.Time}
 		out = append(out, event)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func boundedSocialLimit(limit, fallback, maximum int) int {

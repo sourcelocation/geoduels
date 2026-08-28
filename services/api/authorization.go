@@ -24,7 +24,7 @@ func (a *api) authenticatedAccount(r *http.Request) (auth.AppClaims, persistence
 	if err != nil {
 		return auth.AppClaims{}, persistence.Identity{}, err
 	}
-	identity, err := a.store.GetIdentity(claims.Sub)
+	identity, err := a.accounts.GetIdentity(claims.Sub)
 	return claims, identity, err
 }
 
@@ -34,7 +34,7 @@ func (a *api) authenticatedIdentity(r *http.Request) (persistence.Identity, erro
 }
 
 func (a *api) accountBanned(userID string) (bool, error) {
-	identity, err := a.store.GetIdentity(userID)
+	identity, err := a.accounts.GetIdentity(userID)
 	return identity.IsBanned, err
 }
 

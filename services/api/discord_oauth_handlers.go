@@ -15,7 +15,6 @@ import (
 	"golang.org/x/oauth2"
 
 	"geoduels/pkg/auth"
-	"geoduels/pkg/persistence"
 )
 
 type discordUser struct {
@@ -132,7 +131,7 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.resolveOAuthIdentity(
 		r,
 		state,
-		persistence.IdentityProviderDiscord,
+		IdentityProviderDiscord,
 		profile.ID,
 		email,
 		displayName,

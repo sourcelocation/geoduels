@@ -1069,3 +1069,57 @@ const (
 	ErrResumeInvalid    = "ERR_RESUME_INVALID"
 	ErrRateLimited      = "ERR_RATE_LIMITED"
 )
+
+// Session refresh records and creation parameters shared between the API
+// service, the authsession domain service, and the persistence store.
+type RefreshTokenRecord struct {
+	ID               string
+	UserID           string
+	RefreshTokenHash string
+	ExpiresAt        time.Time
+	CreatedAt        time.Time
+	LastUsedAt       time.Time
+	RevokedAt        *time.Time
+	UserAgent        string
+	IPAddress        string
+}
+
+type AuthSessionParams struct {
+	UserAgent string
+	IPAddress string
+}
+
+// Notification DTOs shared between the notifications domain service and the
+// persistence store.
+type UserNotification struct {
+	ID        int64           `json:"id"`
+	Type      string          `json:"type"`
+	Category  string          `json:"category,omitempty"`
+	Payload   json.RawMessage `json:"payload"`
+	ReadAt    *time.Time      `json:"readAt,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+}
+
+type NotificationOutboxItem struct {
+	ID          int64
+	Type        string
+	PayloadJSON []byte
+	Attempts    int
+}
+
+// Runtime match bookkeeping shared between the match-launch planner and the
+// persistence store.
+type RuntimeMatch struct {
+	MatchID    string
+	State      string
+	OwnerEpoch int64
+	StartedAt  time.Time
+	EndedAt    time.Time
+}
+
+type MatchSessionUpsert struct {
+	Found       MatchFound
+	NodeID      string
+	NodeEpoch   int64
+	PublicRoute string
+}

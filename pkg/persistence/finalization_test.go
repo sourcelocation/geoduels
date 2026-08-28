@@ -88,7 +88,7 @@ func TestFinalizeDuelDrawIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store := &pgStore{pool: pool}
+	store := &DB{pool: pool}
 
 	const matchID = "019fb0f7-c348-753a-8c6d-cf3dd720f5a1"
 	if _, err := pool.Exec(t.Context(), `
@@ -172,7 +172,7 @@ func TestStaleMatchLeaseReconciliationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store := &pgStore{pool: pool}
+	store := &DB{pool: pool}
 
 	const matchID = "019fb0f7-c348-753a-8c6d-cf3dd720f5a2"
 	if _, err := pool.Exec(t.Context(), `

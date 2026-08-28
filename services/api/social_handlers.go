@@ -11,16 +11,14 @@ import (
 	"github.com/gorilla/mux"
 
 	"geoduels/pkg/contracts"
-	"geoduels/pkg/persistence"
 	"geoduels/pkg/socialpolicy"
 )
 
-func (a *api) socialStore() (persistence.SocialRepository, bool) {
-	store, ok := a.store.(persistence.SocialRepository)
-	return store, ok
+func (a *api) socialStore() (SocialRepository, bool) {
+	return a.social, a.social != nil
 }
 
-func (a *api) socialActor(r *http.Request) (string, persistence.SocialRepository, bool) {
+func (a *api) socialActor(r *http.Request) (string, SocialRepository, bool) {
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		return "", nil, false
@@ -68,7 +66,7 @@ func (a *api) socialSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, settings)
 		return
 	}
-	var settings persistence.SocialSettings
+	var settings SocialSettings
 	if json.NewDecoder(r.Body).Decode(&settings) != nil {
 		writeSocialError(w, http.StatusBadRequest, "invalid_request")
 		return
@@ -208,7 +206,7 @@ func (a *api) playerRelationship(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
-	profile, err := a.store.GetPublicPlayerProfileByNickname(mux.Vars(r)["nickname"])
+	profile, err := a.profiles.GetPublicPlayerProfileByNickname(mux.Vars(r)["nickname"])
 	if err != nil {
 		writeSocialError(w, http.StatusNotFound, "player_not_found")
 		return
@@ -321,14 +319,14 @@ func (a *api) createPartyAndInvite(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	party, err := a.store.CreateParty(userID, contracts.ModeDuel, "world", 2*time.Hour)
+	party, err := a.parties.CreateParty(userID, contracts.ModeDuel, "world", 2*time.Hour)
 	if err != nil {
 		writeSocialError(w, http.StatusInternalServerError, "party_unavailable")
 		return
 	}
 	invitation, err := store.CreatePartyInvitation(party.ID, userID, body.UserID, 20*time.Minute)
 	if err != nil {
-		_, _ = a.store.LeaveParty(party.ID, userID)
+		_, _ = a.parties.LeaveParty(party.ID, userID)
 		writeSocialStoreError(w, err)
 		return
 	}
@@ -366,7 +364,13 @@ func (a *api) socialSummary(w http.ResponseWriter, r *http.Request) {
 	incoming, err1 := store.ListFriendRequests(userID, "incoming", 3)
 	outgoing, err2 := store.ListFriendRequests(userID, "outgoing", 3)
 	invites, err3 := store.ListPartyInvitations(userID, 3)
-	notifications, err4 := a.store.ListUserNotifications(userID, 5)
+	var notifications []UserNotification
+	var err4 error
+	if a.notificationService == nil {
+		err4 = errors.New("notifications unavailable")
+	} else {
+		notifications, err4 = a.notificationService.List(r.Context(), userID, 5)
+	}
 	if err := errors.Join(err1, err2, err3, err4); err != nil {
 		writeSocialError(w, http.StatusInternalServerError, "social_summary_unavailable")
 		return
@@ -404,11 +408,11 @@ func writeJSONStatus(w http.ResponseWriter, status int, value any) {
 
 func writeSocialStoreError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, persistence.ErrSocialNotFound):
+	case errors.Is(err, ErrSocialNotFound):
 		writeSocialError(w, http.StatusNotFound, "social_action_unavailable")
-	case errors.Is(err, persistence.ErrSocialBlocked):
+	case errors.Is(err, ErrSocialBlocked):
 		writeSocialError(w, http.StatusForbidden, "social_action_unavailable")
-	case errors.Is(err, persistence.ErrSocialLimit):
+	case errors.Is(err, ErrSocialLimit):
 		writeSocialError(w, http.StatusConflict, "social_limit_reached")
 	default:
 		writeSocialError(w, http.StatusInternalServerError, "social_action_failed")

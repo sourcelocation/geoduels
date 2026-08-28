@@ -7,11 +7,15 @@ import (
 	"strings"
 	"time"
 
+	db "geoduels/pkg/persistence/sqlc/db"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func NewFromEnv() (Store, error) {
+// NewFromEnv returns the concrete store; consumers depend on the narrow
+// repository interfaces in this package, which *DB satisfies.
+func NewFromEnv() (*DB, error) {
 	url := os.Getenv("POSTGRES_URL")
 	if url == "" {
 		return nil, errors.New("POSTGRES_URL is required")
@@ -37,14 +41,29 @@ func NewFromEnv() (Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &pgStore{pool: pool}, nil
+	return &DB{pool: pool, db: db.New(pool)}, nil
 }
 
-type pgStore struct {
+type DB struct {
 	pool *pgxpool.Pool
+	db   *db.Queries
 }
 
-func (s *pgStore) Close() {
+// withTx keeps transaction ownership inside persistence; callers only provide
+// work against the transaction-bound adapters and never receive pgx.Tx.
+func (s *DB) withTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *DB) Close() {
 	if s.pool != nil {
 		s.pool.Close()
 	}

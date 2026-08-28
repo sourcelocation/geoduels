@@ -18,7 +18,7 @@ func (a *api) runRankedSeasonResetLoop() {
 }
 
 func (a *api) runDueRankedSeasonReset() {
-	result, reset, err := a.store.RunDueRankedSeasonReset(time.Now().UTC())
+	result, reset, err := a.seasons.RunDueRankedSeasonReset(time.Now().UTC())
 	if err != nil {
 		observability.Log("warn", "ranked season reset check failed", map[string]any{"error": err.Error()})
 		return

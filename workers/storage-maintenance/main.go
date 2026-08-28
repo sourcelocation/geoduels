@@ -20,10 +20,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
-	maintenance, ok := store.(persistence.StorageMaintenance)
-	if !ok {
-		log.Fatal("configured persistence store does not support storage maintenance")
-	}
+	maintenance := persistence.StorageMaintenance(store)
 
 	var total persistence.StorageCleanupResult
 	for batch := 1; *maxBatches == 0 || batch <= *maxBatches; batch++ {

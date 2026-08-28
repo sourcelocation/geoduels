@@ -4,175 +4,126 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"time"
-
+	"fmt"
+	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"time"
 )
 
-func (s *pgStore) GetFinalMatchSnapshot(matchID string) ([]byte, bool, error) {
-	if matchID == "" {
+func mu(s string) (pgtype.UUID, error) {
+	var u pgtype.UUID
+	e := u.Scan(s)
+	return u, e
+}
+func (s *DB) GetFinalMatchSnapshot(id string) ([]byte, bool, error) {
+	if id == "" {
 		return nil, false, errors.New("matchID required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	row := s.pool.QueryRow(ctx, `
-		select replay_zstd, coalesce(replay_codec, 0), coalesce(replay_uncompressed_bytes, 0),
-		       replay_sha256, replay_json::text
-		from match_history
-		where match_id = $1
-		  and (replay_expires_at is null or replay_expires_at > now())
-		limit 1
-	`, matchID)
-	var compressed, expectedHash []byte
-	var codec, uncompressedBytes int
-	var legacy *string
-	if err := row.Scan(&compressed, &codec, &uncompressedBytes, &expectedHash, &legacy); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	u, e := mu(id)
+	if e != nil {
+		return nil, false, e
+	}
+	r, e := s.db.GetFinalMatchSnapshot(context.Background(), u)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if e != nil {
+		return nil, false, e
+	}
+	if len(r.ReplayZstd) == 0 {
+		if r.ReplayJson == "" {
 			return nil, false, nil
 		}
-		return nil, false, err
+		return []byte(r.ReplayJson), true, nil
 	}
-	if len(compressed) == 0 {
-		if legacy == nil {
-			return nil, false, nil
-		}
-		return []byte(*legacy), true, nil
+	raw, e := decompressReplay(r.ReplayZstd, int(r.Column2), int(r.ReplayUncompressedBytes))
+	if e != nil {
+		return nil, false, e
 	}
-	raw, err := decompressReplay(compressed, codec, uncompressedBytes)
-	if err != nil {
-		return nil, false, err
-	}
-	if len(expectedHash) == sha256.Size {
-		sum := sha256.Sum256(raw)
-		if !equalBytes(sum[:], expectedHash) {
+	if len(r.ReplaySha256) == sha256.Size {
+		h := sha256.Sum256(raw)
+		if !equalBytes(h[:], r.ReplaySha256) {
 			return nil, false, errors.New("replay checksum mismatch")
 		}
 	}
 	return raw, true, nil
 }
-
 func equalBytes(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	var diff byte
+	var d byte
 	for i := range a {
-		diff |= a[i] ^ b[i]
+		d |= a[i] ^ b[i]
 	}
-	return diff == 0
+	return d == 0
 }
-
-func (s *pgStore) ListPlayerMatchHistory(userID string, limit int) ([]MatchHistorySummary, error) {
-	page, err := s.ListPlayerMatchHistoryPage(userID, limit, time.Time{}, "", false)
-	return page.Matches, err
+func (s *DB) ListPlayerMatchHistory(id string, l int) ([]MatchHistorySummary, error) {
+	p, e := s.ListPlayerMatchHistoryPage(id, l, time.Time{}, "", false)
+	return p.Matches, e
 }
-
-func (s *pgStore) ListPlayerMatchHistoryPage(userID string, limit int, beforeEndedAt time.Time, beforeMatchID string, rankedOnly bool) (MatchHistoryPage, error) {
-	if userID == "" {
+func (s *DB) ListPlayerMatchHistoryPage(id string, l int, b time.Time, bid string, rk bool) (MatchHistoryPage, error) {
+	if id == "" {
 		return MatchHistoryPage{}, errors.New("userID required")
 	}
-	if limit <= 0 {
-		limit = 20
+	if l <= 0 {
+		l = 20
 	}
-	if limit > 100 {
-		limit = 100
+	if l > 100 {
+		l = 100
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	query := `
-		select
-			h.match_id, h.mode, h.started_at, h.ended_at,
-			coalesce(h.winner_user_id::text, ''),
-			case
-				when h.mode = 'singleplayer' then 'completed'
-				when h.winner_user_id is null then 'draw'
-				when h.winner_user_id = p.user_id then 'win'
-				else 'loss'
-			end,
-			coalesce(h.ranked, false) and h.mode = 'duel',
-			coalesce(p.final_ranked_delta, 0),
-			coalesce(p.total_score, 0),
-			coalesce(opponent.user_id, ''),
-			coalesce(opponent.display_name, '')
-		from match_players p
-		join match_history h on h.match_id = p.match_id
-		left join lateral (
-			select
-				op.user_id::text as user_id,
-				coalesce(nullif(op.display_name, ''), nullif(u.display_name, ''), op.user_id::text) as display_name
-			from match_players op
-			left join users u on u.id = op.user_id
-			where op.match_id = p.match_id
-			  and op.user_id <> p.user_id
-			order by op.total_score desc, op.user_id
-			limit 1
-		) opponent on true
-		where p.user_id = $1
-	`
-	args := []any{userID, limit + 1}
-	if rankedOnly {
-		query += ` and h.mode = 'duel' and coalesce(h.ranked, false)`
+	u, e := mu(id)
+	if e != nil {
+		return MatchHistoryPage{}, e
 	}
-	if !beforeEndedAt.IsZero() && beforeMatchID != "" {
-		query += ` and (p.ended_at, p.match_id) < ($3, $4::uuid)`
-		args = append(args, beforeEndedAt, beforeMatchID)
-	}
-	query += `
-		order by p.ended_at desc, p.match_id desc
-		limit $2
-	`
-	rows, err := s.pool.Query(ctx, query, args...)
-	if err != nil {
-		return MatchHistoryPage{}, err
-	}
-	defer rows.Close()
-	out := make([]MatchHistorySummary, 0, limit+1)
-	for rows.Next() {
-		var item MatchHistorySummary
-		if err := rows.Scan(
-			&item.MatchID,
-			&item.Mode,
-			&item.StartedAt,
-			&item.EndedAt,
-			&item.WinnerUserID,
-			&item.Outcome,
-			&item.Ranked,
-			&item.RatingDelta,
-			&item.TotalScore,
-			&item.OpponentUserID,
-			&item.OpponentDisplayName,
-		); err != nil {
-			return MatchHistoryPage{}, err
+	var rs []q.ListPlayerMatchHistoryBasicRow
+	if rk {
+		xs, ee := s.db.ListPlayerMatchHistoryRanked(context.Background(), q.ListPlayerMatchHistoryRankedParams{UserID: u, Limit: int32(l + 1)})
+		e = ee
+		for _, x := range xs {
+			rs = append(rs, q.ListPlayerMatchHistoryBasicRow{MatchID: x.MatchID, Mode: x.Mode, StartedAt: x.StartedAt, EndedAt: x.EndedAt, Coalesce: x.Coalesce, Column6: x.Column6, Column7: x.Column7, FinalRankedDelta: x.FinalRankedDelta, TotalScore: x.TotalScore, UserID: x.UserID, DisplayName: x.DisplayName})
 		}
-		out = append(out, item)
+	} else if !b.IsZero() && bid != "" {
+		v, e2 := mu(bid)
+		if e2 != nil {
+			return MatchHistoryPage{}, e2
+		}
+		xs, ee := s.db.ListPlayerMatchHistoryBefore(context.Background(), q.ListPlayerMatchHistoryBeforeParams{UserID: u, Limit: int32(l + 1), EndedAt: pgtype.Timestamptz{Time: b, Valid: true}, Column4: v})
+		e = ee
+		for _, x := range xs {
+			rs = append(rs, q.ListPlayerMatchHistoryBasicRow{MatchID: x.MatchID, Mode: x.Mode, StartedAt: x.StartedAt, EndedAt: x.EndedAt, Coalesce: x.Coalesce, Column6: x.Column6, Column7: x.Column7, FinalRankedDelta: x.FinalRankedDelta, TotalScore: x.TotalScore, UserID: x.UserID, DisplayName: x.DisplayName})
+		}
+	} else {
+		rs, e = s.db.ListPlayerMatchHistoryBasic(context.Background(), q.ListPlayerMatchHistoryBasicParams{UserID: u, Limit: int32(l + 1)})
 	}
-	if err := rows.Err(); err != nil {
-		return MatchHistoryPage{}, err
+	if e != nil {
+		return MatchHistoryPage{}, e
 	}
-	page := MatchHistoryPage{Matches: out}
-	if len(out) > limit {
-		page.HasMore = true
-		page.Matches = out[:limit]
-		last := page.Matches[len(page.Matches)-1]
-		page.NextEndedAt = last.EndedAt
-		page.NextMatchID = last.MatchID
+	o := make([]MatchHistorySummary, 0, len(rs))
+	for _, x := range rs {
+		o = append(o, MatchHistorySummary{MatchID: fmt.Sprintf("%x", x.MatchID.Bytes), Mode: string(x.Mode), StartedAt: x.StartedAt.Time, EndedAt: x.EndedAt.Time, WinnerUserID: fmt.Sprint(x.Coalesce), Outcome: x.Column6, Ranked: x.Column7.Bool, RatingDelta: int(x.FinalRankedDelta), TotalScore: int(x.TotalScore), OpponentUserID: x.UserID, OpponentDisplayName: fmt.Sprint(x.DisplayName)})
 	}
-	return page, nil
+	p := MatchHistoryPage{Matches: o}
+	if len(o) > l {
+		p.HasMore = true
+		p.Matches = o[:l]
+		p.NextEndedAt = p.Matches[l-1].EndedAt
+		p.NextMatchID = p.Matches[l-1].MatchID
+	}
+	return p, nil
 }
-
-func (s *pgStore) PlayerParticipatedInMatch(userID, matchID string) (bool, error) {
-	if userID == "" || matchID == "" {
+func (s *DB) PlayerParticipatedInMatch(a, b string) (bool, error) {
+	if a == "" || b == "" {
 		return false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var exists bool
-	err := s.pool.QueryRow(ctx, `
-		select exists (
-			select 1
-			from match_players
-			where user_id = $1 and match_id = $2
-		)
-	`, userID, matchID).Scan(&exists)
-	return exists, err
+	u, e := mu(a)
+	if e != nil {
+		return false, e
+	}
+	m, e := mu(b)
+	if e != nil {
+		return false, e
+	}
+	return s.db.PlayerParticipatedInMatch(context.Background(), q.PlayerParticipatedInMatchParams{UserID: u, MatchID: m})
 }

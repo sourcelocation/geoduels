@@ -32,17 +32,18 @@ TTL, then checking that exactly one standby begins accepting `/queue`.
 
 ## Persistence rules
 
-`sqlc.yaml` is the generated-query entry point. Each query module owns a small
-current-schema projection under `db/schema/`, because historical migrations
-can use PostgreSQL catalog operations that sqlc intentionally does not parse.
-Generated files are committed and CI should regenerate/check them whenever a
-query module changes.
+`sqlc.yaml` is the generated-query entry point. Every query module compiles
+against the forward-only migrations under `db/migrations` — the single schema
+source of truth; there are no hand-maintained per-module schema projections.
+Generated code is gitignored and regenerable: CI regenerates before testing
+and Docker builds generate inside the image.
 
 New use cases define the narrow repository interfaces they consume. They take
 a caller-provided `context.Context`, use typed nullable values, and perform a
-single transaction at the use-case boundary. Do not extend
-`persistence.Store`; it is a legacy adapter to be reduced by moving one
-vertical slice at a time.
+single transaction at the use-case boundary. There is no aggregate
+`persistence.Store`: consumers declare exactly the repository interfaces they
+need, and `persistence.NewFromEnv` returns the concrete store that satisfies
+them.
 
 ## Match persistence cutover
 

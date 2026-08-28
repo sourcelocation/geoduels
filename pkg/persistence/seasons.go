@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -20,7 +22,7 @@ const (
 
 var rankedSeasonIDPattern = regexp.MustCompile(`^s(\d+)(?:\.\d+)?$`)
 
-func (s *pgStore) GetRankedSeasonSettings() (RankedSeasonSettings, error) {
+func (s *DB) GetRankedSeasonSettings() (RankedSeasonSettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	settings, err := rankedSeasonSettingsTx(ctx, s.pool)
@@ -30,7 +32,7 @@ func (s *pgStore) GetRankedSeasonSettings() (RankedSeasonSettings, error) {
 	return settingsWithNextReset(settings, time.Now().UTC()), nil
 }
 
-func (s *pgStore) SetRankedSeasonResetRule(monthlyResetDay int) (RankedSeasonSettings, error) {
+func (s *DB) SetRankedSeasonResetRule(monthlyResetDay int) (RankedSeasonSettings, error) {
 	if err := validateMonthlyResetDay(monthlyResetDay); err != nil {
 		return RankedSeasonSettings{}, err
 	}
@@ -60,7 +62,7 @@ func (s *pgStore) SetRankedSeasonResetRule(monthlyResetDay int) (RankedSeasonSet
 	return settingsWithNextReset(settings, now), nil
 }
 
-func (s *pgStore) RunDueRankedSeasonReset(now time.Time) (RankedSeasonResetResult, bool, error) {
+func (s *DB) RunDueRankedSeasonReset(now time.Time) (RankedSeasonResetResult, bool, error) {
 	now = now.UTC()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -91,7 +93,7 @@ func (s *pgStore) RunDueRankedSeasonReset(now time.Time) (RankedSeasonResetResul
 	if err != nil {
 		return RankedSeasonResetResult{}, false, err
 	}
-	seeded, err := advanceRankedSeasonTx(ctx, tx, settings.ActiveSeasonID, nextSeasonID)
+	seeded, err := advanceRankedSeasonTx(ctx, db.New(tx), tx, settings.ActiveSeasonID, nextSeasonID)
 	if err != nil {
 		return RankedSeasonResetResult{}, false, err
 	}
@@ -112,7 +114,7 @@ func (s *pgStore) RunDueRankedSeasonReset(now time.Time) (RankedSeasonResetResul
 	}, true, nil
 }
 
-func advanceRankedSeasonTx(ctx context.Context, tx pgx.Tx, previousSeasonID, nextSeasonID string) (int, error) {
+func advanceRankedSeasonTx(ctx context.Context, q *db.Queries, tx pgx.Tx, previousSeasonID, nextSeasonID string) (int, error) {
 	if strings.TrimSpace(previousSeasonID) == "" || strings.TrimSpace(nextSeasonID) == "" {
 		return 0, errors.New("season id required")
 	}
@@ -121,70 +123,31 @@ func advanceRankedSeasonTx(ctx context.Context, tx pgx.Tx, previousSeasonID, nex
 	}
 	// Finalize the outgoing season once, while the season settings row is locked.
 	// This is the authoritative trigger for the repeatable top-finish badge.
-	rows, err := tx.Query(ctx, `
-		with ranked as (
-			select r.user_id,
-				row_number() over (order by r.mmr desc, r.updated_at asc, r.user_id asc)::int as rank
-			from ranks r join users u on u.id = r.user_id
-			where r.mode = $1 and r.season_id = $2
-				and coalesce(u.account_type, 'registered') <> 'guest'
-				and not coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false)
-		)
-		select user_id from ranked where rank between 1 and 100
-	`, modeDuel, previousSeasonID)
+	finishers, err := q.ListRankedSeasonFinishers(ctx, db.ListRankedSeasonFinishersParams{Mode: modeDuel, SeasonID: previousSeasonID})
 	if err != nil {
 		return 0, err
 	}
-	var finishers []string
-	for rows.Next() {
-		var userID string
-		if err := rows.Scan(&userID); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		finishers = append(finishers, userID)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
 	for _, userID := range finishers {
-		if _, err := awardTopFinishTx(ctx, tx, userID); err != nil {
+		if _, err := awardTopFinishTx(ctx, tx, userID.String()); err != nil {
 			return 0, err
 		}
 	}
-	seedTag, err := tx.Exec(ctx, `
-		insert into ranks(user_id, mode, season_id, mmr, rd)
-		select u.id, $1, $2, $3, $4
-		from users u
-		where coalesce(u.account_type, 'registered') <> 'guest'
-		on conflict (user_id, mode, season_id) do nothing
-	`, modeDuel, nextSeasonID, initialMMR, initialRatingRD)
+	seeded, err := q.SeedRankedSeasonRanks(ctx, db.SeedRankedSeasonRanksParams{Mode: modeDuel, SeasonID: nextSeasonID, Mmr: initialMMR, Rd: initialRatingRD})
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranked_stats(user_id, mode, season_id, games_played, wins)
-		select u.id, $1, $2, 0, 0
-		from users u
-		where coalesce(u.account_type, 'registered') <> 'guest'
-		on conflict (user_id, mode, season_id) do nothing
-	`, modeDuel, nextSeasonID); err != nil {
+	if err := q.SeedRankedSeasonStats(ctx, db.SeedRankedSeasonStatsParams{Mode: modeDuel, SeasonID: nextSeasonID}); err != nil {
 		return 0, err
 	}
-	return int(seedTag.RowsAffected()), nil
+	return int(seeded), nil
 }
 
-func (s *pgStore) activeSeasonID(ctx context.Context) (string, error) {
+func (s *DB) activeSeasonID(ctx context.Context) (string, error) {
 	return activeSeasonIDTx(ctx, s.pool)
 }
 
-type seasonQuerier interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
-func activeSeasonIDTx(ctx context.Context, q seasonQuerier) (string, error) {
+func activeSeasonIDTx(ctx context.Context, source any) (string, error) {
+	q := seasonQueries(source)
 	settings, err := rankedSeasonSettingsTx(ctx, q)
 	if err != nil {
 		return "", err
@@ -192,24 +155,34 @@ func activeSeasonIDTx(ctx context.Context, q seasonQuerier) (string, error) {
 	return settings.ActiveSeasonID, nil
 }
 
-func rankedSeasonSettingsTx(ctx context.Context, q seasonQuerier) (RankedSeasonSettings, error) {
-	var raw string
-	err := q.QueryRow(ctx, `
-		select value_json::text
-		from site_settings
-		where key = 'ranked_season'
-	`).Scan(&raw)
+func rankedSeasonSettingsTx(ctx context.Context, source any) (RankedSeasonSettings, error) {
+	q := seasonQueries(source)
+	row, err := q.GetRankedSeasonSettings(ctx)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return normalizeRankedSeasonSettings(RankedSeasonSettings{}), nil
 		}
 		return RankedSeasonSettings{}, err
 	}
+	raw := row
 	var settings RankedSeasonSettings
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		return normalizeRankedSeasonSettings(RankedSeasonSettings{}), nil
 	}
 	return normalizeRankedSeasonSettings(settings), nil
+}
+
+func seasonQueries(source any) *db.Queries {
+	if q, ok := source.(*db.Queries); ok {
+		return q
+	}
+	if tx, ok := source.(pgx.Tx); ok {
+		return db.New(tx)
+	}
+	if p, ok := source.(*pgxpool.Pool); ok {
+		return db.New(p)
+	}
+	return nil
 }
 
 func rankedSeasonSettingsForUpdateTx(ctx context.Context, tx pgx.Tx) (RankedSeasonSettings, error) {
@@ -218,22 +191,15 @@ func rankedSeasonSettingsForUpdateTx(ctx context.Context, tx pgx.Tx) (RankedSeas
 	if err != nil {
 		return RankedSeasonSettings{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into site_settings(key, value_json, updated_at)
-		values('ranked_season', $1::jsonb, now())
-		on conflict (key) do nothing
-	`, string(payload)); err != nil {
+	q := db.New(tx)
+	if err := q.EnsureRankedSeasonSettings(ctx, payload); err != nil {
 		return RankedSeasonSettings{}, err
 	}
-	var raw string
-	if err := tx.QueryRow(ctx, `
-		select value_json::text
-		from site_settings
-		where key = 'ranked_season'
-		for update
-	`).Scan(&raw); err != nil {
+	row, err := q.GetRankedSeasonSettingsForUpdate(ctx)
+	if err != nil {
 		return RankedSeasonSettings{}, err
 	}
+	raw := row
 	var settings RankedSeasonSettings
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		settings = defaultSettings
@@ -248,14 +214,7 @@ func writeRankedSeasonSettingsTx(ctx context.Context, tx pgx.Tx, settings Ranked
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `
-		insert into site_settings(key, value_json, updated_at)
-		values('ranked_season', $1::jsonb, now())
-		on conflict (key) do update set
-			value_json = excluded.value_json,
-			updated_at = now()
-	`, string(payload))
-	return err
+	return db.New(tx).WriteRankedSeasonSettings(ctx, payload)
 }
 
 func normalizeRankedSeasonSettings(settings RankedSeasonSettings) RankedSeasonSettings {

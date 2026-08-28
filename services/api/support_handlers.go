@@ -70,7 +70,7 @@ func (a *api) createSupportDonation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "donation unavailable: stripe "+stripeConfig.Mode+" payment link is not configured", http.StatusServiceUnavailable)
 		return
 	}
-	ref, err := a.store.CreateDonationRef(claims.Sub)
+	ref, err := a.badges.CreateDonationRef(claims.Sub)
 	if err != nil {
 		http.Error(w, "donation unavailable", http.StatusInternalServerError)
 		return
@@ -132,7 +132,7 @@ func (a *api) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if _, err := a.store.AwardSupporterByDonationRef(event.Data.Object.ClientReferenceID); err != nil {
+		if _, err := a.badges.AwardSupporterByDonationRef(event.Data.Object.ClientReferenceID); err != nil {
 			http.Error(w, "failed to award supporter", http.StatusInternalServerError)
 			return
 		}

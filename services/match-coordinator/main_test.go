@@ -30,6 +30,14 @@ type recoverTestStore struct {
 	accountTypes   map[string]string
 }
 
+func (s *recoverTestStore) GetUserPreferences(context.Context, string) (persistence.UserPreferences, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) UpdateUserPreferences(context.Context, string, int, json.RawMessage, int64) (persistence.UserPreferences, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) ListAdminGrantableBadges() []persistence.AdminBadgeDefinition {
 	panic("unexpected call")
 }
@@ -285,11 +293,11 @@ func (s *recoverTestStore) AwardSupporterByDonationRef(ref string) (bool, error)
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) ListLeaderboard(mode, seasonID string, limit, offset int) ([]persistence.LeaderboardEntry, error) {
+func (s *recoverTestStore) ListLeaderboard(context.Context, string, string, int, int) ([]persistence.LeaderboardEntry, error) {
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) GetLeaderboardOverview(userID, mode, seasonID string, limit int) (persistence.LeaderboardOverview, error) {
+func (s *recoverTestStore) GetLeaderboardOverview(context.Context, string, string, string, int) (persistence.LeaderboardOverview, error) {
 	panic("unexpected call")
 }
 
@@ -356,6 +364,11 @@ func (s *recoverTestStore) IssueEloRefundsForCheater(userID string, lookback tim
 func (s *recoverTestStore) ListUserNotifications(userID string, limit int) ([]persistence.UserNotification, error) {
 	panic("unexpected call")
 }
+
+func (s *recoverTestStore) ListNotificationInbox(string, int, int64) ([]persistence.UserNotification, error) {
+	panic("unexpected call")
+}
+func (s *recoverTestStore) MarkAllUserNotificationsRead(string) error { panic("unexpected call") }
 
 func (s *recoverTestStore) MarkUserNotificationRead(userID string, notificationID int64) error {
 	panic("unexpected call")
@@ -690,7 +703,7 @@ func (s *heartbeatTestStore) RunMatchmaking(pool matchstore.QueuePool, ruleset c
 	return 0, nil
 }
 
-var _ persistence.Store = (*recoverTestStore)(nil)
+var _ persistentStore = (*recoverTestStore)(nil)
 var _ matchstore.Store = (*recoverTestMatchStore)(nil)
 var _ matchstore.Store = (*queueTestMatchStore)(nil)
 var _ matchstore.Store = (*staleQueuePollStore)(nil)

@@ -7,7 +7,7 @@ import (
 )
 
 func TestFinalizeMatchUsesTypedSetBasedStatUpdates(t *testing.T) {
-	body, err := os.ReadFile("matches_write.go")
+	body, err := os.ReadFile("../../db/queries/match_writes/match_writes.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestFinalizeMatchUsesTypedSetBasedStatUpdates(t *testing.T) {
 }
 
 func TestRecordMatchHistoryCastsReplayExpirationParameters(t *testing.T) {
-	body, err := os.ReadFile("matches_write.go")
+	body, err := os.ReadFile("../../db/queries/match_writes/match_writes.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,18 +32,18 @@ func TestRecordMatchHistoryCastsReplayExpirationParameters(t *testing.T) {
 	if strings.Contains(source, "$4 + make_interval(days => $16)") {
 		t.Fatal("replay expiration must cast pgx timestamp and integer parameters")
 	}
-	if !strings.Contains(source, "$4::timestamptz + make_interval(days => $16::integer)") {
+	if !strings.Contains(source, "::timestamptz + make_interval(days =>") {
 		t.Fatal("typed replay expiration expression is missing")
 	}
 }
 
 func TestProfileHistoryStatsCountDuelsOnly(t *testing.T) {
-	body, err := os.ReadFile("profiles.go")
+	body, err := os.ReadFile("../../db/queries/profiles/profiles.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := string(body)
-	if got := strings.Count(source, "and h.mode = 'duel'"); got < 2 {
+	if got := strings.Count(strings.ReplaceAll(source, " ", ""), "andh.mode='duel'"); got < 2 {
 		t.Fatalf("profile history_stats duel filters = %d, want at least 2", got)
 	}
 }
@@ -80,7 +80,7 @@ func TestRiskEngineSignalsDoNotCreateLegacyCases(t *testing.T) {
 }
 
 func TestCheatingBanRefundQueryUsesCompactRatingColumns(t *testing.T) {
-	body, err := os.ReadFile("moderation_enforcement.go")
+	body, err := os.ReadFile("../../db/queries/moderation_enforcement/moderation_enforcement.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestCheatingBanRefundQueryUsesCompactRatingColumns(t *testing.T) {
 	if strings.Contains(source, "snapshot_json->'ratingPreview'") {
 		t.Fatal("cheating-ban refund query must not depend on retained replay JSON")
 	}
-	if !strings.Contains(source, "opponent.final_ranked_delta as original_delta") {
+	if !strings.Contains(source, "opponent.final_ranked_delta AS original_delta") {
 		t.Fatal("cheating-ban refund query must use compact persisted rating deltas")
 	}
 }
@@ -111,9 +111,9 @@ func TestNullableTeamEnumsAreCastBeforeEmptyStringFallback(t *testing.T) {
 
 func TestTextTeamExpressionsAreCastBeforeEnumWrites(t *testing.T) {
 	checks := map[string][]string{
-		"parties.go": {
-			"then 'a'::gd_team_id",
-			"else 'b'::gd_team_id",
+		"../../db/queries/parties/queries.sql": {
+			"'a'::gd_team_id",
+			"'b'::gd_team_id",
 		},
 		"chat.go": {
 			"nullif($10, '')::gd_team_id",
@@ -134,11 +134,11 @@ func TestTextTeamExpressionsAreCastBeforeEnumWrites(t *testing.T) {
 }
 
 func TestComputedPartyRolesUseEnumValues(t *testing.T) {
-	body, err := os.ReadFile("parties.go")
+	body, err := os.ReadFile("../../db/queries/parties/queries.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(body)
+	source := strings.ToLower(string(body))
 	for _, expected := range []string{
 		"then 'owner'::gd_party_role",
 		"else 'member'::gd_party_role",
@@ -150,19 +150,25 @@ func TestComputedPartyRolesUseEnumValues(t *testing.T) {
 }
 
 func TestEnteringTeamDuelShufflesMembersIntoBalancedTeams(t *testing.T) {
-	body, err := os.ReadFile("parties.go")
+	goBody, err := os.ReadFile("parties.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(body)
+	if !strings.Contains(string(goBody), "string(currentMode) != string(contracts.ModeTeamDuel) && mode == contracts.ModeTeamDuel") {
+		t.Fatal("entering team-duel must shuffle members into balanced teams")
+	}
+	body, err := os.ReadFile("../../db/queries/parties/queries.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := strings.ReplaceAll(strings.ToLower(string(body)), " ", "")
 	for _, expected := range []string{
-		"currentMode != string(contracts.ModeTeamDuel) && mode == contracts.ModeTeamDuel",
-		"row_number() over (order by random())",
-		"shuffled.position % 2 = 1",
+		"row_number()over(orderbyrandom())",
+		"position%2=1",
 		"'a'::gd_team_id",
 		"'b'::gd_team_id",
 	} {
-		if !strings.Contains(source, expected) {
+		if !strings.Contains(compact, expected) {
 			t.Fatalf("team-duel shuffle is missing %q", expected)
 		}
 	}

@@ -121,7 +121,7 @@ func TestMapSearchPatternCapsLongTermsByRune(t *testing.T) {
 }
 
 func TestMapCommentsQueryCastsUUIDsForStringScanning(t *testing.T) {
-	body, err := os.ReadFile("map_comments.go")
+	body, err := os.ReadFile("../../db/queries/map_comments/queries.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,21 +131,22 @@ func TestMapCommentsQueryCastsUUIDsForStringScanning(t *testing.T) {
 			t.Fatalf("map comments query must cast %s before scanning into strings", expression)
 		}
 	}
-	if !strings.Contains(source, "coalesce(c.user_id=nullif($2,'')::uuid or $3, false)") {
+	compact := strings.ReplaceAll(source, " ", "")
+	if !strings.Contains(compact, "coalesce(c.user_id=nullif($2,'')::uuidor$3::boolean,false)") {
 		t.Fatal("map comments query must normalize anonymous can-delete results to false")
 	}
 }
 
 func TestArchiveCustomMapAdminOverrideIncludesOwnerlessMaps(t *testing.T) {
-	body, err := os.ReadFile("map_ingest.go")
+	body, err := os.ReadFile("../../db/queries/map_ingest/queries.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := string(body)
-	if strings.Contains(source, "$3 and m.owner_user_id is not null") || strings.Contains(source, "$3 and owner_user_id is not null") {
+	if strings.Contains(source, "allow_any)::boolean and m.owner_user_id is not null") || strings.Contains(source, "allow_any)::boolean and owner_user_id is not null") {
 		t.Fatal("admin map deletion override must include ownerless maps")
 	}
-	if got := strings.Count(source, "owner_user_id=$2 or $3"); got != 2 {
+	if got := strings.Count(source, "owner_user_id=sqlc.arg(user_id) or sqlc.arg(allow_any)::boolean"); got != 2 {
 		t.Fatalf("admin map deletion predicates = %d, want 2", got)
 	}
 }

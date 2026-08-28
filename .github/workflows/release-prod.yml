@@ -48,8 +48,10 @@ jobs:
           go-version: '1.26.x'
           cache: true
 
+      - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
       - run: go test ./...
       - run: go vet ./...
+      - run: bash scripts/check-backend-architecture.sh
 
   web-checks:
     name: web-checks

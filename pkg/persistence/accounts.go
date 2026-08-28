@@ -11,13 +11,21 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contentfilter"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 var ErrNicknameTaken = errors.New("nickname already taken")
 
 var ErrOAuthEmailConflict = errors.New("verified email is linked to multiple accounts")
+
+func accountNullableText(value any) pgtype.Text {
+	var result pgtype.Text
+	_ = result.Scan(value)
+	return result
+}
 
 func chooseProviderIdentityUser(existingProviderUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType string) (string, bool) {
 	if existingProviderUserID != "" {
@@ -59,57 +67,32 @@ func lockOAuthEmail(ctx context.Context, tx pgx.Tx, email string) error {
 	}
 	// Account discovery and canonical-email claims must be serialized together.
 	// A transaction-scoped advisory lock works through PgBouncer transaction pools.
-	_, err := tx.Exec(ctx, `
-		select pg_advisory_xact_lock(hashtextextended(lower(btrim($1)), 0))
-	`, email)
-	return err
+	return db.New(tx).LockOAuthEmail(ctx, email)
 }
 
 func findUserByVerifiedEmail(ctx context.Context, tx pgx.Tx, email string) (string, string, error) {
 	if email == "" || isSyntheticOAuthEmail(email) {
 		return "", "", nil
 	}
-	rows, err := tx.Query(ctx, `
-		select u.id, u.account_type
-		from users u
-		where u.deleted_at is null
-		  and (
-			lower(btrim(u.email)) = lower(btrim($1))
-			or exists (
-				select 1
-				from user_identities ui
-				where ui.user_id = u.id
-				  and lower(btrim(ui.email)) = lower(btrim($1))
-			)
-		  )
-		order by u.created_at, u.id
-		limit 2
-	`, email)
+	rows, err := db.New(tx).FindUserByVerifiedEmail(ctx, email)
 	if err != nil {
 		return "", "", err
 	}
-	defer rows.Close()
-
 	var userID, accountType string
-	if rows.Next() {
-		if err := rows.Scan(&userID, &accountType); err != nil {
-			return "", "", err
-		}
+	if len(rows) > 0 {
+		userID, accountType = rows[0].ID.String(), string(rows[0].AccountType)
 	}
-	if rows.Next() {
+	if len(rows) > 1 {
 		return "", "", ErrOAuthEmailConflict
-	}
-	if err := rows.Err(); err != nil {
-		return "", "", err
 	}
 	return userID, accountType, nil
 }
 
-func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error) {
+func (s *DB) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error) {
 	return s.UpsertProviderIdentity(IdentityProviderGoogle, googleSub, email, googleName, avatarURL, linkUserID)
 }
 
-func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error) {
+func (s *DB) UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error) {
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	if provider == "" {
 		return Identity{}, errors.New("provider required")
@@ -145,13 +128,13 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	}
 
 	var existingProviderUserID string
-	row := tx.QueryRow(ctx, `
-		select user_id
-		from user_identities
-		where provider = $1 and provider_user_id = $2
-	`, provider, providerUserID)
-	if err := row.Scan(&existingProviderUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return Identity{}, err
+	writeQ := db.New(tx)
+	existingProviderUUID, findErr := writeQ.FindProviderIdentityUser(ctx, db.FindProviderIdentityUserParams{Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID})
+	if findErr == nil {
+		existingProviderUserID = existingProviderUUID.String()
+	}
+	if findErr != nil && !errors.Is(findErr, pgx.ErrNoRows) {
+		return Identity{}, findErr
 	}
 	// A provider ban prevents account creation/evasion, but an identity that is
 	// still attached to its banned account may authenticate into that account.
@@ -160,11 +143,12 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	}
 	var previousLinkedProviderUserID string
 	if provider == IdentityProviderDiscord && linkUserID != "" {
-		if err := tx.QueryRow(ctx, `
-			select provider_user_id
-			from user_identities
-			where user_id = $1 and provider = $2
-		`, linkUserID, provider).Scan(&previousLinkedProviderUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		linkUUID, parseErr := profileUUID(linkUserID)
+		if parseErr != nil {
+			return Identity{}, parseErr
+		}
+		previousLinkedProviderUserID, err = writeQ.FindProviderUserIdentity(ctx, db.FindProviderUserIdentityParams{UserID: linkUUID, Provider: db.GdOauthProvider(provider)})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return Identity{}, err
 		}
 	}
@@ -178,105 +162,47 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	}
 	var linkAccountType string
 	if existingProviderUserID == "" && existingEmailUserID == "" && linkUserID != "" {
-		row = tx.QueryRow(ctx, `
-			select account_type
-			from users
-			where id = $1
-		`, linkUserID)
-		if err := row.Scan(&linkAccountType); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return Identity{}, err
+		linkUUID, parseErr := profileUUID(linkUserID)
+		if parseErr != nil {
+			return Identity{}, parseErr
+		}
+		accountType, accountErr := writeQ.GetUserAccountType(ctx, linkUUID)
+		if accountErr == nil {
+			linkAccountType = string(accountType)
+		}
+		if accountErr != nil && !errors.Is(accountErr, pgx.ErrNoRows) {
+			return Identity{}, accountErr
 		}
 	}
 	userID, _ := chooseProviderIdentityUser(existingProviderUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
 	userEmail := providerAccountEmail(provider, email)
-
-	if _, err := tx.Exec(ctx, `
-		insert into users (id, email, display_name, avatar_url, account_type)
-		values ($1, $2, $3, $4, 'registered')
-		on conflict (id) do update set
-			email = case
-				when excluded.email is null then users.email
-				when exists (
-					select 1 from users email_owner
-					where email_owner.id <> users.id
-					  and email_owner.deleted_at is null
-					  and lower(btrim(email_owner.email)) = lower(btrim(excluded.email))
-					union all
-					select 1 from user_identities identity_owner
-					join users identity_user on identity_user.id = identity_owner.user_id
-					where identity_owner.user_id <> users.id
-					  and identity_user.deleted_at is null
-					  and lower(btrim(identity_owner.email)) = lower(btrim(excluded.email))
-				) then users.email
-				else excluded.email
-			end,
-			display_name = case
-				when users.account_type = 'guest' then excluded.display_name
-				when users.nickname_claimed_at is not null and nullif(users.display_name, '') is not null then users.display_name
-				else excluded.display_name
-			end,
-			avatar_url = excluded.avatar_url,
-			account_type = 'registered'
-	`, userID, userEmail, providerName, nullable(avatarURL)); err != nil {
+	userUUID, err := profileUUID(userID)
+	if err != nil {
 		return Identity{}, err
 	}
+	if err := writeQ.UpsertRegisteredUser(ctx, db.UpsertRegisteredUserParams{ID: userUUID, Email: accountNullableText(userEmail), DisplayName: providerName, AvatarUrl: accountNullableText(nullable(avatarURL))}); err != nil {
+		return Identity{}, err
+	}
+	identityParams := db.UpsertIdentityByProviderSubjectParams{UserID: userUUID, Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID, Email: accountNullableText(email), ProviderName: accountNullableText(providerName), AvatarUrl: accountNullableText(nullable(avatarURL))}
 	if existingProviderUserID != "" {
-		if _, err := tx.Exec(ctx, `
-			insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
-			values($1, $2, $3, $4, $5, $6, now())
-			on conflict (provider, provider_user_id) do update set
-				user_id = excluded.user_id,
-				email = excluded.email,
-				provider_name = excluded.provider_name,
-				avatar_url = case
-					when excluded.avatar_url is null then user_identities.avatar_url
-					when excluded.avatar_url = '' then user_identities.avatar_url
-					else excluded.avatar_url
-				end,
-				last_seen_at = now()
-		`, userID, provider, providerUserID, email, providerName, nullable(avatarURL)); err != nil {
+		if err := writeQ.UpsertIdentityByProviderSubject(ctx, identityParams); err != nil {
 			return Identity{}, err
 		}
 	} else {
-		if _, err := tx.Exec(ctx, `
-			insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
-			values($1, $2, $3, $4, $5, $6, now())
-			on conflict (user_id, provider) do update set
-				provider_user_id = excluded.provider_user_id,
-				email = excluded.email,
-				provider_name = excluded.provider_name,
-				avatar_url = case
-					when excluded.avatar_url is null then user_identities.avatar_url
-					when excluded.avatar_url = '' then user_identities.avatar_url
-					else excluded.avatar_url
-				end,
-				last_seen_at = now()
-		`, userID, provider, providerUserID, email, providerName, nullable(avatarURL)); err != nil {
+		if err := writeQ.UpsertIdentityByUserProvider(ctx, db.UpsertIdentityByUserProviderParams(identityParams)); err != nil {
 			return Identity{}, err
 		}
 	}
 	if err := recordUserIdentityHistory(ctx, tx, userID, provider, providerUserID, email, providerName); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranks (user_id, mode, mmr, season_id)
-		values ($1, $2, $4, $3)
-		on conflict (user_id, mode, season_id) do nothing
-	`, userID, modeDuel, seasonID, initialMMR); err != nil {
+	if err := writeQ.EnsureAccountRank(ctx, db.EnsureAccountRankParams{UserID: userUUID, Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID, Mmr: int32(initialMMR)}); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into user_stats (user_id, games_played, wins)
-		values ($1, 0, 0)
-		on conflict (user_id) do nothing
-	`, userID); err != nil {
+	if err := writeQ.EnsureAccountStats(ctx, userUUID); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranked_stats (user_id, mode, season_id, games_played, wins)
-		values ($1, $2, $3, 0, 0)
-		on conflict (user_id, mode, season_id) do nothing
-	`, userID, modeDuel, seasonID); err != nil {
+	if err := writeQ.EnsureAccountRankedStats(ctx, db.EnsureAccountRankedStatsParams{UserID: userUUID, Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID}); err != nil {
 		return Identity{}, err
 	}
 	if provider == IdentityProviderDiscord {
@@ -295,7 +221,7 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	return s.GetIdentity(userID)
 }
 
-func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error) {
+func (s *DB) LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error) {
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	providerUserID = strings.TrimSpace(providerUserID)
 	linkUserID = strings.TrimSpace(linkUserID)
@@ -335,13 +261,14 @@ func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, provider
 			return Identity{}, err
 		}
 	}
+	writeQ := db.New(tx)
+	linkUUID, err := profileUUID(linkUserID)
+	if err != nil {
+		return Identity{}, errors.New("link user not found")
+	}
 
-	var linkAccountType string
-	if err := tx.QueryRow(ctx, `
-		select account_type
-		from users
-		where id = $1
-	`, linkUserID).Scan(&linkAccountType); err != nil {
+	_, err = writeQ.GetUserAccountType(ctx, linkUUID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Identity{}, errors.New("link user not found")
 		}
@@ -349,11 +276,10 @@ func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, provider
 	}
 
 	var existingProviderUserID string
-	err = tx.QueryRow(ctx, `
-		select user_id
-		from user_identities
-		where provider = $1 and provider_user_id = $2
-	`, provider, providerUserID).Scan(&existingProviderUserID)
+	existingProviderUUID, err := writeQ.FindProviderIdentityUser(ctx, db.FindProviderIdentityUserParams{Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID})
+	if err == nil {
+		existingProviderUserID = existingProviderUUID.String()
+	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Identity{}, err
 	}
@@ -362,11 +288,8 @@ func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, provider
 	}
 	var previousLinkedProviderUserID string
 	if provider == IdentityProviderDiscord {
-		if err := tx.QueryRow(ctx, `
-			select provider_user_id
-			from user_identities
-			where user_id = $1 and provider = $2
-		`, linkUserID, provider).Scan(&previousLinkedProviderUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		previousLinkedProviderUserID, err = writeQ.FindProviderUserIdentity(ctx, db.FindProviderUserIdentityParams{UserID: linkUUID, Provider: db.GdOauthProvider(provider)})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return Identity{}, err
 		}
 	}
@@ -384,52 +307,19 @@ func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, provider
 	}
 
 	userEmail := providerAccountEmail(provider, email)
-	if _, err := tx.Exec(ctx, `
-		insert into users (id, email, display_name, avatar_url, account_type)
-		values ($1, $2, $3, $4, 'registered')
-		on conflict (id) do update set
-			email = coalesce(excluded.email, users.email),
-			display_name = case
-				when users.account_type = 'guest' then excluded.display_name
-				when users.nickname_claimed_at is not null and nullif(users.display_name, '') is not null then users.display_name
-				else excluded.display_name
-			end,
-			avatar_url = excluded.avatar_url,
-			account_type = 'registered'
-	`, linkUserID, userEmail, providerName, nullable(avatarURL)); err != nil {
+	if err := writeQ.PromoteLinkedUser(ctx, db.PromoteLinkedUserParams{ID: linkUUID, Email: accountNullableText(userEmail), DisplayName: providerName, AvatarUrl: accountNullableText(nullable(avatarURL))}); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
-		values($1, $2, $3, $4, $5, $6, now())
-		on conflict (user_id, provider) do update set
-			provider_user_id = excluded.provider_user_id,
-			email = excluded.email,
-			provider_name = excluded.provider_name,
-			avatar_url = case
-				when excluded.avatar_url is null then user_identities.avatar_url
-				when excluded.avatar_url = '' then user_identities.avatar_url
-				else excluded.avatar_url
-			end,
-			last_seen_at = now()
-	`, linkUserID, provider, providerUserID, email, providerName, nullable(avatarURL)); err != nil {
+	if err := writeQ.UpsertIdentityByUserProvider(ctx, db.UpsertIdentityByUserProviderParams{UserID: linkUUID, Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID, Email: accountNullableText(email), ProviderName: accountNullableText(providerName), AvatarUrl: accountNullableText(nullable(avatarURL))}); err != nil {
 		return Identity{}, err
 	}
 	if err := recordUserIdentityHistory(ctx, tx, linkUserID, provider, providerUserID, email, providerName); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranks (user_id, mode, mmr, season_id)
-		values ($1, $2, $4, $3)
-		on conflict (user_id, mode, season_id) do nothing
-	`, linkUserID, modeDuel, seasonID, initialMMR); err != nil {
+	if err := writeQ.EnsureAccountRank(ctx, db.EnsureAccountRankParams{UserID: linkUUID, Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID, Mmr: int32(initialMMR)}); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranked_stats (user_id, mode, season_id, games_played, wins)
-		values ($1, $2, $3, 0, 0)
-		on conflict (user_id, mode, season_id) do nothing
-	`, linkUserID, modeDuel, seasonID); err != nil {
+	if err := writeQ.EnsureAccountRankedStats(ctx, db.EnsureAccountRankedStatsParams{UserID: linkUUID, Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID}); err != nil {
 		return Identity{}, err
 	}
 	if provider == IdentityProviderDiscord {
@@ -448,30 +338,25 @@ func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, provider
 	return s.GetIdentity(linkUserID)
 }
 
-func (s *pgStore) GoogleIdentityExists(googleSub string) (bool, error) {
+func (s *DB) GoogleIdentityExists(googleSub string) (bool, error) {
 	return s.ProviderIdentityExists(IdentityProviderGoogle, googleSub)
 }
 
-func (s *pgStore) ProviderIdentityExists(provider, providerUserID string) (bool, error) {
+func (s *DB) ProviderIdentityExists(provider, providerUserID string) (bool, error) {
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	if provider == "" || strings.TrimSpace(providerUserID) == "" {
 		return false, errors.New("provider and subject required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var exists bool
-	if err := s.pool.QueryRow(ctx, `
-		select exists(
-			select 1 from user_identities
-			where provider = $1 and provider_user_id = $2
-		)
-	`, provider, providerUserID).Scan(&exists); err != nil {
+	exists, err := s.db.ProviderIdentityExists(ctx, db.ProviderIdentityExistsParams{Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID})
+	if err != nil {
 		return false, err
 	}
 	return exists, nil
 }
 
-func (s *pgStore) IsProviderIdentityBanned(provider, providerUserID string) (bool, string, error) {
+func (s *DB) IsProviderIdentityBanned(provider, providerUserID string) (bool, string, error) {
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	providerUserID = strings.TrimSpace(providerUserID)
 	if provider == "" || providerUserID == "" {
@@ -479,15 +364,7 @@ func (s *pgStore) IsProviderIdentityBanned(provider, providerUserID string) (boo
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var reason string
-	err := s.pool.QueryRow(ctx, `
-		select coalesce(reason, '')
-		from oauth_identity_bans
-		where provider = $1
-		  and provider_user_id = $2
-		  and revoked_at is null
-		limit 1
-	`, provider, providerUserID).Scan(&reason)
+	reason, err := s.db.ProviderIdentityBanned(ctx, db.ProviderIdentityBannedParams{Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, "", nil
@@ -498,16 +375,11 @@ func (s *pgStore) IsProviderIdentityBanned(provider, providerUserID string) (boo
 }
 
 func recordUserIdentityHistory(ctx context.Context, tx pgx.Tx, userID, provider, providerUserID, email, providerName string) error {
-	_, err := tx.Exec(ctx, `
-		insert into user_identity_history(user_id, provider, provider_user_id, email, provider_name, first_seen_at, last_seen_at, deleted_at)
-		values($1, $2, $3, $4, $5, now(), now(), null)
-		on conflict (user_id, provider, provider_user_id) do update set
-			email = excluded.email,
-			provider_name = excluded.provider_name,
-			last_seen_at = now(),
-			deleted_at = null
-	`, userID, provider, providerUserID, email, providerName)
-	return err
+	u, err := profileUUID(userID)
+	if err != nil {
+		return err
+	}
+	return db.New(tx).RecordUserIdentityHistory(ctx, db.RecordUserIdentityHistoryParams{UserID: u, Provider: db.GdOauthProvider(provider), ProviderUserID: providerUserID, Email: pgtype.Text{String: email, Valid: true}, ProviderName: pgtype.Text{String: providerName, Valid: true}})
 }
 
 func enqueueDiscordSyncTx(ctx context.Context, tx pgx.Tx, action, discordUserID string) error {
@@ -516,14 +388,7 @@ func enqueueDiscordSyncTx(ctx context.Context, tx pgx.Tx, action, discordUserID 
 	if action == "" || discordUserID == "" {
 		return nil
 	}
-	_, err := tx.Exec(ctx, `
-		insert into discord_sync_outbox(action, discord_user_id)
-		values($1, $2)
-		on conflict (action, discord_user_id) where processed_at is null do update set
-			next_attempt_at = least(discord_sync_outbox.next_attempt_at, excluded.next_attempt_at),
-			last_error = null
-	`, action, discordUserID)
-	return err
+	return db.New(tx).EnqueueDiscordSync(ctx, db.EnqueueDiscordSyncParams{Action: db.GdDiscordSyncAction(action), DiscordUserID: discordUserID})
 }
 
 func enqueueDiscordSyncForUserTx(ctx context.Context, tx pgx.Tx, userID string) error {
@@ -531,29 +396,14 @@ func enqueueDiscordSyncForUserTx(ctx context.Context, tx pgx.Tx, userID string) 
 	if userID == "" {
 		return nil
 	}
-	rows, err := tx.Query(ctx, `
-		select provider_user_id
-		from user_identities
-		where user_id = $1
-		  and provider = $2
-	`, userID, IdentityProviderDiscord)
+	u, err := profileUUID(userID)
 	if err != nil {
 		return err
 	}
-	var discordUserIDs []string
-	for rows.Next() {
-		var discordUserID string
-		if err := rows.Scan(&discordUserID); err != nil {
-			rows.Close()
-			return err
-		}
-		discordUserIDs = append(discordUserIDs, discordUserID)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	discordUserIDs, err := db.New(tx).ListDiscordIdentities(ctx, db.ListDiscordIdentitiesParams{UserID: u, Provider: db.GdOauthProvider(IdentityProviderDiscord)})
+	if err != nil {
 		return err
 	}
-	rows.Close()
 	for _, discordUserID := range discordUserIDs {
 		if err := enqueueDiscordSyncTx(ctx, tx, DiscordSyncActionSync, discordUserID); err != nil {
 			return err
@@ -562,7 +412,7 @@ func enqueueDiscordSyncForUserTx(ctx context.Context, tx pgx.Tx, userID string) 
 	return nil
 }
 
-func (s *pgStore) UnlinkProviderIdentity(userID, provider string) (Identity, error) {
+func (s *DB) UnlinkProviderIdentity(userID, provider string) (Identity, error) {
 	userID = strings.TrimSpace(userID)
 	provider = strings.TrimSpace(strings.ToLower(provider))
 	if userID == "" || provider == "" {
@@ -575,13 +425,13 @@ func (s *pgStore) UnlinkProviderIdentity(userID, provider string) (Identity, err
 		return Identity{}, err
 	}
 	defer tx.Rollback(ctx)
-
-	var providerCount int
-	if err := tx.QueryRow(ctx, `
-		select count(*)
-		from user_identities
-		where user_id = $1
-	`, userID).Scan(&providerCount); err != nil {
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return Identity{}, err
+	}
+	q := db.New(tx)
+	providerCount, err := q.CountUserProviders(ctx, userUUID)
+	if err != nil {
 		return Identity{}, err
 	}
 	if providerCount <= 1 {
@@ -589,43 +439,23 @@ func (s *pgStore) UnlinkProviderIdentity(userID, provider string) (Identity, err
 	}
 	var unlinkedProviderUserID string
 	if provider == IdentityProviderDiscord {
-		if err := tx.QueryRow(ctx, `
-			select provider_user_id
-			from user_identities
-			where user_id = $1 and provider = $2
-		`, userID, provider).Scan(&unlinkedProviderUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		unlinkedProviderUserID, err = q.FindProviderUserIdentity(ctx, db.FindProviderUserIdentityParams{UserID: userUUID, Provider: db.GdOauthProvider(provider)})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return Identity{}, err
 		}
 	}
-	tag, err := tx.Exec(ctx, `
-		delete from user_identities
-		where user_id = $1 and provider = $2
-	`, userID, provider)
+	affected, err := q.DeleteUserProvider(ctx, db.DeleteUserProviderParams{UserID: userUUID, Provider: db.GdOauthProvider(provider)})
 	if err != nil {
 		return Identity{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		return Identity{}, errors.New("provider is not linked")
 	}
-	if _, err := tx.Exec(ctx, `
-		update user_identity_history
-		set deleted_at = coalesce(deleted_at, now())
-		where user_id = $1
-		  and provider = $2
-		  and deleted_at is null
-	`, userID, provider); err != nil {
+	if err := q.MarkIdentityHistoryDeleted(ctx, db.MarkIdentityHistoryDeletedParams{UserID: userUUID, Provider: db.GdOauthProvider(provider)}); err != nil {
 		return Identity{}, err
 	}
 	if provider == IdentityProviderGoogle {
-		if _, err := tx.Exec(ctx, `
-			update users
-			set email = null
-			where id = $1
-			  and not exists (
-				select 1 from user_identities
-				where user_id = $1 and provider = 'google'
-			  )
-		`, userID); err != nil {
+		if err := q.ClearUserEmailWithoutGoogle(ctx, userUUID); err != nil {
 			return Identity{}, err
 		}
 	}
@@ -640,7 +470,7 @@ func (s *pgStore) UnlinkProviderIdentity(userID, provider string) (Identity, err
 	return s.GetIdentity(userID)
 }
 
-func (s *pgStore) CreateGuestIdentity() (Identity, error) {
+func (s *DB) CreateGuestIdentity() (Identity, error) {
 	userID := newUserID()
 	if err := s.UpsertUser(userID, "", "Guest"); err != nil {
 		return Identity{}, err
@@ -648,55 +478,35 @@ func (s *pgStore) CreateGuestIdentity() (Identity, error) {
 	return s.GetIdentity(userID)
 }
 
-func (s *pgStore) GetIdentity(sub string) (Identity, error) {
+func (s *DB) GetIdentity(sub string) (Identity, error) {
 	if sub == "" {
 		return Identity{}, errors.New("subject required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	row := s.pool.QueryRow(ctx, `
-		select
-			u.id,
-			coalesce(u.email, ui.email, ''),
-			coalesce(ui.provider_name, ''),
-			coalesce(u.avatar_url, ui.avatar_url, ''),
-			coalesce(u.account_type = 'registered' and u.nickname_claimed_at is null, false) as nickname_required,
-				coalesce(nullif(u.display_name, ''), ui.provider_name, u.id::text),
-				u.account_type,
-				coalesce(u.is_admin, false),
-				coalesce(u.is_moderator, false),
-				coalesce(u.banned_at is not null and (u.ban_expires_at is null or u.ban_expires_at > now()), false),
-				coalesce(u.ban_reason, '')
-		from users u
-		left join lateral (
-			select email, provider_name, avatar_url
-			from user_identities
-			where user_id = u.id
-			  and provider in ('discord', 'google')
-			order by case provider when 'discord' then 0 when 'google' then 1 else 2 end, created_at asc
-			limit 1
-		) ui on true
-		where u.id = $1
-	`, sub)
+	u, err := profileUUID(sub)
+	if err != nil {
+		return Identity{}, err
+	}
+	r, err := s.db.GetIdentity(ctx, u)
 	var out Identity
-	if err := row.Scan(
-		&out.Sub,
-		&out.Email,
-		&out.GoogleName,
-		&out.AvatarURL,
-		&out.NicknameRequired,
-		&out.DisplayName,
-		&out.AccountType,
-		&out.IsAdmin,
-		&out.IsModerator,
-		&out.IsBanned,
-		&out.BanReason,
-	); err != nil {
+	if err := err; err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Identity{}, errors.New("identity not found")
 		}
 		return Identity{}, err
 	}
+	out.Sub = r.UID
+	out.Email = r.Email
+	out.GoogleName = r.ProviderName
+	out.AvatarURL = r.AvatarUrl
+	out.NicknameRequired, _ = r.Coalesce.(bool)
+	out.DisplayName = r.ProviderName_2.String
+	out.AccountType = string(r.AccountType)
+	out.IsAdmin = r.IsAdmin
+	out.IsModerator = r.IsModerator
+	out.IsBanned, _ = r.Coalesce_2.(bool)
+	out.BanReason = r.BanReason
 	out.ProviderName = out.GoogleName
 	out.LinkedProviders, _ = s.userProviders(ctx, sub)
 	out.AuthMigrationRequired = false
@@ -704,26 +514,20 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 	return out, nil
 }
 
-func (s *pgStore) userProviders(ctx context.Context, userID string) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `
-		select provider
-		from user_identities
-		where user_id = $1
-		order by case provider when 'discord' then 0 when 'google' then 1 else 2 end, provider
-	`, userID)
+func (s *DB) userProviders(ctx context.Context, userID string) ([]string, error) {
+	u, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var providers []string
-	for rows.Next() {
-		var provider string
-		if err := rows.Scan(&provider); err != nil {
-			return nil, err
-		}
-		providers = append(providers, provider)
+	providers, err := s.db.ListIdentityProviders(ctx, u)
+	if err != nil {
+		return nil, err
 	}
-	return providers, rows.Err()
+	out := make([]string, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, string(p))
+	}
+	return out, nil
 }
 
 func containsString(values []string, needle string) bool {
@@ -735,7 +539,7 @@ func containsString(values []string, needle string) bool {
 	return false
 }
 
-func (s *pgStore) SetNickname(sub, displayName string) error {
+func (s *DB) SetNickname(sub, displayName string) error {
 	if sub == "" {
 		return errors.New("subject required")
 	}
@@ -744,13 +548,11 @@ func (s *pgStore) SetNickname(sub, displayName string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `
-		update users
-		set display_name = $2,
-			nickname_claimed_at = coalesce(nickname_claimed_at, now())
-		where id = $1
-		  and coalesce(account_type, 'registered') <> 'guest'
-	`, sub, displayName)
+	u, err := profileUUID(sub)
+	if err != nil {
+		return err
+	}
+	tag, err := s.db.SetNickname(ctx, db.SetNicknameParams{ID: u, DisplayName: displayName})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "users_claimed_nickname_unique" {
@@ -758,13 +560,13 @@ func (s *pgStore) SetNickname(sub, displayName string) error {
 		}
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if tag == 0 {
 		return errors.New("user not found")
 	}
 	return nil
 }
 
-func (s *pgStore) SuggestNickname(sub, displayName string) (string, error) {
+func (s *DB) SuggestNickname(sub, displayName string) (string, error) {
 	base := contentfilter.NicknameSuggestionBase(displayName)
 	if _, err := contentfilter.ValidateNickname(base); err != nil {
 		base = "Player"
@@ -773,16 +575,11 @@ func (s *pgStore) SuggestNickname(sub, displayName string) (string, error) {
 	defer cancel()
 	available := func(candidate string) (bool, error) {
 		var taken bool
-		err := s.pool.QueryRow(ctx, `
-			select exists(
-				select 1
-				from users
-				where id <> $1
-				  and account_type = 'registered'
-				  and nickname_claimed_at is not null
-				  and lower(display_name) = lower($2)
-			)
-		`, sub, candidate).Scan(&taken)
+		u, err := profileUUID(sub)
+		if err != nil {
+			return false, err
+		}
+		taken, err = s.db.NicknameTaken(ctx, db.NicknameTakenParams{ID: u, Lower: candidate})
 		return !taken, err
 	}
 	if ok, err := available(base); err != nil {
@@ -809,14 +606,14 @@ func (s *pgStore) SuggestNickname(sub, displayName string) (string, error) {
 	return "", errors.New("nickname suggestion unavailable")
 }
 
-func (s *pgStore) SetUserAdmin(userID string, isAdmin bool) error {
+func (s *DB) SetUserAdmin(userID string, isAdmin bool) error {
 	if isAdmin {
 		return s.GrantUserRole(userID, "admin", "", "admin toggle")
 	}
 	return s.RevokeUserRole(userID, "admin", "", "admin toggle")
 }
 
-func (s *pgStore) SetUserModerator(userID string, isModerator bool) error {
+func (s *DB) SetUserModerator(userID string, isModerator bool) error {
 	if isModerator {
 		return s.GrantUserRole(userID, "moderator", "", "moderator toggle")
 	}

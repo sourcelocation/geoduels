@@ -9,7 +9,7 @@ import (
 )
 
 type oauthIntentTestStore struct {
-	persistence.Store
+	testRepositories
 	providerExists bool
 	providerBanned bool
 	signupIPBanned bool
@@ -22,7 +22,7 @@ type oauthIntentTestStore struct {
 
 func TestOAuthSigninAllowsExistingBannedAccount(t *testing.T) {
 	store := &oauthIntentTestStore{providerExists: true, providerBanned: true}
-	a := &api{store: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 
 	identity, err := a.resolveOAuthIdentity(httptest.NewRequest("GET", "/", nil), oauthStateClaims{Intent: oauthIntentSignIn}, "discord", "discord-sub", "player@example.com", "Player", "")
 	if err != nil {
@@ -39,7 +39,7 @@ func TestOAuthBannedIdentityCannotCreateOrLinkAccount(t *testing.T) {
 		{Intent: oauthIntentLink, LinkSub: "user-1"},
 	} {
 		store := &oauthIntentTestStore{providerBanned: true}
-		a := &api{store: store}
+		a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 		if _, err := a.resolveOAuthIdentity(httptest.NewRequest("GET", "/", nil), state, "discord", "discord-sub", "player@example.com", "Player", ""); err == nil || err.Error() != "provider identity banned" {
 			t.Fatalf("intent %q err=%v, want provider identity banned", state.Intent, err)
 		}
@@ -56,10 +56,17 @@ func (s *oauthIntentTestStore) IsSignupIPBanned(ipAddress string) (bool, error) 
 
 func (s *oauthIntentTestStore) UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (persistence.Identity, error) {
 	s.upsertCalls++
+	s.lastLinkUserID = linkUserID
 	if s.providerBanned && !s.providerExists {
 		return persistence.Identity{}, errors.New("provider identity banned")
 	}
-	return persistence.Identity{Sub: "existing-user", AccountType: "registered"}, nil
+	if s.providerExists {
+		return persistence.Identity{Sub: "existing-user", AccountType: "registered"}, nil
+	}
+	if linkUserID != "" {
+		return persistence.Identity{Sub: linkUserID, AccountType: "registered"}, nil
+	}
+	return persistence.Identity{Sub: "new-user", AccountType: "registered"}, nil
 }
 
 func (s *oauthIntentTestStore) LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (persistence.Identity, error) {
@@ -83,7 +90,7 @@ func (s *oauthIntentTestStore) GetIdentity(sub string) (persistence.Identity, er
 
 func TestOAuthSigninIgnoresLinkSubject(t *testing.T) {
 	store := &oauthIntentTestStore{providerExists: true}
-	a := &api{store: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 
 	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
@@ -107,7 +114,7 @@ func TestOAuthSigninIgnoresLinkSubject(t *testing.T) {
 
 func TestOAuthLinkRequiresExplicitIntent(t *testing.T) {
 	store := &oauthIntentTestStore{}
-	a := &api{store: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 
 	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
@@ -129,14 +136,14 @@ func TestOAuthLinkRequiresExplicitIntent(t *testing.T) {
 	}
 }
 
-func TestOAuthGuestUpgradeRejectsExistingProviderAccount(t *testing.T) {
+func TestOAuthGuestUpgradeSignsIntoExistingProviderAccount(t *testing.T) {
 	store := &oauthIntentTestStore{
-		identity: persistence.Identity{Sub: "guest-1", AccountType: "guest"},
-		linkErr:  errors.New("provider identity already linked"),
+		providerExists: true,
+		identity:       persistence.Identity{Sub: "guest-1", AccountType: "guest"},
 	}
-	a := &api{store: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 
-	_, err := a.resolveOAuthIdentity(
+	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
 		oauthStateClaims{Intent: oauthIntentUpgradeGuest, LinkSub: "guest-1"},
 		"google",
@@ -145,11 +152,44 @@ func TestOAuthGuestUpgradeRejectsExistingProviderAccount(t *testing.T) {
 		"Player",
 		"",
 	)
-	if err == nil || err.Error() != "provider account already exists" {
-		t.Fatalf("err = %v, want provider account already exists", err)
+	if err != nil {
+		t.Fatalf("resolveOAuthIdentity: %v", err)
 	}
-	if got := oauthUserError(err); got != "This sign-in method already has a GeoDuels account. Sign out and continue with that provider." {
-		t.Fatalf("oauthUserError = %q", got)
+	if identity.Sub != "existing-user" {
+		t.Fatalf("identity sub = %q, want existing-user", identity.Sub)
+	}
+	if store.upsertCalls != 1 || store.linkCalls != 0 {
+		t.Fatalf("upsert/link calls = %d/%d, want 1/0", store.upsertCalls, store.linkCalls)
+	}
+	if store.lastLinkUserID != "guest-1" {
+		t.Fatalf("upsert linkUserID = %q, want guest-1", store.lastLinkUserID)
+	}
+}
+
+func TestOAuthGuestUpgradeMergesNewProviderIntoGuest(t *testing.T) {
+	store := &oauthIntentTestStore{
+		providerExists: false,
+		identity:       persistence.Identity{Sub: "guest-1", AccountType: "guest"},
+	}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+
+	identity, err := a.resolveOAuthIdentity(
+		httptest.NewRequest("GET", "/", nil),
+		oauthStateClaims{Intent: oauthIntentUpgradeGuest, LinkSub: "guest-1"},
+		"google",
+		"google-sub",
+		"player@example.com",
+		"Player",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("resolveOAuthIdentity: %v", err)
+	}
+	if identity.Sub != "guest-1" || identity.AccountType != "registered" {
+		t.Fatalf("identity = %+v, want guest-1 registered", identity)
+	}
+	if store.upsertCalls != 1 || store.linkCalls != 0 {
+		t.Fatalf("upsert/link calls = %d/%d, want 1/0", store.upsertCalls, store.linkCalls)
 	}
 }
 
@@ -157,7 +197,7 @@ func TestOAuthGuestUpgradeRequiresGuestAccount(t *testing.T) {
 	store := &oauthIntentTestStore{
 		identity: persistence.Identity{Sub: "user-1", AccountType: "registered"},
 	}
-	a := &api{store: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 
 	_, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),

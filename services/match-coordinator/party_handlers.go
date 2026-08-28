@@ -23,7 +23,6 @@ import (
 	"geoduels/pkg/matchlaunch"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/partyevents"
-	"geoduels/pkg/persistence"
 	"geoduels/pkg/sessionpolicy"
 )
 
@@ -271,7 +270,7 @@ func (q *matchCoordinator) updatePartySettings(w http.ResponseWriter, r *http.Re
 	}
 	snap, err = configStore.SetPartyConfig(snap.ID, req.Config)
 	if err != nil {
-		if errors.Is(err, persistence.ErrPartyMapUnavailable) {
+		if errors.Is(err, errPartyMapUnavailable) {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}

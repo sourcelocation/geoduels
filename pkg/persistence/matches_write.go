@@ -11,9 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *pgStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) (contracts.MatchSnapshot, error) {
+func (s *DB) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) (contracts.MatchSnapshot, error) {
 	if strings.TrimSpace(snap.MatchID) == "" {
 		return snap, errors.New("match id required")
 	}
@@ -45,22 +46,17 @@ func (s *pgStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) 
 		return snap, err
 	}
 	defer tx.Rollback(ctx)
+	q := db.New(tx)
 
-	var sessionState string
-	err = tx.QueryRow(ctx, `
-		select state
-		from match_sessions
-		where match_id = $1
-		for update
-	`, snap.MatchID).Scan(&sessionState)
+	sessionState, err := q.LockMatchSessionState(ctx, matchUUID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return snap, errors.New("match session missing")
 	}
 	if err != nil {
 		return snap, err
 	}
-	if sessionState == string(contracts.MatchEnded) {
-		if err := applyPersistedRatingsToSnapshot(ctx, tx, &snap); err != nil {
+	if sessionState == db.GdMatchSessionStateEnded {
+		if err := applyPersistedRatingsToSnapshot(ctx, tx, q, &snap); err != nil {
 			return snap, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -75,13 +71,13 @@ func (s *pgStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) 
 	// one, and the guest-cleanup job can hard-delete a guest mid-match. Without
 	// this, recordMatchHistory's match_players insert fails the user_id foreign
 	// key and the match retries finalize forever.
-	if err := ensureMatchUsersTx(ctx, tx, snap); err != nil {
+	if err := ensureMatchUsersTx(ctx, tx, q, snap); err != nil {
 		return snap, err
 	}
 	if err := recordMatchHistory(
 		ctx,
-		tx,
-		snap.MatchID,
+		q,
+		matchUUID,
 		snap,
 		compressedReplay,
 		replayHash[:],
@@ -90,14 +86,14 @@ func (s *pgStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) 
 		return snap, err
 	}
 	if snap.Mode == contracts.ModeDuel {
-		if err := finalizeDuelResultTx(ctx, tx, &snap, &result); err != nil {
+		if err := finalizeDuelResultTx(ctx, tx, q, &snap, &result); err != nil {
 			return snap, err
 		}
 	}
-	if err := completeMatchSessionTx(ctx, tx, snap.MatchID); err != nil {
+	if err := completeMatchSessionTx(ctx, q, matchUUID); err != nil {
 		return snap, err
 	}
-	if err := recordRuntimeMatchEndedTx(ctx, tx, snap.MatchID, ownerEpoch); err != nil {
+	if err := recordRuntimeMatchEndedTx(ctx, q, matchUUID, ownerEpoch); err != nil {
 		return snap, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -111,7 +107,7 @@ func (s *pgStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) 
 	return snap, nil
 }
 
-func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, snap *contracts.MatchSnapshot, result *duelResult) error {
+func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *contracts.MatchSnapshot, result *duelResult) error {
 	if snap == nil || result == nil {
 		return errors.New("duel result is required")
 	}
@@ -126,56 +122,31 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, snap *contracts.MatchS
 		}
 	}
 
-	rows, err := tx.Query(ctx, `
-		select
-			u.id,
-			u.account_type = 'guest',
-			r.mmr,
-			r.rd,
-			r.updated_at
-		from unnest(array[$1::uuid, $2::uuid]) with ordinality requested(user_id, position)
-		join users u on u.id = requested.user_id
-		join ranks r
-		  on r.user_id = u.id
-		 and r.mode = $3
-		 and r.season_id = $4
-		order by requested.position
-		for update of r
-	`, p1.userID, p2.userID, modeDuel, seasonID)
+	locked, err := q.LockDuelRatings(ctx, db.LockDuelRatingsParams{
+		User1:    p1.userID,
+		User2:    p2.userID,
+		Mode:     db.GdMatchMode(modeDuel),
+		SeasonID: seasonID,
+	})
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	participants := []*duelParticipantResult{p1, p2}
-	index := 0
-	for rows.Next() {
-		if index >= len(participants) {
-			return errors.New("duel result contains duplicate users")
-		}
-		var userID pgtype.UUID
-		current := participants[index]
-		if err := rows.Scan(
-			&userID,
-			&current.guest,
-			&current.rating.MMR,
-			&current.rating.RD,
-			&current.rating.UpdatedAt,
-		); err != nil {
-			return err
-		}
-		if userID.Bytes != current.userID.Bytes {
-			return errors.New("locked duel players are out of order")
-		}
-		index++
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if index != len(participants) {
+	if len(locked) != len(participants) {
 		return errors.New("duel player rating state is missing")
 	}
+	for i, row := range locked {
+		current := participants[i]
+		if row.ID.Bytes != current.userID.Bytes {
+			return errors.New("locked duel players are out of order")
+		}
+		current.guest = row.IsGuest
+		current.rating.MMR = int(row.Mmr)
+		current.rating.RD = row.Rd
+		current.rating.UpdatedAt = row.UpdatedAt.Time
+	}
 
-	privatePartyMatch, err := matchBelongsToPartyTx(ctx, tx, snap.MatchID)
+	privatePartyMatch, err := matchBelongsToPartyTx(ctx, q, snap.MatchID)
 	if err != nil {
 		return err
 	}
@@ -183,76 +154,36 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, snap *contracts.MatchS
 	now := time.Now()
 	if ratedMatch {
 		p1.update, p2.update = CalculateDuelRatingUpdates(p1.rating, p2.rating, result.ratingWinner(), now)
-		if _, err := tx.Exec(ctx, `
-			update ranks r
-			set mmr = next.mmr,
-				rd = next.rd,
-				updated_at = $9
-			from (
-				values
-					($1::uuid, $2::integer, $3::double precision, $4::boolean),
-					($5::uuid, $6::integer, $7::double precision, $8::boolean)
-			) as next(user_id, mmr, rd, apply)
-			where r.user_id = next.user_id
-			  and r.mode = $10
-			  and r.season_id = $11
-			  and next.apply
-		`, p1.userID, p1.update.MMR, p1.update.RD, !p1.guest,
-			p2.userID, p2.update.MMR, p2.update.RD, !p2.guest,
-			now, modeDuel, seasonID); err != nil {
+		if err := q.UpdateDuelRanks(ctx, db.UpdateDuelRanksParams{
+			P1UserID: p1.userID, P1Mmr: int32(p1.update.MMR), P1Rd: p1.update.RD, P1Apply: !p1.guest,
+			P2UserID: p2.userID, P2Mmr: int32(p2.update.MMR), P2Rd: p2.update.RD, P2Apply: !p2.guest,
+			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			Mode:      db.GdMatchMode(modeDuel),
+			SeasonID:  seasonID,
+		}); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `
-		update user_stats stats
-		set games_played = stats.games_played + 1,
-			wins = stats.wins + result.won::integer,
-			updated_at = now()
-		from (
-			values
-				($1::uuid, $2::boolean),
-				($3::uuid, $4::boolean)
-		) as result(user_id, won)
-		where stats.user_id = result.user_id
-	`, p1.userID, p1.won, p2.userID, p2.won); err != nil {
+	if err := q.AddDuelUserStats(ctx, db.AddDuelUserStatsParams{
+		P1UserID: p1.userID, P1Won: p1.won,
+		P2UserID: p2.userID, P2Won: p2.won,
+	}); err != nil {
 		return err
 	}
 	if ratedMatch {
-		if _, err := tx.Exec(ctx, `
-			update ranked_stats stats
-			set games_played = stats.games_played + 1,
-				wins = stats.wins + result.won::integer,
-				updated_at = now()
-			from (
-				values
-					($1::uuid, $2::boolean, $3::boolean),
-					($4::uuid, $5::boolean, $6::boolean)
-			) as result(user_id, won, apply)
-			where stats.user_id = result.user_id
-			  and stats.mode = $7
-			  and stats.season_id = $8
-			  and result.apply
-		`, p1.userID, p1.won, !p1.guest,
-			p2.userID, p2.won, !p2.guest,
-			modeDuel, seasonID); err != nil {
+		if err := q.AddDuelRankedStats(ctx, db.AddDuelRankedStatsParams{
+			P1UserID: p1.userID, P1Won: p1.won, P1Apply: !p1.guest,
+			P2UserID: p2.userID, P2Won: p2.won, P2Apply: !p2.guest,
+			Mode:     db.GdMatchMode(modeDuel),
+			SeasonID: seasonID,
+		}); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			update match_players players
-			set rating_before = result.rating_before,
-				rating_after = result.rating_after,
-				final_ranked_delta = result.rating_after - result.rating_before
-			from (
-				values
-					($2::uuid, $3::integer, $4::integer, $5::boolean),
-					($6::uuid, $7::integer, $8::integer, $9::boolean)
-			) as result(user_id, rating_before, rating_after, apply)
-			where players.match_id = $1
-			  and players.user_id = result.user_id
-			  and result.apply
-		`, snap.MatchID,
-			p1.userID, p1.rating.MMR, p1.update.MMR, !p1.guest,
-			p2.userID, p2.rating.MMR, p2.update.MMR, !p2.guest); err != nil {
+		if err := q.SetMatchPlayerRatingDeltas(ctx, db.SetMatchPlayerRatingDeltasParams{
+			MatchID:  chatUUID(snap.MatchID),
+			P1UserID: p1.userID, P1RatingBefore: int32(p1.rating.MMR), P1RatingAfter: int32(p1.update.MMR), P1Apply: !p1.guest,
+			P2UserID: p2.userID, P2RatingBefore: int32(p2.rating.MMR), P2RatingAfter: int32(p2.update.MMR), P2Apply: !p2.guest,
+		}); err != nil {
 			return err
 		}
 	}
@@ -292,7 +223,7 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, snap *contracts.MatchS
 	return nil
 }
 
-func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, snap *contracts.MatchSnapshot) error {
+func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *contracts.MatchSnapshot) error {
 	if snap == nil || snap.Mode != contracts.ModeDuel {
 		return nil
 	}
@@ -312,87 +243,44 @@ func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, snap *contr
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `
-		select
-			mp.user_id::text,
-			coalesce(mp.rating_after, mp.mmr),
-			coalesce(r.rd, mp.rating_rd, $4)
-		from match_players mp
-		left join ranks r
-		  on r.user_id = mp.user_id
-		 and r.mode = $2
-		 and r.season_id = $3
-		where mp.match_id = $1
-		  and mp.user_id in (
-			select value::uuid from jsonb_array_elements_text($5::jsonb)
-		  )
-	`, snap.MatchID, modeDuel, seasonID, initialRatingRD, string(encodedIDs))
+	rows, err := q.MatchPlayerPersistedRatings(ctx, db.MatchPlayerPersistedRatingsParams{
+		MatchID:    chatUUID(snap.MatchID),
+		Mode:       db.GdMatchMode(modeDuel),
+		SeasonID:   seasonID,
+		FallbackRd: initialRatingRD,
+		Players:    encodedIDs,
+	})
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var userID string
-		var mmr int
-		var rd float64
-		if err := rows.Scan(&userID, &mmr, &rd); err != nil {
-			return err
-		}
-		player, ok := snap.Players[userID]
+	for _, row := range rows {
+		player, ok := snap.Players[row.UserID]
 		if !ok {
 			continue
 		}
-		player.MMR = mmr
-		player.RatingRD = rd
-		snap.Players[userID] = player
-	}
-	return rows.Err()
-}
-
-func completeMatchSessionTx(ctx context.Context, tx pgx.Tx, matchID string) error {
-	if _, err := tx.Exec(ctx, `
-		update match_sessions
-		set state = 'ended',
-			ended_at = coalesce(ended_at, now()),
-			lease_expires_at = null,
-			updated_at = now()
-		where match_id = $1
-	`, matchID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		update parties
-		set state = 'open',
-			last_match_id = $1,
-			active_match_id = null,
-			started_match_id = null,
-			updated_at = now()
-		where active_match_id = $1 or started_match_id = $1
-	`, matchID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		update party_members pm
-		set ready = false
-		from match_sessions ms
-		where ms.match_id = $1
-		  and pm.party_id = ms.source_party_id
-	`, matchID); err != nil {
-		return err
+		player.MMR = int(row.Mmr)
+		player.RatingRD = row.Rd
+		snap.Players[row.UserID] = player
 	}
 	return nil
 }
 
-func recordRuntimeMatchEndedTx(ctx context.Context, tx pgx.Tx, matchID string, ownerEpoch int64) error {
-	_, err := tx.Exec(ctx, `
-		insert into runtime_matches(id, state, owner_epoch, started_at, ended_at)
-		values($1,$2,$3,now(),now())
-		on conflict (id) do update set
-			state = excluded.state,
-			owner_epoch = excluded.owner_epoch,
-			ended_at = now()
-	`, matchID, string(contracts.MatchEnded), ownerEpoch)
-	return err
+func completeMatchSessionTx(ctx context.Context, q *db.Queries, matchID pgtype.UUID) error {
+	if err := q.CompleteMatchSession(ctx, matchID); err != nil {
+		return err
+	}
+	if err := q.ReopenPartiesAfterMatch(ctx, matchID); err != nil {
+		return err
+	}
+	return q.ResetPartyMembersAfterMatch(ctx, matchID)
+}
+
+func recordRuntimeMatchEndedTx(ctx context.Context, q *db.Queries, matchID pgtype.UUID, ownerEpoch int64) error {
+	return q.RecordRuntimeMatchEnded(ctx, db.RecordRuntimeMatchEndedParams{
+		ID:         matchID,
+		State:      db.GdRuntimeState(contracts.MatchEnded),
+		OwnerEpoch: ownerEpoch,
+	})
 }
 
 func rankedSpeedrunnerUsers(snap contracts.MatchSnapshot) map[string]bool {
@@ -410,28 +298,19 @@ func rankedSpeedrunnerUsers(snap contracts.MatchSnapshot) map[string]bool {
 	return out
 }
 
-func matchBelongsToPartyTx(ctx context.Context, tx pgx.Tx, matchID string) (bool, error) {
+func matchBelongsToPartyTx(ctx context.Context, q *db.Queries, matchID string) (bool, error) {
 	if matchID == "" {
 		return false, nil
 	}
-	var exists bool
-	if err := tx.QueryRow(ctx, `
-		select exists (
-			select 1
-			from match_sessions
-			where match_id = $1
-			  and source_kind = 'party'
-		) or exists (
-			select 1
-			from parties
-			where active_match_id = $1
-			   or started_match_id = $1
-			   or last_match_id = $1
-		)
-	`, matchID).Scan(&exists); err != nil {
+	matchUUID, err := chatUUIDErr(matchID)
+	if err != nil {
+		return false, nil
+	}
+	exists, err := q.MatchBelongsToParty(ctx, matchUUID)
+	if err != nil {
 		return false, err
 	}
-	return exists, nil
+	return exists.Bool, nil
 }
 
 // ensureMatchUsersTx upserts the users row (and the season-scoped ranked
@@ -439,7 +318,7 @@ func matchBelongsToPartyTx(ctx context.Context, tx pgx.Tx, matchID string) (bool
 // into user-referencing tables satisfy their foreign keys. It is idempotent and
 // safe to call for any mode. Blank user ids are skipped rather than inserted —
 // they would fail the uuid cast and never belong in a match snapshot.
-func ensureMatchUsersTx(ctx context.Context, tx pgx.Tx, snap contracts.MatchSnapshot) error {
+func ensureMatchUsersTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap contracts.MatchSnapshot) error {
 	if len(snap.Players) == 0 {
 		return nil
 	}
@@ -474,78 +353,35 @@ func ensureMatchUsersTx(ctx context.Context, tx pgx.Tx, snap contracts.MatchSnap
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into users (id, email, display_name, avatar_url, account_type)
-		select input.user_id, null, input.display_name, null, 'guest'
-		from jsonb_to_recordset($1::jsonb)
-			as input(user_id uuid, display_name text)
-		on conflict (id) do nothing
-	`, string(encodedSeeds)); err != nil {
+	if err := q.EnsureMatchUsers(ctx, encodedSeeds); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranks (user_id, mode, mmr, season_id)
-		select input.user_id, $2, $3, $4
-		from jsonb_to_recordset($1::jsonb)
-			as input(user_id uuid)
-		on conflict (user_id, mode, season_id) do nothing
-	`, string(encodedSeeds), modeDuel, initialMMR, seasonID); err != nil {
+	if err := q.EnsureMatchRanks(ctx, db.EnsureMatchRanksParams{Players: encodedSeeds, Mode: db.GdMatchMode(modeDuel), Mmr: int32(initialMMR), SeasonID: seasonID}); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into user_stats (user_id, games_played, wins)
-		select input.user_id, 0, 0
-		from jsonb_to_recordset($1::jsonb)
-			as input(user_id uuid)
-		on conflict (user_id) do nothing
-	`, string(encodedSeeds)); err != nil {
+	if err := q.EnsureMatchUserStats(ctx, encodedSeeds); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into ranked_stats (user_id, mode, season_id, games_played, wins)
-		select input.user_id, $2, $3, 0, 0
-		from jsonb_to_recordset($1::jsonb)
-			as input(user_id uuid)
-		on conflict (user_id, mode, season_id) do nothing
-	`, string(encodedSeeds), modeDuel, seasonID); err != nil {
-		return err
-	}
-	return nil
+	return q.EnsureMatchRankedStats(ctx, db.EnsureMatchRankedStatsParams{Players: encodedSeeds, Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID})
 }
 
 func recordMatchHistory(
 	ctx context.Context,
-	tx pgx.Tx,
-	matchID string,
+	q *db.Queries,
+	matchUUID pgtype.UUID,
 	snap contracts.MatchSnapshot,
 	compressedReplay []byte,
 	replayHash []byte,
 	replayUncompressedBytes int,
 ) error {
-	if matchID == "" {
-		matchID = snap.MatchID
-	}
-	if matchID == "" || len(snap.Players) == 0 {
+	if len(snap.Players) == 0 {
 		return nil
 	}
 	startedAt := snapshotStartedAt(snap)
 	endedAt := time.Now()
 	winner := snapshotWinner(snap)
-	privatePartyMatch := false
-	if err := tx.QueryRow(ctx, `
-		select exists (
-			select 1
-			from match_sessions
-			where match_id = $1
-			  and source_kind = 'party'
-		) or exists (
-			select 1
-			from parties
-			where active_match_id = $1
-			   or started_match_id = $1
-			   or last_match_id = $1
-		)
-	`, matchID).Scan(&privatePartyMatch); err != nil {
+	privatePartyMatch, err := matchBelongsToPartyTx(ctx, q, snap.MatchID)
+	if err != nil {
 		return err
 	}
 	ranked := snap.Mode == contracts.ModeDuel && !snap.Unranked && !privatePartyMatch
@@ -555,70 +391,47 @@ func recordMatchHistory(
 		sourceKind = "solo"
 	} else if privatePartyMatch {
 		sourceKind = "party"
-		var partyID string
-		if err := tx.QueryRow(ctx, `
-			select coalesce(source_party_id::text, '')
-			from match_sessions
-			where match_id = $1
-		`, matchID).Scan(&partyID); err != nil {
-			if !errors.Is(err, pgx.ErrNoRows) {
-				return err
-			}
-		} else if strings.TrimSpace(partyID) != "" {
+		partyID, err := q.GetMatchSourcePartyID(ctx, matchUUID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if strings.TrimSpace(partyID) != "" {
 			sourcePartyID = partyID
 		}
 		if sourcePartyID == nil {
-			if err := tx.QueryRow(ctx, `
-				select id
-				from parties
-				where active_match_id = $1
-				   or started_match_id = $1
-				   or last_match_id = $1
-				limit 1
-			`, matchID).Scan(&partyID); err != nil {
-				if !errors.Is(err, pgx.ErrNoRows) {
-					return err
-				}
-			} else {
-				sourcePartyID = partyID
+			foundPartyID, err := q.FindPartyIDByMatchID(ctx, matchUUID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if foundPartyID != "" {
+				sourcePartyID = foundPartyID
 			}
 		}
 	}
 	ruleset := string(contracts.NormalizeRuleset(snap.Config.Ruleset))
 	mapID := snap.Config.MapID
-	_ = tx.QueryRow(ctx, `select map_id::text from match_round_plans where match_id=$1 order by round_index limit 1`, matchID).Scan(&mapID)
-	if _, err := tx.Exec(ctx, `
-		insert into match_history(
-			match_id, mode, started_at, ended_at, winner_user_id,
-			ranked, source_kind, source_party_id, ruleset, map_id,
-			replay_zstd, replay_codec, replay_schema_version, replay_uncompressed_bytes,
-			replay_sha256, replay_expires_at, round_count
-		)
-		values($1,$2,$3,$4,nullif($5,'')::uuid,$6,$7,nullif($8,'')::uuid,nullif($9,'')::gd_ruleset,
-		       nullif($10,'')::uuid,$11,$12,$13,$14,$15,
-		       $4::timestamptz + make_interval(days => $16::integer),$17)
-		on conflict (match_id) do update set
-			mode = excluded.mode,
-			started_at = excluded.started_at,
-			ended_at = excluded.ended_at,
-			winner_user_id = excluded.winner_user_id,
-			ranked = excluded.ranked,
-			source_kind = excluded.source_kind,
-			source_party_id = excluded.source_party_id,
-			ruleset = excluded.ruleset,
-			map_id = excluded.map_id,
-			replay_json = null,
-			replay_zstd = excluded.replay_zstd,
-			replay_codec = excluded.replay_codec,
-			replay_schema_version = excluded.replay_schema_version,
-			replay_uncompressed_bytes = excluded.replay_uncompressed_bytes,
-			replay_sha256 = excluded.replay_sha256,
-			replay_expires_at = excluded.replay_expires_at,
-			round_count = excluded.round_count
-	`, matchID, string(snap.Mode), startedAt, endedAt, winner,
-		ranked, sourceKind, sourcePartyID, ruleset, mapID,
-		compressedReplay, replayCodecZstd, replaySchemaVersion, replayUncompressedBytes,
-		replayHash, replayRetentionDays, len(snap.RoundResults)); err != nil {
+	if planMapID, err := q.GetMatchRoundPlanMapID(ctx, matchUUID); err == nil && planMapID != "" {
+		mapID = planMapID
+	}
+	if err := q.UpsertMatchHistory(ctx, db.UpsertMatchHistoryParams{
+		MatchID:                 matchUUID,
+		Mode:                    db.GdMatchMode(snap.Mode),
+		StartedAt:               pgtype.Timestamptz{Time: startedAt, Valid: true},
+		EndedAt:                 pgtype.Timestamptz{Time: endedAt, Valid: true},
+		WinnerUserID:            winner,
+		Ranked:                  ranked,
+		SourceKind:              db.GdMatchSource(sourceKind),
+		SourcePartyID:           sourcePartyID,
+		Ruleset:                 ruleset,
+		MapID:                   mapID,
+		ReplayZstd:              compressedReplay,
+		ReplayCodec:             pgtype.Int2{Int16: replayCodecZstd, Valid: true},
+		ReplaySchemaVersion:     pgtype.Int2{Int16: replaySchemaVersion, Valid: true},
+		ReplayUncompressedBytes: pgtype.Int4{Int32: int32(replayUncompressedBytes), Valid: true},
+		ReplaySha256:            replayHash,
+		ReplayRetentionDays:     replayRetentionDays,
+		RoundCount:              int16(len(snap.RoundResults)),
+	}); err != nil {
 		return err
 	}
 	type matchPlayerRecord struct {
@@ -659,29 +472,11 @@ func recordMatchHistory(
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into match_players(
-			match_id, user_id, display_name, mmr, hp, rating_rd, total_score, ended_at
-		)
-		select
-			$1, input.user_id, input.display_name, input.mmr, input.hp,
-			input.rating_rd, input.total_score, $2
-		from jsonb_to_recordset($3::jsonb) as input(
-			user_id uuid,
-			display_name text,
-			mmr integer,
-			hp integer,
-			rating_rd double precision,
-			total_score integer
-		)
-		on conflict (match_id, user_id) do update set
-			display_name = excluded.display_name,
-			mmr = excluded.mmr,
-			hp = excluded.hp,
-			rating_rd = excluded.rating_rd,
-			total_score = excluded.total_score,
-			ended_at = excluded.ended_at
-	`, matchID, endedAt, string(encodedPlayers)); err != nil {
+	if err := q.UpsertMatchPlayers(ctx, db.UpsertMatchPlayersParams{
+		MatchID: matchUUID,
+		Players: encodedPlayers,
+		EndedAt: pgtype.Timestamptz{Time: endedAt, Valid: true},
+	}); err != nil {
 		return err
 	}
 	if snap.Mode == contracts.ModeSingleplayer && len(snap.RoundResults) == 5 && strings.TrimSpace(mapID) != "" {
@@ -689,17 +484,13 @@ func recordMatchHistory(
 		if contracts.NormalizeRuleset(snap.Config.Ruleset) == contracts.RulesetNMPZ {
 			rulesetCode = 1
 		}
-		if _, err := tx.Exec(ctx, `
-			insert into player_map_bests(user_id,map_id,ruleset,best_score,match_id,achieved_at)
-			select input.user_id,$2,$3,input.total_score,$1,$4
-			from jsonb_to_recordset($5::jsonb)
-				as input(user_id uuid, total_score integer)
-			on conflict(user_id,map_id,ruleset) do update
-			set best_score=excluded.best_score,
-			    match_id=excluded.match_id,
-			    achieved_at=excluded.achieved_at
-			where excluded.best_score>player_map_bests.best_score
-		`, matchID, mapID, rulesetCode, endedAt, string(encodedPlayers)); err != nil {
+		if err := q.UpsertPlayerMapBests(ctx, db.UpsertPlayerMapBestsParams{
+			MatchID:    matchUUID,
+			MapID:      chatUUID(mapID),
+			Ruleset:    int16(rulesetCode),
+			Players:    encodedPlayers,
+			AchievedAt: pgtype.Timestamptz{Time: endedAt, Valid: true},
+		}); err != nil {
 			return err
 		}
 	}
@@ -741,27 +532,10 @@ func recordMatchHistory(
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			insert into ranked_guess_events(
-				user_id, match_id, round_number, score, guess_ms, evidence, occurred_at
-			)
-			select
-				input.user_id, $1, input.round_number, input.score,
-				input.guess_ms, input.evidence, input.occurred_at
-			from jsonb_to_recordset($2::jsonb) as input(
-				user_id uuid,
-				round_number smallint,
-				score smallint,
-				guess_ms integer,
-				evidence real,
-				occurred_at timestamptz
-			)
-			on conflict (match_id, round_number, user_id) do update set
-				score = excluded.score,
-				guess_ms = excluded.guess_ms,
-				evidence = excluded.evidence,
-				occurred_at = excluded.occurred_at
-		`, matchID, string(encodedGuesses)); err != nil {
+		if err := q.UpsertRankedGuessEvents(ctx, db.UpsertRankedGuessEventsParams{
+			MatchID: matchUUID,
+			Guesses: encodedGuesses,
+		}); err != nil {
 			return err
 		}
 	}

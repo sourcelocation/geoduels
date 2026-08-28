@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"geoduels/pkg/auth"
-	"geoduels/pkg/persistence"
 )
 
 type supportTestStore struct {
-	persistence.Store
+	testRepositories
 	refUserID string
 }
 
@@ -23,7 +22,7 @@ func (s *supportTestStore) CreateDonationRef(userID string) (string, error) {
 
 func TestCreateSupportDonationRequiresConfiguredTestLinkInTestMode(t *testing.T) {
 	api := &api{
-		store:          &supportTestStore{},
+		accounts: &supportTestStore{}, sessions: &supportTestStore{}, profiles: &supportTestStore{}, preferenceStore: &supportTestStore{}, badges: &supportTestStore{}, leaderboardStore: &supportTestStore{}, matchStore: &supportTestStore{}, moderation: &supportTestStore{}, admin: &supportTestStore{}, content: &supportTestStore{}, seasons: &supportTestStore{}, gameplayMaps: &supportTestStore{}, runtimeStore: &supportTestStore{}, chatStore: &supportTestStore{}, parties: &supportTestStore{}, social: &supportTestStore{},
 		appAuthSecret:  []byte("01234567890123456789012345678901"),
 		accessTokenTTL: 15 * time.Minute,
 		stripeMode:     "test",
@@ -49,7 +48,7 @@ func TestCreateSupportDonationRequiresConfiguredTestLinkInTestMode(t *testing.T)
 func TestCreateSupportDonationUsesTestPaymentLinkInTestMode(t *testing.T) {
 	store := &supportTestStore{}
 	api := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
 		stripeMode:            "test",

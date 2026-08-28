@@ -20,7 +20,6 @@ import (
 	"geoduels/pkg/entityid"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchlaunch"
-	"geoduels/pkg/persistence"
 	"geoduels/pkg/sessionpolicy"
 )
 
@@ -30,7 +29,7 @@ func (a *api) me(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identity unavailable", http.StatusInternalServerError)
 		return
 	}
-	profile, err := a.store.GetProfile(claims.Sub)
+	profile, err := a.profiles.GetProfile(claims.Sub)
 	if err != nil {
 		http.Error(w, "profile unavailable", http.StatusInternalServerError)
 		return
@@ -70,7 +69,7 @@ func (a *api) updateSelectedBadge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	profile, err := a.store.UpdateSelectedBadge(claims.Sub, req.BadgeID)
+	profile, err := a.profiles.UpdateSelectedBadge(claims.Sub, req.BadgeID)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unavailable") {
 			http.Error(w, "badge unavailable", http.StatusBadRequest)
@@ -92,12 +91,10 @@ func (a *api) userNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(r.URL.Query().Get("filter"), "all") {
-		if store, ok := a.store.(interface {
-			ListNotificationInbox(string, int, int64) ([]persistence.UserNotification, error)
-		}); ok {
+		if a.notificationService != nil {
 			limit := queryLimit(r, 30)
 			beforeID, _ := strconv.ParseInt(r.URL.Query().Get("beforeId"), 10, 64)
-			notifications, err := store.ListNotificationInbox(claims.Sub, limit, beforeID)
+			notifications, err := a.notificationService.Inbox(r.Context(), claims.Sub, limit, beforeID)
 			if err != nil {
 				http.Error(w, "notifications unavailable", http.StatusInternalServerError)
 				return
@@ -107,7 +104,7 @@ func (a *api) userNotifications(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	notifications, err := a.store.ListUserNotifications(claims.Sub, 10)
+	notifications, err := a.notificationService.List(r.Context(), claims.Sub, 10)
 	if err != nil {
 		http.Error(w, "notifications unavailable", http.StatusInternalServerError)
 		return
@@ -122,12 +119,11 @@ func (a *api) markAllUserNotificationsRead(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	store, ok := a.store.(interface{ MarkAllUserNotificationsRead(string) error })
-	if !ok {
+	if a.notificationService == nil {
 		http.Error(w, "notifications unavailable", http.StatusNotImplemented)
 		return
 	}
-	if err := store.MarkAllUserNotificationsRead(claims.Sub); err != nil {
+	if err := a.notificationService.MarkAllRead(r.Context(), claims.Sub); err != nil {
 		http.Error(w, "failed to mark notifications", http.StatusInternalServerError)
 		return
 	}
@@ -145,7 +141,7 @@ func (a *api) markUserNotificationRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid notification id", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.MarkUserNotificationRead(claims.Sub, notificationID); err != nil {
+	if err := a.notificationService.MarkRead(r.Context(), claims.Sub, notificationID); err != nil {
 		http.Error(w, "failed to mark notification", http.StatusInternalServerError)
 		return
 	}
@@ -160,7 +156,7 @@ func (a *api) leaderboard(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = "duel"
 	}
-	settings, err := a.store.GetRankedSeasonSettings()
+	settings, err := a.seasons.GetRankedSeasonSettings()
 	if err != nil {
 		http.Error(w, "leaderboard unavailable", http.StatusInternalServerError)
 		return
@@ -195,7 +191,7 @@ func (a *api) leaderboard(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	entries, err := a.store.ListLeaderboard(mode, season, limit, offset)
+	entries, err := a.leaderboardService.List(r.Context(), mode, season, limit, offset)
 	if err != nil {
 		http.Error(w, "leaderboard unavailable", http.StatusInternalServerError)
 		return
@@ -204,7 +200,7 @@ func (a *api) leaderboard(w http.ResponseWriter, r *http.Request) {
 	selfRank := 0
 	totalPlayers := 0
 	if claims, ok := a.optionalAuthenticatedClaims(r); ok {
-		overview, err := a.store.GetLeaderboardOverview(claims.Sub, mode, season, 10)
+		overview, err := a.leaderboardService.Overview(r.Context(), claims.Sub, mode, season, 10)
 		if err != nil {
 			http.Error(w, "leaderboard unavailable", http.StatusInternalServerError)
 			return
@@ -212,7 +208,7 @@ func (a *api) leaderboard(w http.ResponseWriter, r *http.Request) {
 		selfRank = overview.SelfRank
 		totalPlayers = overview.TotalPlayers
 	} else {
-		overview, err := a.store.GetLeaderboardOverview("", mode, season, 10)
+		overview, err := a.leaderboardService.Overview(r.Context(), "", mode, season, 10)
 		if err != nil {
 			http.Error(w, "leaderboard unavailable", http.StatusInternalServerError)
 			return
@@ -383,7 +379,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 	}
 
 	if !authenticated {
-		if rec, ok, err := a.store.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+		if rec, ok, err := a.runtimeStore.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
 			return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 		}
 		return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
@@ -440,7 +436,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 		case matchlaunch.AssignmentPending:
 			if assigned.MatchID == targetMatchID && sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID) == contracts.ModeSingleplayer {
 				_ = a.coord.ClearAssignment(context.Background(), assigned)
-				_ = a.store.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
+				_ = a.runtimeStore.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 			}
 		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
 		}
@@ -451,7 +447,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 		a.attachReturnTarget(ctx, &resp, userID, authenticated, targetMatchID)
 		return resp, nil
 	}
-	if rec, ok, err := a.store.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+	if rec, ok, err := a.runtimeStore.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
 		return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 	}
 	return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
@@ -462,17 +458,15 @@ func (a *api) attachReturnTarget(ctx context.Context, resp *contracts.MatchSessi
 		return
 	}
 	var target *contracts.MatchReturnTarget
-	if repository, ok := a.store.(interface {
-		MatchSessionReturnTarget(context.Context, string) (*contracts.MatchReturnTarget, bool, error)
-	}); ok {
-		if persisted, found, err := repository.MatchSessionReturnTarget(ctx, matchID); err == nil && found {
+	if a.db != nil {
+		if persisted, found, err := a.db.MatchSessionReturnTarget(ctx, matchID); err == nil && found {
 			target = persisted
 		}
 	}
 	// Rows written before return targets existed retain party provenance. Keep
 	// those rows usable, but resolve the current party server-side.
 	if target == nil {
-		partyID, _, ok, err := a.store.MatchSessionSourceParty(ctx, matchID)
+		partyID, _, ok, err := a.runtimeStore.MatchSessionSourceParty(ctx, matchID)
 		if err == nil && ok {
 			target = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnParty, PartyID: partyID}
 		}
@@ -486,7 +480,7 @@ func (a *api) attachReturnTarget(ctx context.Context, resp *contracts.MatchSessi
 			resp.ReturnTarget = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnHome}
 			return
 		}
-		party, found, err := a.store.GetPartyByID(target.PartyID)
+		party, found, err := a.parties.GetPartyByID(target.PartyID)
 		if err != nil || !found || party.State == contracts.PartyClosed || party.State == contracts.PartyExpired {
 			resp.ReturnTarget = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnHome}
 			return
@@ -512,7 +506,7 @@ func (a *api) attachReturnTarget(ctx context.Context, resp *contracts.MatchSessi
 }
 
 func (a *api) getPublicFinalMatchSnapshot(matchID string) (*contracts.MatchSnapshot, bool, error) {
-	raw, ok, err := a.store.GetFinalMatchSnapshot(matchID)
+	raw, ok, err := a.matchStore.GetFinalMatchSnapshot(matchID)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -563,7 +557,7 @@ func (a *api) createMatchReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reportedUserID := strings.TrimSpace(req.ReportedUserID)
-	created, err := a.store.CreatePlayerReportSignal(persistence.CreatePlayerReportSignalParams{
+	created, err := a.moderation.CreatePlayerReportSignal(CreatePlayerReportSignalParams{
 		MatchID:        matchID,
 		ReporterUserID: claims.Sub,
 		ReportedUserID: reportedUserID,
@@ -683,12 +677,12 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_ = a.coord.ClearAssignment(context.Background(), assigned)
-			_ = a.store.RecordRuntimeMatch(r.Context(), assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
+			_ = a.runtimeStore.RecordRuntimeMatch(r.Context(), assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
 			_ = a.coord.ClearAssignment(context.Background(), assigned)
 		}
 	}
-	profile, err := a.store.GetProfile(userID)
+	profile, err := a.profiles.GetProfile(userID)
 	if err != nil {
 		http.Error(w, "profile unavailable", http.StatusInternalServerError)
 		return
@@ -701,7 +695,7 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 		requestedMapID = strings.TrimSpace(requestedConfig.MapKey)
 	}
 	if requestedMapID == "" {
-		resolvedMapID, err := a.store.ResolveGameplayMapID(contracts.ModeSingleplayer, requestedConfig.Ruleset, "")
+		resolvedMapID, err := a.gameplayMaps.ResolveGameplayMapID(contracts.ModeSingleplayer, requestedConfig.Ruleset, "")
 		if err != nil {
 			http.Error(w, "singleplayer unavailable", http.StatusInternalServerError)
 			return

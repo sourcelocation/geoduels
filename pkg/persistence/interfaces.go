@@ -40,8 +40,8 @@ type ProfileRepository interface {
 }
 
 type PreferenceRepository interface {
-	GetUserPreferences(userID string) (UserPreferences, error)
-	UpdateUserPreferences(userID string, schemaVersion int, preferences json.RawMessage, expectedRevision int64) (UserPreferences, error)
+	GetUserPreferences(ctx context.Context, userID string) (UserPreferences, error)
+	UpdateUserPreferences(ctx context.Context, userID string, schemaVersion int, preferences json.RawMessage, expectedRevision int64) (UserPreferences, error)
 }
 
 type BadgeRepository interface {
@@ -56,8 +56,8 @@ type BadgeRepository interface {
 }
 
 type LeaderboardRepository interface {
-	ListLeaderboard(mode, seasonID string, limit, offset int) ([]LeaderboardEntry, error)
-	GetLeaderboardOverview(userID, mode, seasonID string, limit int) (LeaderboardOverview, error)
+	ListLeaderboard(ctx context.Context, mode, seasonID string, limit, offset int) ([]LeaderboardEntry, error)
+	GetLeaderboardOverview(ctx context.Context, userID, mode, seasonID string, limit int) (LeaderboardOverview, error)
 }
 
 type MatchRepository interface {
@@ -130,7 +130,9 @@ type GameplayMapRepository interface {
 
 type NotificationRepository interface {
 	ListUserNotifications(userID string, limit int) ([]UserNotification, error)
+	ListNotificationInbox(userID string, limit int, beforeID int64) ([]UserNotification, error)
 	MarkUserNotificationRead(userID string, notificationID int64) error
+	MarkAllUserNotificationsRead(userID string) error
 	ClaimPendingNotification(notificationType string, now time.Time) (NotificationOutboxItem, bool, error)
 	MarkNotificationSent(id int64) error
 	MarkNotificationFailed(id int64, nextAttemptAt time.Time, lastError string) error
@@ -195,23 +197,4 @@ type PartyRepository interface {
 
 type PartyConfigRepository interface {
 	SetPartyConfig(lobbyID string, config contracts.MatchConfig) (contracts.PartySnapshot, error)
-}
-
-type Store interface {
-	AccountRepository
-	SessionRepository
-	ProfileRepository
-	BadgeRepository
-	LeaderboardRepository
-	MatchRepository
-	ModerationRepository
-	AdminRepository
-	ContentRepository
-	SeasonRepository
-	GameplayMapRepository
-	NotificationRepository
-	RuntimeRepository
-	ChatRepository
-	PartyRepository
-	Close()
 }

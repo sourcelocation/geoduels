@@ -9,11 +9,13 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *pgStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFound) error {
+func (s *DB) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFound) error {
 	if found == nil || strings.TrimSpace(found.MatchID) == "" {
 		return errors.New("match required")
 	}
@@ -25,23 +27,38 @@ func (s *pgStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFo
 		return err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `select round_index,lat,lng,coalesce(country,''),pano_id,heading,pitch,map_id::text from match_round_plans where match_id=$1 order by round_index`, found.MatchID)
+	q := db.New(tx)
+	rows, err := q.ListMatchRoundPlans(ctx, mustMapUUID(found.MatchID))
 	if err != nil {
 		return err
 	}
-	for rows.Next() {
+	for _, row := range rows {
 		var p contracts.PlannedRound
-		var mapID string
-		if err := rows.Scan(&p.RoundIndex, &p.Location.Lat, &p.Location.Lng, &p.Location.Country, &p.Location.PanoID, &p.Location.Heading, &p.Location.Pitch, &mapID); err != nil {
-			rows.Close()
-			return err
+		mapID := row.MapID
+		p.RoundIndex = int(row.RoundIndex)
+		p.Location.Lat, p.Location.Lng, p.Location.Country = row.Lat, row.Lng, row.Country
+		if row.PanoID.Valid {
+			v := row.PanoID.String
+			p.Location.PanoID = &v
+		}
+		if row.Heading.Valid {
+			v := row.Heading.Float64
+			p.Location.Heading = &v
+		}
+		if row.Pitch.Valid {
+			v := row.Pitch.Float64
+			p.Location.Pitch = &v
 		}
 		found.PlannedRounds = append(found.PlannedRounds, p)
 		found.ResolvedMap.MapID = mapID
 	}
-	rows.Close()
 	if len(found.PlannedRounds) > 0 {
-		_ = tx.QueryRow(ctx, `select display_name from maps where id=$1`, found.ResolvedMap.MapID).Scan(&found.ResolvedMap.DisplayName)
+		id, err := profileUUID(found.ResolvedMap.MapID)
+		if err == nil {
+			if name, nameErr := q.MapDisplayName(ctx, id); nameErr == nil {
+				found.ResolvedMap.DisplayName = name
+			}
+		}
 		found.Config.MapID = found.ResolvedMap.MapID
 		found.Config.MapName = found.ResolvedMap.DisplayName
 		return tx.Commit(ctx)
@@ -62,7 +79,15 @@ func (s *pgStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFo
 	mapID = canonicalMapID
 	var owner, visibility, status, displayName string
 	var count int
-	err = tx.QueryRow(ctx, `select coalesce(owner_user_id::text,''),visibility,status,display_name,location_count from maps where id=$1 and archived_at is null for share`, mapID).Scan(&owner, &visibility, &status, &displayName, &count)
+	mapUUID, err := profileUUID(mapID)
+	if err != nil {
+		return fmt.Errorf("selected map unavailable: %w", err)
+	}
+	selectedMap, err := q.SelectedMap(ctx, mapUUID)
+	if err == nil {
+		owner, _ = selectedMap.Coalesce.(string)
+		visibility, status, displayName, count = string(selectedMap.Visibility), string(selectedMap.Status), selectedMap.DisplayName, int(selectedMap.LocationCount)
+	}
 	if err != nil {
 		return fmt.Errorf("selected map unavailable: %w", err)
 	}
@@ -88,7 +113,7 @@ func (s *pgStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFo
 		return errors.New("selected map has too few locations")
 	}
 	for i, row := range selected {
-		if _, err := tx.Exec(ctx, `insert into match_round_plans(match_id,round_index,map_id,lat,lng,country,pano_id,heading,pitch) values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(match_id,round_index) do nothing`, found.MatchID, i, mapID, row.Lat, row.Lng, row.Country, row.PanoID, row.Heading, row.Pitch); err != nil {
+		if err := q.InsertMatchRoundPlan(ctx, db.InsertMatchRoundPlanParams{MatchID: mustMapUUID(found.MatchID), RoundIndex: int32(i), MapID: mapUUID, Lat: row.Lat, Lng: row.Lng, Country: pgtype.Text{String: row.Country, Valid: true}, PanoID: pgtype.Text{String: valueOrEmpty(row.PanoID), Valid: row.PanoID != nil}, Heading: pgtype.Float8{Float64: valueOrZero(row.Heading), Valid: row.Heading != nil}, Pitch: pgtype.Float8{Float64: valueOrZero(row.Pitch), Valid: row.Pitch != nil}}); err != nil {
 			return err
 		}
 		found.PlannedRounds = append(found.PlannedRounds, contracts.PlannedRound{RoundIndex: i, Location: row.LocationPoint})
@@ -119,22 +144,54 @@ type plannedLocation struct {
 	contracts.LocationPoint
 }
 
+func valueOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+func valueOrZero(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
 func selectPlanRows(ctx context.Context, tx pgx.Tx, mapID string, pivot int32, limit int) ([]plannedLocation, error) {
+	q := db.New(tx)
+	uuid, err := profileUUID(mapID)
+	if err != nil {
+		return nil, err
+	}
 	query := func(op string, n int) ([]plannedLocation, error) {
-		rows, err := tx.Query(ctx, `select lat_e7::float8/10000000.0,lng_e7::float8/10000000.0,coalesce(country,''),pano_id,heading_cdeg::float8/100.0,pitch_cdeg::float8/100.0 from locations where map_storage_id=(select storage_id from maps where id=$1) and rand_key_i `+op+` $2 order by rand_key_i asc limit $3`, mapID, pivot, n)
+		var rows []db.SelectPlanRowsGERow
+		var err error
+		params := db.SelectPlanRowsGEParams{ID: uuid, RandKeyI: pivot, Limit: int32(n)}
+		if op == ">=" {
+			rows, err = q.SelectPlanRowsGE(ctx, params)
+		} else {
+			var r []db.SelectPlanRowsLTRow
+			r, err = q.SelectPlanRowsLT(ctx, db.SelectPlanRowsLTParams{ID: uuid, RandKeyI: params.RandKeyI, Limit: params.Limit})
+			for _, x := range r {
+				rows = append(rows, db.SelectPlanRowsGERow{Column1: x.Column1, Column2: x.Column2, Country: x.Country, PanoID: x.PanoID, Column5: x.Column5, Column6: x.Column6})
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
-		defer rows.Close()
 		out := []plannedLocation{}
-		for rows.Next() {
+		for _, row := range rows {
 			var p plannedLocation
-			if err := rows.Scan(&p.Lat, &p.Lng, &p.Country, &p.PanoID, &p.Heading, &p.Pitch); err != nil {
-				return nil, err
+			p.Lat, p.Lng, p.Country = float64(row.Column1)/1e7, float64(row.Column2)/1e7, row.Country
+			if row.PanoID.Valid {
+				panoID := row.PanoID.String
+				p.PanoID = &panoID
 			}
+			heading, pitch := float64(row.Column5)/100, float64(row.Column6)/100
+			p.Heading, p.Pitch = &heading, &pitch
 			out = append(out, p)
 		}
-		return out, rows.Err()
+		return out, nil
 	}
 	out, err := query(">=", limit)
 	if err != nil {
@@ -155,7 +212,11 @@ func deterministicPivot(matchID, mapID string) int32 {
 }
 
 func incrementMapPlayStats(ctx context.Context, tx pgx.Tx, mapID string, players []string) error {
-	if _, err := tx.Exec(ctx, `update maps set play_count=play_count+1, updated_at=now() where id=$1`, mapID); err != nil {
+	id, err := profileUUID(mapID)
+	if err != nil {
+		return err
+	}
+	if err := db.New(tx).IncrementMapPlay(ctx, id); err != nil {
 		return err
 	}
 	for _, userID := range players {

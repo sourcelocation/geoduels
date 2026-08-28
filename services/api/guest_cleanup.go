@@ -34,7 +34,7 @@ func (a *api) runGuestAccountCleanupLoop() {
 }
 
 func (a *api) cleanupGuestAccounts() {
-	if a.store == nil || a.redis == nil || a.guestAccountTTL <= 0 || a.guestCleanupBatchSize <= 0 {
+	if a.accounts == nil || a.redis == nil || a.guestAccountTTL <= 0 || a.guestCleanupBatchSize <= 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -56,7 +56,7 @@ func (a *api) cleanupGuestAccounts() {
 
 	total := 0
 	for {
-		deleted, err := a.store.DeleteGuestAccountsOlderThan(a.guestAccountTTL, a.guestCleanupBatchSize)
+		deleted, err := a.accounts.DeleteGuestAccountsOlderThan(a.guestAccountTTL, a.guestCleanupBatchSize)
 		if err != nil {
 			observability.Log("warn", "guest cleanup failed", map[string]any{"deleted": total, "error": err.Error()})
 			return

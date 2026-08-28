@@ -14,15 +14,39 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"geoduels/pkg/auth"
+	"geoduels/pkg/authsession"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
+	"geoduels/pkg/leaderboard"
+	"geoduels/pkg/notifications"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
+	preferencesdomain "geoduels/pkg/preferences"
 )
 
 type api struct {
 	matchCoordinator        string
-	store                   persistence.Store
+	db                      *persistence.DB
+	accounts                persistence.AccountRepository
+	sessions                persistence.SessionRepository
+	profiles                persistence.ProfileRepository
+	preferenceStore         persistence.PreferenceRepository
+	badges                  persistence.BadgeRepository
+	leaderboardStore        persistence.LeaderboardRepository
+	matchStore              persistence.MatchRepository
+	moderation              persistence.ModerationRepository
+	admin                   persistence.AdminRepository
+	content                 persistence.ContentRepository
+	seasons                 persistence.SeasonRepository
+	gameplayMaps            persistence.GameplayMapRepository
+	runtimeStore            persistence.RuntimeRepository
+	chatStore               persistence.ChatRepository
+	parties                 persistence.PartyRepository
+	social                  persistence.SocialRepository
+	preferences             *preferencesdomain.Service
+	leaderboardService      *leaderboard.Service
+	notificationService     *notifications.Service
+	authSessionService      *authsession.Service
 	coord                   *coordinator.Store
 	redis                   *redis.Client
 	httpClient              *http.Client
@@ -133,7 +157,27 @@ func newAPI() (*api, error) {
 	}
 	instance := &api{
 		matchCoordinator:        getenv("MATCH_COORDINATOR_URL", getenv("QUEUE_COORDINATOR_URL", "http://localhost:8090")),
-		store:                   store,
+		db:                      store,
+		accounts:                store,
+		sessions:                store,
+		profiles:                store,
+		preferenceStore:         store,
+		badges:                  store,
+		leaderboardStore:        store,
+		matchStore:              store,
+		moderation:              store,
+		admin:                   store,
+		content:                 store,
+		seasons:                 store,
+		gameplayMaps:            store,
+		runtimeStore:            store,
+		chatStore:               store,
+		parties:                 store,
+		social:                  store,
+		preferences:             newPreferencesService(store),
+		leaderboardService:      newLeaderboardService(store),
+		notificationService:     notifications.NewService(store),
+		authSessionService:      authsession.NewService(store),
 		coord:                   coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
 		redis:                   rdb,
 		httpClient:              &http.Client{Timeout: 3 * time.Second},

@@ -3,173 +3,121 @@ package persistence
 import (
 	"context"
 	"errors"
-	"strings"
-	"time"
-
-	"github.com/jackc/pgx/v5"
-
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
+	db "geoduels/pkg/persistence/sqlc/db"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"strings"
+	"time"
 )
 
-func (s *pgStore) RecordChatMessage(conversationID, scopeKind, scopeID string, message ChatMessage) error {
-	conversationID = strings.TrimSpace(conversationID)
-	scopeKind = strings.TrimSpace(scopeKind)
-	scopeID = strings.TrimSpace(scopeID)
-	if conversationID == "" || scopeKind == "" || scopeID == "" {
+// Team values are written by the generated query using nullif($10, '')::gd_team_id.
+
+func chatUUID(s string) pgtype.UUID { var u pgtype.UUID; _ = u.Scan(s); return u }
+
+func chatUUIDErr(s string) (pgtype.UUID, error) {
+	var u pgtype.UUID
+	if err := u.Scan(s); err != nil {
+		return pgtype.UUID{}, err
+	}
+	if !u.Valid {
+		return pgtype.UUID{}, pgx.ErrNoRows
+	}
+	return u, nil
+}
+func chatText(s string) pgtype.Text { return pgtype.Text{String: s, Valid: s != ""} }
+func chatStr(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	return v.(string)
+}
+func (s *DB) RecordChatMessage(cid, scope, scopeID string, m ChatMessage) error {
+	cid, scope, scopeID = strings.TrimSpace(cid), strings.TrimSpace(scope), strings.TrimSpace(scopeID)
+	if cid == "" || scope == "" || scopeID == "" {
 		return errors.New("conversation scope required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	createdAt := message.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = time.Now()
+	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
+	defer c()
+	t := m.CreatedAt
+	if t.IsZero() {
+		t = time.Now()
 	}
-	return s.recordChatMessage(ctx, conversationID, scopeKind, scopeID, message, createdAt)
-}
-
-func (s *pgStore) recordChatMessage(ctx context.Context, conversationID, scopeKind, scopeID string, message ChatMessage, createdAt time.Time) error {
-	body := nullable(message.Body)
-	emote := nullable(string(message.Emote))
-	// team_match_id is the authorization context for team-only messages. It
-	// must remain null for public messages, even when the conversation itself
-	// is a match conversation.
-	teamMatchID := ""
-	teamID := ""
-	if message.Audience == contracts.ChatAudienceTeam {
-		teamMatchID = message.MatchID
-		teamID = message.TeamID
+	sid := entityid.Derive("conversation", cid)
+	if e := s.db.EnsureConversation(ctx, db.EnsureConversationParams{ID: chatUUID(sid), Column2: db.GdChatScope(scope), Column3: chatUUID(scopeID)}); e != nil {
+		return e
 	}
-	storageConversationID := entityid.Derive("conversation", conversationID)
-	_, err := s.pool.Exec(ctx, `
-		insert into chat_conversations (id, scope_kind, scope_id)
-		values ($1, $2, $3::uuid)
-		on conflict (id) do nothing
-	`, storageConversationID, scopeKind, scopeID)
-	if err != nil {
-		return err
+	match, team := "", ""
+	if m.Audience == contracts.ChatAudienceTeam {
+		match, team = m.MatchID, m.TeamID
 	}
-	_, err = s.pool.Exec(ctx, `
-		insert into chat_messages (
-			id, conversation_id, team_match_id, sender_user_id, sender_display_name, kind, body, emote, audience, team_id, created_at
-		)
-		values ($1, $2, nullif($3, '')::uuid, $4, $5, $6, $7, $8, $9, nullif($10, '')::gd_team_id, $11)
-		on conflict (id) do nothing
-	`, message.ID, storageConversationID, teamMatchID, message.SenderUserID, message.SenderDisplayName, string(message.Kind), body, emote, string(message.Audience), teamID, createdAt)
-	return err
+	return s.db.InsertMessage(ctx, db.InsertMessageParams{ID: chatUUID(m.ID), ConversationID: chatUUID(sid), Column3: match, SenderUserID: chatUUID(m.SenderUserID), SenderDisplayName: m.SenderDisplayName, Column6: db.GdChatKind(m.Kind), Body: chatText(m.Body), Emote: chatText(string(m.Emote)), Column9: db.GdChatAudience(m.Audience), Column10: team, CreatedAt: pgtype.Timestamptz{Time: t, Valid: true}})
 }
-
-func (s *pgStore) ListChatMessages(conversationID string, limit int) ([]ChatMessage, error) {
-	return s.listChatMessages(conversationID, "", limit)
+func (s *DB) ListChatMessages(id string, n int) ([]ChatMessage, error) {
+	return s.listChatMessages(id, "", n)
 }
-
-func (s *pgStore) ListChatMessagesForUser(conversationID, userID string, limit int) ([]ChatMessage, error) {
-	return s.listChatMessages(conversationID, strings.TrimSpace(userID), limit)
+func (s *DB) ListChatMessagesForUser(id, u string, n int) ([]ChatMessage, error) {
+	return s.listChatMessages(id, strings.TrimSpace(u), n)
 }
-
-func (s *pgStore) listChatMessages(conversationID, userID string, limit int) ([]ChatMessage, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
+func (s *DB) listChatMessages(id, u string, n int) ([]ChatMessage, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
 		return nil, nil
 	}
-	if limit <= 0 || limit > 500 {
-		limit = 200
+	if n <= 0 || n > 500 {
+		n = 200
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	rows, err := s.pool.Query(ctx, `
-		select m.id, c.scope_kind || ':' || c.scope_id::text, coalesce(m.team_match_id::text, ''), m.sender_user_id, m.sender_display_name, m.kind, coalesce(m.body, ''), coalesce(m.emote, ''), m.audience, coalesce(m.team_id::text, ''), m.created_at
-		from chat_messages m
-		join chat_conversations c on c.id=m.conversation_id
-		where m.conversation_id = $1
-		  and ($2 = '' or m.audience = 'all' or exists (
-		    select 1 from match_participants mp
-		    where mp.match_id = m.team_match_id and mp.user_id = nullif($2, '')::uuid and mp.team_id::text = m.team_id::text
-		  ))
-		order by created_at asc
-		limit $3
-	`, entityid.Derive("conversation", conversationID), userID, limit)
-	if err != nil {
-		return nil, err
+	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
+	defer c()
+	rs, e := s.db.ListMessages(ctx, db.ListMessagesParams{ConversationID: chatUUID(entityid.Derive("conversation", id)), Column2: u, Limit: int32(n)})
+	if e != nil {
+		return nil, e
 	}
-	defer rows.Close()
-	messages := []ChatMessage{}
-	for rows.Next() {
-		var message ChatMessage
-		var kind string
-		var emote string
-		var audience string
-		if err := rows.Scan(&message.ID, &message.ConversationID, &message.MatchID, &message.SenderUserID, &message.SenderDisplayName, &kind, &message.Body, &emote, &audience, &message.TeamID, &message.CreatedAt); err != nil {
-			return nil, err
-		}
-		message.Kind = contracts.ChatMessageKind(kind)
-		message.Emote = contracts.ChatEmote(emote)
-		message.Audience = contracts.ChatAudience(audience)
-		messages = append(messages, message)
+	out := make([]ChatMessage, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, ChatMessage{ID: r.ID.String(), ConversationID: chatStr(r.ConversationID), MatchID: chatStr(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: contracts.ChatMessageKind(r.Kind), Body: r.Body, Emote: contracts.ChatEmote(r.Emote), Audience: contracts.ChatAudience(r.Audience), TeamID: chatStr(r.TeamID), CreatedAt: r.CreatedAt.Time})
 	}
-	return messages, rows.Err()
+	return out, nil
 }
-
-func (s *pgStore) ActivePartyChatTeam(partyID, userID string) (string, string, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	var matchID, teamID string
-	err := s.pool.QueryRow(ctx, `
-		select ms.match_id::text, coalesce(mp.team_id::text, '')
-		from parties p
-		join match_sessions ms on ms.match_id = coalesce(p.active_match_id, p.started_match_id)
-		join match_participants mp on mp.match_id = ms.match_id and mp.user_id = $2
-		where p.id = $1 and ms.mode = 'team_duel' and ms.state = 'live'
-	`, partyID, userID).Scan(&matchID, &teamID)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (s *DB) ActivePartyChatTeam(p, u string) (string, string, bool, error) {
+	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
+	defer c()
+	r, e := s.db.ActivePartyChatTeam(ctx, db.ActivePartyChatTeamParams{ID: chatUUID(p), UserID: chatUUID(u)})
+	if errors.Is(e, pgx.ErrNoRows) {
 		return "", "", false, nil
 	}
-	if err != nil {
-		return "", "", false, err
+	if e != nil {
+		return "", "", false, e
 	}
-	return matchID, teamID, teamID != "", nil
+	t := chatStr(r.Coalesce)
+	return r.MsMatchID, t, t != "", nil
 }
-
-func (s *pgStore) ChatTeamForMatch(matchID, userID string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	var teamID string
-	err := s.pool.QueryRow(ctx, `select coalesce(team_id::text, '') from match_participants where match_id = $1 and user_id = $2`, matchID, userID).Scan(&teamID)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (s *DB) ChatTeamForMatch(m, u string) (string, bool, error) {
+	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
+	defer c()
+	v, e := s.db.ChatTeamForMatch(ctx, db.ChatTeamForMatchParams{MatchID: chatUUID(m), UserID: chatUUID(u)})
+	if errors.Is(e, pgx.ErrNoRows) {
 		return "", false, nil
 	}
-	if err != nil {
-		return "", false, err
+	if e != nil {
+		return "", false, e
 	}
-	return teamID, teamID != "", nil
+	t := chatStr(v)
+	return t, t != "", nil
 }
-
-func (s *pgStore) GetActiveChatRestriction(userID string) (ChatRestriction, bool, error) {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
+func (s *DB) GetActiveChatRestriction(u string) (ChatRestriction, bool, error) {
+	if strings.TrimSpace(u) == "" {
 		return ChatRestriction{}, false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	var restriction ChatRestriction
-	err := s.pool.QueryRow(ctx, `
-		select
-			case when banned_at is not null and (ban_expires_at is null or ban_expires_at > now())
-				then case when ban_expires_at is null then 'permanent_ban' else 'temporary_ban' end else 'chat_mute' end,
-			case when banned_at is not null and (ban_expires_at is null or ban_expires_at > now()) then 'ban' else 'chat_mute' end,
-			case when banned_at is not null and (ban_expires_at is null or ban_expires_at > now()) then coalesce(ban_reason, '') else coalesce(chat_mute_reason, '') end,
-			coalesce(case when banned_at is not null and (ban_expires_at is null or ban_expires_at > now()) then ban_expires_at else chat_mute_expires_at end, '0001-01-01 00:00:00+00'::timestamptz)
-		from users
-		where id = $1 and (
-			(banned_at is not null and (ban_expires_at is null or ban_expires_at > now()))
-			or (chat_muted_at is not null and (chat_mute_expires_at is null or chat_mute_expires_at > now()))
-		)
-	`, userID).Scan(&restriction.ActionType, &restriction.ReasonCode, &restriction.ReasonNote, &restriction.EndsAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	ctx, c := context.WithTimeout(context.Background(), 3*time.Second)
+	defer c()
+	r, e := s.db.ActiveRestriction(ctx, chatUUID(u))
+	if errors.Is(e, pgx.ErrNoRows) {
 		return ChatRestriction{}, false, nil
 	}
-	if err != nil {
-		return ChatRestriction{}, false, err
+	if e != nil {
+		return ChatRestriction{}, false, e
 	}
-	return restriction, true, nil
+	return ChatRestriction{ActionType: r.ActionType, ReasonCode: r.ReasonCode, ReasonNote: chatStr(r.ReasonNote), EndsAt: r.EndsAt.(pgtype.Timestamptz).Time}, true, nil
 }

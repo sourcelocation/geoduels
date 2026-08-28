@@ -12,10 +12,17 @@ import (
 	"github.com/gorilla/mux"
 
 	"geoduels/pkg/auth"
+	"geoduels/pkg/authsession"
 	"geoduels/pkg/contentfilter"
 	"geoduels/pkg/contracts"
-	"geoduels/pkg/persistence"
 )
+
+func (a *api) sessionService() *authsession.Service {
+	if a.authSessionService != nil {
+		return a.authSessionService
+	}
+	return authsession.NewService(a.sessions)
+}
 
 var errMissingRefreshToken = errors.New("missing refresh token")
 var errUnavailableRefreshSession = errors.New("session unavailable")
@@ -33,7 +40,7 @@ func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {
+	if banned, err := a.moderation.IsSignupIPBanned(a.clientIP(r)); err != nil {
 		http.Error(w, "signup unavailable (101)", http.StatusInternalServerError)
 		return
 	} else if banned {
@@ -55,7 +62,7 @@ func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "verification unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	identity, err := a.store.CreateGuestIdentity()
+	identity, err := a.accounts.CreateGuestIdentity()
 	if err != nil {
 		http.Error(w, "persist guest failed", http.StatusInternalServerError)
 		return
@@ -105,15 +112,15 @@ func (a *api) updateNickname(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := a.store.SetNickname(claims.Sub, nick); err != nil {
-		if errors.Is(err, persistence.ErrNicknameTaken) {
+	if err := a.accounts.SetNickname(claims.Sub, nick); err != nil {
+		if errors.Is(err, ErrNicknameTaken) {
 			http.Error(w, "nickname already taken", http.StatusConflict)
 			return
 		}
 		http.Error(w, "failed to update nickname", http.StatusInternalServerError)
 		return
 	}
-	updated, err := a.store.GetIdentity(claims.Sub)
+	updated, err := a.accounts.GetIdentity(claims.Sub)
 	if err != nil {
 		http.Error(w, "identity not found", http.StatusUnauthorized)
 		return
@@ -133,11 +140,11 @@ func (a *api) unlinkAuthProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := strings.ToLower(strings.TrimSpace(mux.Vars(r)["provider"]))
-	if provider != persistence.IdentityProviderGoogle && provider != persistence.IdentityProviderDiscord {
+	if provider != IdentityProviderGoogle && provider != IdentityProviderDiscord {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return
 	}
-	identity, err := a.store.UnlinkProviderIdentity(claims.Sub, provider)
+	identity, err := a.accounts.UnlinkProviderIdentity(claims.Sub, provider)
 	if err != nil {
 		msg := strings.ToLower(strings.TrimSpace(err.Error()))
 		switch {
@@ -175,7 +182,7 @@ func (a *api) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "confirmation required", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.DeleteAccount(claims.Sub); err != nil {
+	if err := a.accounts.DeleteAccount(claims.Sub); err != nil {
 		http.Error(w, "failed to delete account", http.StatusInternalServerError)
 		return
 	}
@@ -186,9 +193,9 @@ func (a *api) deleteAccount(w http.ResponseWriter, r *http.Request) {
 func (a *api) logout(w http.ResponseWriter, r *http.Request) {
 	sessionID, userID := a.sessionIdentity(r)
 	if sessionID != "" {
-		_ = a.store.RevokeAuthSession(sessionID)
+		_ = a.sessionService().Revoke(r.Context(), sessionID)
 	} else if userID != "" {
-		_ = a.store.RevokeAuthSessionsForUser(userID)
+		_ = a.sessionService().RevokeAll(r.Context(), userID)
 	}
 	a.clearRefreshCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
@@ -200,7 +207,7 @@ func (a *api) logoutAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if err := a.store.RevokeAuthSessionsForUser(claims.Sub); err != nil {
+	if err := a.sessionService().RevokeAll(r.Context(), claims.Sub); err != nil {
 		http.Error(w, "logout failed", http.StatusInternalServerError)
 		return
 	}
@@ -233,7 +240,7 @@ func (a *api) sessionIdentity(r *http.Request) (string, string) {
 		return claims.SessionID, claims.Sub
 	}
 	for _, refreshToken := range a.readRefreshCookies(r) {
-		rec, ok, err := a.store.GetAuthSessionByRefreshToken(auth.RefreshTokenHash(refreshToken))
+		rec, ok, err := a.sessionService().Get(r.Context(), auth.RefreshTokenHash(refreshToken))
 		if err == nil && ok {
 			return rec.ID, rec.UserID
 		}
@@ -241,7 +248,7 @@ func (a *api) sessionIdentity(r *http.Request) (string, string) {
 	return "", ""
 }
 
-func (a *api) writeSessionResponse(w http.ResponseWriter, r *http.Request, identity persistence.Identity) error {
+func (a *api) writeSessionResponse(w http.ResponseWriter, r *http.Request, identity Identity) error {
 	refreshToken, sessionRecord, err := a.createSession(identity.Sub, r)
 	if err != nil {
 		return err
@@ -268,7 +275,7 @@ func (a *api) writeSessionFromCookie(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return fmt.Errorf("read refresh session: %w", err)
 	}
-	identity, err := a.store.GetIdentity(rec.UserID)
+	identity, err := a.accounts.GetIdentity(rec.UserID)
 	if err != nil {
 		return fmt.Errorf("load identity for user %s: %w", rec.UserID, err)
 	}
@@ -279,22 +286,22 @@ func (a *api) writeSessionFromCookie(w http.ResponseWriter, r *http.Request) err
 	return json.NewEncoder(w).Encode(payload)
 }
 
-func (a *api) authSessionFromCookies(r *http.Request) (persistence.RefreshTokenRecord, error) {
+func (a *api) authSessionFromCookies(r *http.Request) (RefreshTokenRecord, error) {
 	refreshTokens := a.readRefreshCookies(r)
 	if len(refreshTokens) == 0 {
-		return persistence.RefreshTokenRecord{}, errMissingRefreshToken
+		return RefreshTokenRecord{}, errMissingRefreshToken
 	}
 	for _, refreshToken := range refreshTokens {
-		candidate, ok, err := a.store.GetAuthSessionByRefreshToken(auth.RefreshTokenHash(refreshToken))
+		candidate, ok, err := a.sessionService().Get(r.Context(), auth.RefreshTokenHash(refreshToken))
 		if err != nil {
-			return persistence.RefreshTokenRecord{}, err
+			return RefreshTokenRecord{}, err
 		}
 		if !ok || candidate.RevokedAt != nil || time.Now().After(candidate.ExpiresAt) {
 			continue
 		}
 		return candidate, nil
 	}
-	return persistence.RefreshTokenRecord{}, errUnavailableRefreshSession
+	return RefreshTokenRecord{}, errUnavailableRefreshSession
 }
 
 func (a *api) rotateSessionFromCookie(r *http.Request) (contracts.AuthSessionPayload, string, error) {
@@ -307,14 +314,14 @@ func (a *api) rotateSessionFromCookie(r *http.Request) (contracts.AuthSessionPay
 	if err != nil {
 		return contracts.AuthSessionPayload{}, "", err
 	}
-	rotated, ok, err := a.store.RotateAuthSession(rec.ID, currentHash, nextHash, time.Now().Add(a.refreshTokenTTL), time.Now())
+	rotated, ok, err := a.sessionService().Rotate(r.Context(), rec.ID, currentHash, nextHash, time.Now().Add(a.refreshTokenTTL), time.Now())
 	if err != nil {
 		return contracts.AuthSessionPayload{}, "", err
 	}
 	if !ok {
 		return contracts.AuthSessionPayload{}, "", errors.New("session rotation failed")
 	}
-	identity, err := a.store.GetIdentity(rotated.UserID)
+	identity, err := a.accounts.GetIdentity(rotated.UserID)
 	if err != nil {
 		return contracts.AuthSessionPayload{}, "", err
 	}
@@ -325,28 +332,28 @@ func (a *api) rotateSessionFromCookie(r *http.Request) (contracts.AuthSessionPay
 	return payload, nextRefreshToken, nil
 }
 
-func (a *api) createSession(userID string, r *http.Request) (string, persistence.RefreshTokenRecord, error) {
+func (a *api) createSession(userID string, r *http.Request) (string, RefreshTokenRecord, error) {
 	refreshToken, hash, err := auth.NewRefreshToken()
 	if err != nil {
-		return "", persistence.RefreshTokenRecord{}, err
+		return "", RefreshTokenRecord{}, err
 	}
-	record, err := a.store.CreateAuthSession(userID, hash, time.Now().Add(a.refreshTokenTTL), persistence.AuthSessionParams{
+	record, err := a.sessionService().Create(r.Context(), userID, hash, time.Now().Add(a.refreshTokenTTL), AuthSessionParams{
 		UserAgent: strings.TrimSpace(r.UserAgent()),
 		IPAddress: a.clientIP(r),
 	})
 	if err != nil {
-		return "", persistence.RefreshTokenRecord{}, err
+		return "", RefreshTokenRecord{}, err
 	}
 	return refreshToken, record, nil
 }
 
-func (a *api) issueAuthSessionPayload(identity persistence.Identity, sessionID string) (contracts.AuthSessionPayload, error) {
+func (a *api) issueAuthSessionPayload(identity Identity, sessionID string) (contracts.AuthSessionPayload, error) {
 	bootstrapped, err := a.autoBootstrapAdmin(identity)
 	if err != nil {
 		return contracts.AuthSessionPayload{}, err
 	}
 	identity = bootstrapped
-	if err := a.store.SyncLoginBadges(identity.Sub); err != nil {
+	if err := a.badges.SyncLoginBadges(identity.Sub); err != nil {
 		return contracts.AuthSessionPayload{}, fmt.Errorf("sync login badges: %w", err)
 	}
 	accessToken, err := auth.IssueAppAccessToken(a.appAuthSecret, identity.Sub, sessionID, a.accessTokenTTL)
@@ -370,15 +377,15 @@ func (a *api) issueAuthSessionPayload(identity persistence.Identity, sessionID s
 	return payload, nil
 }
 
-func (a *api) suggestedNickname(identity persistence.Identity, fallbackName string) (string, error) {
+func (a *api) suggestedNickname(identity Identity, fallbackName string) (string, error) {
 	raw := defaultStr(identity.ProviderName, defaultStr(fallbackName, defaultStr(identity.GoogleName, identity.DisplayName)))
 	if !identity.NicknameRequired {
 		return raw, nil
 	}
-	return a.store.SuggestNickname(identity.Sub, raw)
+	return a.accounts.SuggestNickname(identity.Sub, raw)
 }
 
-func (a *api) autoBootstrapAdmin(identity persistence.Identity) (persistence.Identity, error) {
+func (a *api) autoBootstrapAdmin(identity Identity) (Identity, error) {
 	if identity.IsAdmin {
 		return identity, nil
 	}
@@ -389,13 +396,13 @@ func (a *api) autoBootstrapAdmin(identity persistence.Identity) (persistence.Ide
 	if _, ok := a.adminBootstrapEmails[email]; !ok {
 		return identity, nil
 	}
-	if err := a.store.SetUserAdmin(identity.Sub, true); err != nil {
-		return persistence.Identity{}, err
+	if err := a.admin.SetUserAdmin(identity.Sub, true); err != nil {
+		return Identity{}, err
 	}
-	return a.store.GetIdentity(identity.Sub)
+	return a.accounts.GetIdentity(identity.Sub)
 }
 
-func sessionUser(identity persistence.Identity) contracts.AuthUser {
+func sessionUser(identity Identity) contracts.AuthUser {
 	return contracts.AuthUser{
 		ID:          identity.Sub,
 		Email:       identity.Email,

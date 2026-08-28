@@ -19,26 +19,25 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
-	"geoduels/pkg/persistence"
 )
 
 type guestAuthTestStore struct {
-	persistence.Store
+	testRepositories
 	createdGuests int
-	identity      persistence.Identity
-	sessions      map[string]persistence.RefreshTokenRecord
+	identity      Identity
+	sessions      map[string]RefreshTokenRecord
 }
 
 type nicknameAuthTestStore struct {
-	persistence.Store
-	identity       persistence.Identity
+	testRepositories
+	identity       Identity
 	setErr         error
 	setName        string
 	suggestedName  string
 	suggestionFrom string
 }
 
-func (s *nicknameAuthTestStore) GetIdentity(sub string) (persistence.Identity, error) {
+func (s *nicknameAuthTestStore) GetIdentity(sub string) (Identity, error) {
 	return s.identity, nil
 }
 
@@ -61,9 +60,9 @@ func (s *nicknameAuthTestStore) SuggestNickname(sub, displayName string) (string
 	return s.suggestedName, nil
 }
 
-func (s *guestAuthTestStore) CreateGuestIdentity() (persistence.Identity, error) {
+func (s *guestAuthTestStore) CreateGuestIdentity() (Identity, error) {
 	s.createdGuests++
-	s.identity = persistence.Identity{
+	s.identity = Identity{
 		Sub:              "guest-1",
 		DisplayName:      "Guest",
 		NicknameRequired: false,
@@ -76,11 +75,11 @@ func (s *guestAuthTestStore) IsSignupIPBanned(ipAddress string) (bool, error) {
 	return false, nil
 }
 
-func (s *guestAuthTestStore) CreateAuthSession(userID, refreshTokenHash string, expiresAt time.Time, params persistence.AuthSessionParams) (persistence.RefreshTokenRecord, error) {
+func (s *guestAuthTestStore) CreateAuthSession(userID, refreshTokenHash string, expiresAt time.Time, params AuthSessionParams) (RefreshTokenRecord, error) {
 	if s.sessions == nil {
-		s.sessions = map[string]persistence.RefreshTokenRecord{}
+		s.sessions = map[string]RefreshTokenRecord{}
 	}
-	rec := persistence.RefreshTokenRecord{
+	rec := RefreshTokenRecord{
 		ID:               "session-1",
 		UserID:           userID,
 		RefreshTokenHash: refreshTokenHash,
@@ -92,15 +91,15 @@ func (s *guestAuthTestStore) CreateAuthSession(userID, refreshTokenHash string, 
 	return rec, nil
 }
 
-func (s *guestAuthTestStore) GetAuthSessionByRefreshToken(hash string) (persistence.RefreshTokenRecord, bool, error) {
+func (s *guestAuthTestStore) GetAuthSessionByRefreshToken(hash string) (RefreshTokenRecord, bool, error) {
 	rec, ok := s.sessions[hash]
 	return rec, ok, nil
 }
 
-func (s *guestAuthTestStore) RotateAuthSession(sessionID, currentHash, nextHash string, expiresAt time.Time, usedAt time.Time) (persistence.RefreshTokenRecord, bool, error) {
+func (s *guestAuthTestStore) RotateAuthSession(sessionID, currentHash, nextHash string, expiresAt time.Time, usedAt time.Time) (RefreshTokenRecord, bool, error) {
 	rec, ok := s.sessions[currentHash]
 	if !ok {
-		return persistence.RefreshTokenRecord{}, false, nil
+		return RefreshTokenRecord{}, false, nil
 	}
 	delete(s.sessions, currentHash)
 	rec.RefreshTokenHash = nextHash
@@ -110,7 +109,7 @@ func (s *guestAuthTestStore) RotateAuthSession(sessionID, currentHash, nextHash 
 	return rec, true, nil
 }
 
-func (s *guestAuthTestStore) GetIdentity(sub string) (persistence.Identity, error) {
+func (s *guestAuthTestStore) GetIdentity(sub string) (Identity, error) {
 	return s.identity, nil
 }
 
@@ -125,7 +124,7 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 
 	store := &guestAuthTestStore{}
 	a := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                 rdb,
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
@@ -168,7 +167,7 @@ func TestAnonymousSessionBootstrapReturnsUnauthorizedWithoutLogging(t *testing.T
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	a := &api{
-		store:                 &guestAuthTestStore{},
+		accounts: &guestAuthTestStore{}, sessions: &guestAuthTestStore{}, profiles: &guestAuthTestStore{}, preferenceStore: &guestAuthTestStore{}, badges: &guestAuthTestStore{}, leaderboardStore: &guestAuthTestStore{}, matchStore: &guestAuthTestStore{}, moderation: &guestAuthTestStore{}, admin: &guestAuthTestStore{}, content: &guestAuthTestStore{}, seasons: &guestAuthTestStore{}, gameplayMaps: &guestAuthTestStore{}, runtimeStore: &guestAuthTestStore{}, chatStore: &guestAuthTestStore{}, parties: &guestAuthTestStore{}, social: &guestAuthTestStore{},
 		refreshCookieName:     "geoduels_refresh",
 		refreshCookieSameSite: http.SameSiteLaxMode,
 	}
@@ -191,7 +190,7 @@ func TestSessionFailureDoesNotClearRefreshCookie(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	a := &api{
-		store:                 &guestAuthTestStore{},
+		accounts: &guestAuthTestStore{}, sessions: &guestAuthTestStore{}, profiles: &guestAuthTestStore{}, preferenceStore: &guestAuthTestStore{}, badges: &guestAuthTestStore{}, leaderboardStore: &guestAuthTestStore{}, matchStore: &guestAuthTestStore{}, moderation: &guestAuthTestStore{}, admin: &guestAuthTestStore{}, content: &guestAuthTestStore{}, seasons: &guestAuthTestStore{}, gameplayMaps: &guestAuthTestStore{}, runtimeStore: &guestAuthTestStore{}, chatStore: &guestAuthTestStore{}, parties: &guestAuthTestStore{}, social: &guestAuthTestStore{},
 		refreshCookieName:     "geoduels_refresh",
 		refreshCookieSameSite: http.SameSiteLaxMode,
 	}
@@ -218,16 +217,16 @@ func TestSessionFailureDoesNotClearRefreshCookie(t *testing.T) {
 
 func TestSessionUsesValidRefreshCookieWhenStaleDuplicateComesFirst(t *testing.T) {
 	store := &guestAuthTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:         "user-1",
 			DisplayName: "Player",
 			AccountType: "registered",
 		},
-		sessions: map[string]persistence.RefreshTokenRecord{},
+		sessions: map[string]RefreshTokenRecord{},
 	}
 	validToken := "valid-token"
 	validHash := auth.RefreshTokenHash(validToken)
-	store.sessions[validHash] = persistence.RefreshTokenRecord{
+	store.sessions[validHash] = RefreshTokenRecord{
 		ID:               "session-1",
 		UserID:           "user-1",
 		RefreshTokenHash: validHash,
@@ -236,7 +235,7 @@ func TestSessionUsesValidRefreshCookieWhenStaleDuplicateComesFirst(t *testing.T)
 		LastUsedAt:       time.Now(),
 	}
 	a := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
 		refreshTokenTTL:       30 * 24 * time.Hour,
@@ -263,16 +262,16 @@ func TestSessionUsesValidRefreshCookieWhenStaleDuplicateComesFirst(t *testing.T)
 
 func TestSessionBootstrapIsIdempotent(t *testing.T) {
 	store := &guestAuthTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:         "user-1",
 			DisplayName: "Player",
 			AccountType: "registered",
 		},
-		sessions: map[string]persistence.RefreshTokenRecord{},
+		sessions: map[string]RefreshTokenRecord{},
 	}
 	refreshToken := "valid-token"
 	refreshHash := auth.RefreshTokenHash(refreshToken)
-	store.sessions[refreshHash] = persistence.RefreshTokenRecord{
+	store.sessions[refreshHash] = RefreshTokenRecord{
 		ID:               "session-1",
 		UserID:           "user-1",
 		RefreshTokenHash: refreshHash,
@@ -281,7 +280,7 @@ func TestSessionBootstrapIsIdempotent(t *testing.T) {
 		LastUsedAt:       time.Now(),
 	}
 	a := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
 		refreshTokenTTL:       30 * 24 * time.Hour,
@@ -315,7 +314,7 @@ func TestGuestLoginIgnoresNicknamePayload(t *testing.T) {
 
 	store := &guestAuthTestStore{}
 	a := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                 rdb,
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
@@ -344,7 +343,7 @@ func TestGuestLoginRequiresTurnstileWhenEnabled(t *testing.T) {
 
 	store := &guestAuthTestStore{}
 	a := &api{
-		store:                  store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                  rdb,
 		appAuthSecret:          []byte("01234567890123456789012345678901"),
 		accessTokenTTL:         15 * time.Minute,
@@ -398,7 +397,7 @@ func TestGuestLoginValidatesTurnstileToken(t *testing.T) {
 
 	store := &guestAuthTestStore{}
 	a := &api{
-		store:                  store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                  rdb,
 		appAuthSecret:          []byte("01234567890123456789012345678901"),
 		accessTokenTTL:         15 * time.Minute,
@@ -430,7 +429,7 @@ func TestGuestLoginValidatesTurnstileToken(t *testing.T) {
 }
 
 func TestSessionUserIncludesProfileFields(t *testing.T) {
-	user := sessionUser(persistence.Identity{
+	user := sessionUser(Identity{
 		Sub:          "user-1",
 		Email:        "player@example.com",
 		DisplayName:  "Player",
@@ -463,7 +462,7 @@ func TestSessionUserIncludesProfileFields(t *testing.T) {
 func TestUpdateNicknameClaimsRequiredNickname(t *testing.T) {
 	secret := []byte("01234567890123456789012345678901")
 	store := &nicknameAuthTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:              "user-1",
 			DisplayName:      "Old Name",
 			NicknameRequired: true,
@@ -471,7 +470,7 @@ func TestUpdateNicknameClaimsRequiredNickname(t *testing.T) {
 		},
 	}
 	a := &api{
-		store:          store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:  secret,
 		accessTokenTTL: 15 * time.Minute,
 	}
@@ -506,14 +505,14 @@ func TestUpdateNicknameClaimsRequiredNickname(t *testing.T) {
 func TestUpdateNicknameReturnsConflictWhenTaken(t *testing.T) {
 	secret := []byte("01234567890123456789012345678901")
 	store := &nicknameAuthTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:              "user-1",
 			NicknameRequired: true,
 			AccountType:      "registered",
 		},
-		setErr: persistence.ErrNicknameTaken,
+		setErr: ErrNicknameTaken,
 	}
-	a := &api{store: store, appAuthSecret: secret}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret}
 	token, err := auth.IssueAppAccessToken(secret, "user-1", "session-1", 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -527,14 +526,14 @@ func TestUpdateNicknameReturnsConflictWhenTaken(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("update nickname status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if !errors.Is(store.setErr, persistence.ErrNicknameTaken) {
+	if !errors.Is(store.setErr, ErrNicknameTaken) {
 		t.Fatal("expected nickname conflict")
 	}
 }
 
 func TestSuggestedNicknameUsesAvailableStoreSuggestion(t *testing.T) {
 	store := &nicknameAuthTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:              "user-1",
 			ProviderName:     "Player Name",
 			NicknameRequired: true,
@@ -542,7 +541,7 @@ func TestSuggestedNicknameUsesAvailableStoreSuggestion(t *testing.T) {
 		},
 		suggestedName: "Player.Name4821",
 	}
-	a := &api{store: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
 
 	got, err := a.suggestedNickname(store.identity, "")
 
@@ -564,7 +563,7 @@ func TestGuestLoginRateLimitsNewGuestsByIP(t *testing.T) {
 
 	store := &guestAuthTestStore{}
 	a := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                 rdb,
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
@@ -607,7 +606,7 @@ func TestGuestLoginDailyRateLimitsNewGuestsByIP(t *testing.T) {
 
 	store := &guestAuthTestStore{}
 	a := &api{
-		store:                  store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                  rdb,
 		appAuthSecret:          []byte("01234567890123456789012345678901"),
 		accessTokenTTL:         15 * time.Minute,

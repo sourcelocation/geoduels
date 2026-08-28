@@ -73,20 +73,20 @@ func (w *worker) drainReportNotifications(ctx context.Context) {
 }
 
 func (w *worker) processOneReportNotification(ctx context.Context) (bool, error) {
-	item, ok, err := w.store.ClaimPendingNotification(reportNotificationType, time.Now())
+	item, ok, err := w.notificationService.Claim(ctx, reportNotificationType, time.Now())
 	if err != nil || !ok {
 		return false, err
 	}
 	var payload contracts.ModerationSignalNotificationPayload
 	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
-		return true, w.store.MarkNotificationFailed(item.ID, time.Now().Add(24*time.Hour), "invalid notification payload: "+err.Error())
+		return true, w.notificationService.Failed(ctx, item.ID, time.Now().Add(24*time.Hour), "invalid notification payload: "+err.Error())
 	}
 	settings, err := w.store.GetModerationSettings()
 	if err != nil {
-		return true, w.store.MarkNotificationFailed(item.ID, nextReportNotificationAttempt(item.Attempts), "load moderation settings: "+err.Error())
+		return true, w.notificationService.Failed(ctx, item.ID, nextReportNotificationAttempt(item.Attempts), "load moderation settings: "+err.Error())
 	}
 	if settings.DiscordWebhookURL == "" {
-		return true, w.store.MarkNotificationFailed(item.ID, time.Now().Add(time.Minute), "discord webhook disabled")
+		return true, w.notificationService.Failed(ctx, item.ID, time.Now().Add(time.Minute), "discord webhook disabled")
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -96,9 +96,9 @@ func (w *worker) processOneReportNotification(ctx context.Context) (bool, error)
 		if retryAfter > 0 {
 			next = time.Now().Add(retryAfter)
 		}
-		return true, w.store.MarkNotificationFailed(item.ID, next, err.Error())
+		return true, w.notificationService.Failed(ctx, item.ID, next, err.Error())
 	}
-	if err := w.store.MarkNotificationSent(item.ID); err != nil {
+	if err := w.notificationService.Sent(ctx, item.ID); err != nil {
 		return true, err
 	}
 	observability.Log("info", "moderation signal notification sent", map[string]any{"signal_id": payload.SignalID, "subject_user_id": payload.SubjectUserID})

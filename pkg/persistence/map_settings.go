@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 const gameplayMapSettingsKey = "gameplay_map_settings"
@@ -69,19 +70,14 @@ func decodeGameplayMapSettings(raw string) contracts.GameplayMapSettings {
 	})
 }
 
-func (s *pgStore) GetGameplayMapSettings() (contracts.GameplayMapSettings, error) {
+func (s *DB) GetGameplayMapSettings() (contracts.GameplayMapSettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	return s.gameplayMapSettings(ctx, s.pool)
 }
 
-func (s *pgStore) gameplayMapSettings(ctx context.Context, q seasonQuerier) (contracts.GameplayMapSettings, error) {
-	var raw string
-	err := q.QueryRow(ctx, `
-		select value_json::text
-		from site_settings
-		where key = $1
-	`, gameplayMapSettingsKey).Scan(&raw)
+func (s *DB) gameplayMapSettings(ctx context.Context, q db.DBTX) (contracts.GameplayMapSettings, error) {
+	raw, err := db.New(q).GetGameplayMapSettings(ctx, gameplayMapSettingsKey)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return defaultGameplayMapSettings(), nil
@@ -91,7 +87,7 @@ func (s *pgStore) gameplayMapSettings(ctx context.Context, q seasonQuerier) (con
 	return decodeGameplayMapSettings(raw), nil
 }
 
-func (s *pgStore) SetMapOfficial(adminUserID, mapID string, official bool) (contracts.CustomMap, error) {
+func (s *DB) SetMapOfficial(adminUserID, mapID string, official bool) (contracts.CustomMap, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	mapID = strings.TrimSpace(mapID)
@@ -103,34 +99,36 @@ func (s *pgStore) SetMapOfficial(adminUserID, mapID string, official bool) (cont
 		return contracts.CustomMap{}, err
 	}
 	mapID = canonicalID
-	var tag pgconn.CommandTag
+	var affected int64
+	mapUUID := pgtype.UUID{}
+	if err := mapUUID.Scan(mapID); err != nil {
+		return contracts.CustomMap{}, err
+	}
+	adminUUID := pgtype.UUID{}
+	if strings.TrimSpace(adminUserID) != "" {
+		if err := adminUUID.Scan(strings.TrimSpace(adminUserID)); err != nil {
+			return contracts.CustomMap{}, err
+		}
+	}
 	if official {
 		if err := s.ensureReadyMap(ctx, mapID, minMapLocations); err != nil {
 			return contracts.CustomMap{}, err
 		}
-		tag, err = s.pool.Exec(ctx, `
-			update maps
-			set official_at=coalesce(official_at, now()), official_by=$2, published_at=coalesce(published_at, now()), visibility='public', updated_at=now()
-			where id=$1 and archived_at is null
-		`, mapID, strings.TrimSpace(adminUserID))
+		affected, err = s.db.SetMapOfficial(ctx, db.SetMapOfficialParams{Column1: mapUUID, Column2: adminUUID})
 	} else {
-		tag, err = s.pool.Exec(ctx, `
-			update maps
-			set official_at=null, official_by=null, updated_at=now()
-			where id=$1 and archived_at is null
-		`, mapID)
+		affected, err = s.db.ClearMapOfficial(ctx, mapUUID)
 	}
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		return contracts.CustomMap{}, pgx.ErrNoRows
 	}
 	details, _, err := s.GetMap(adminUserID, mapID)
 	return details.Map, err
 }
 
-func (s *pgStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts.CustomMap, error) {
+func (s *DB) SetGameplayMapRole(adminUserID, mapID, role string) (contracts.CustomMap, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	mapID = strings.TrimSpace(mapID)
@@ -167,11 +165,7 @@ func (s *pgStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into site_settings(key, value_json, updated_at)
-		values($1, $2::jsonb, now())
-		on conflict (key) do update set value_json=excluded.value_json, updated_at=now()
-	`, gameplayMapSettingsKey, string(payload)); err != nil {
+	if err := db.New(tx).SetGameplayMapSettings(ctx, db.SetGameplayMapSettingsParams{Key: gameplayMapSettingsKey, Column2: payload}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -181,7 +175,7 @@ func (s *pgStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts
 	return details.Map, err
 }
 
-func (s *pgStore) ensureReadyMap(ctx context.Context, mapID string, requiredLocations int) error {
+func (s *DB) ensureReadyMap(ctx context.Context, mapID string, requiredLocations int) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -190,21 +184,19 @@ func (s *pgStore) ensureReadyMap(ctx context.Context, mapID string, requiredLoca
 	return s.ensureReadyMapTx(ctx, tx, mapID, requiredLocations)
 }
 
-func (s *pgStore) ensureReadyMapTx(ctx context.Context, tx pgx.Tx, mapID string, requiredLocations int) error {
-	var status string
-	var count int
-	if err := tx.QueryRow(ctx, `
-		select status,location_count
-		from maps
-		where id=$1 and archived_at is null
-		for share
-	`, mapID).Scan(&status, &count); err != nil {
+func (s *DB) ensureReadyMapTx(ctx context.Context, tx pgx.Tx, mapID string, requiredLocations int) error {
+	id := pgtype.UUID{}
+	if err := id.Scan(mapID); err != nil {
 		return err
 	}
-	if status != "ready" {
+	row, err := db.New(tx).GetReadyMapForShare(ctx, id)
+	if err != nil {
+		return err
+	}
+	if string(row.Status) != "ready" {
 		return errors.New("selected map is not ready")
 	}
-	if count < requiredLocations {
+	if int(row.LocationCount) < requiredLocations {
 		return errors.New("selected map has too few locations")
 	}
 	return nil
@@ -228,7 +220,7 @@ func gameplayMapRoleField(role string) (string, error) {
 	}
 }
 
-func (s *pgStore) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error) {
+func (s *DB) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error) {
 	requestedMapID = strings.TrimSpace(requestedMapID)
 	if requestedMapID != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)

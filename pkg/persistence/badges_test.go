@@ -37,7 +37,7 @@ func TestBadgeRefRejectsRetiredLegacyAward(t *testing.T) {
 }
 
 func TestAdminBadgeCatalogExcludesSystemDerivedBadges(t *testing.T) {
-	var store pgStore
+	var store DB
 	badges := store.ListAdminGrantableBadges()
 	if len(badges) == 0 {
 		t.Fatal("expected at least one manually grantable badge")

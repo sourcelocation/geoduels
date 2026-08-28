@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 
+	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var ErrPreferenceRevisionConflict = errors.New("preference revision conflict")
@@ -16,40 +18,40 @@ type UserPreferences struct {
 	Revision      int64           `json:"revision"`
 }
 
-func (s *pgStore) GetUserPreferences(userID string) (UserPreferences, error) {
+func (s *DB) GetUserPreferences(ctx context.Context, userID string) (UserPreferences, error) {
 	var result UserPreferences
-	err := s.pool.QueryRow(context.Background(), `
-		select schema_version, preferences_json, revision
-		from user_preferences
-		where user_id=$1
-	`, userID).Scan(&result.SchemaVersion, &result.Preferences, &result.Revision)
+	var id pgtype.UUID
+	if err := id.Scan(userID); err != nil {
+		return result, err
+	}
+	row, err := s.db.GetUserPreferences(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		result.SchemaVersion = 1
 		result.Preferences = json.RawMessage(`{}`)
 		return result, nil
 	}
+	if err == nil {
+		result.SchemaVersion = int(row.SchemaVersion)
+		result.Preferences = json.RawMessage(row.PreferencesJson)
+		result.Revision = row.Revision
+	}
 	return result, err
 }
 
-func (s *pgStore) UpdateUserPreferences(userID string, schemaVersion int, preferences json.RawMessage, expectedRevision int64) (UserPreferences, error) {
+func (s *DB) UpdateUserPreferences(ctx context.Context, userID string, schemaVersion int, preferences json.RawMessage, expectedRevision int64) (UserPreferences, error) {
 	var result UserPreferences
-	err := s.pool.QueryRow(context.Background(), `
-		insert into user_preferences(user_id, schema_version, preferences_json, revision, updated_at)
-		values($1, $2, $3::jsonb, 1, now())
-		on conflict(user_id) do update
-		set schema_version=excluded.schema_version,
-		    preferences_json=excluded.preferences_json,
-		    revision=user_preferences.revision+1,
-		    updated_at=now()
-		where user_preferences.revision=$4
-		returning schema_version, preferences_json, revision
-	`, userID, schemaVersion, string(preferences), expectedRevision).Scan(
-		&result.SchemaVersion,
-		&result.Preferences,
-		&result.Revision,
-	)
+	var id pgtype.UUID
+	if err := id.Scan(userID); err != nil {
+		return result, err
+	}
+	row, err := s.db.UpsertUserPreferences(ctx, db.UpsertUserPreferencesParams{UserID: id, SchemaVersion: int32(schemaVersion), Preferences: preferences, ExpectedRevision: expectedRevision})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserPreferences{}, ErrPreferenceRevisionConflict
+	}
+	if err == nil {
+		result.SchemaVersion = int(row.SchemaVersion)
+		result.Preferences = json.RawMessage(row.PreferencesJson)
+		result.Revision = row.Revision
 	}
 	return result, err
 }

@@ -13,6 +13,10 @@ where control_plane_leases.expires_at <= now()
    or control_plane_leases.owner_id = excluded.owner_id
 returning fencing_token, expires_at;
 
+-- name: ReleaseLease :exec
+delete from control_plane_leases
+where name = $1 and owner_id = $2 and fencing_token = $3;
+
 -- name: RenewLease :one
 update control_plane_leases
 set expires_at = now() + $4::interval,
@@ -22,7 +26,3 @@ where name = $1
   and fencing_token = $3
   and expires_at > now()
 returning expires_at;
-
--- name: ReleaseLease :exec
-delete from control_plane_leases
-where name = $1 and owner_id = $2 and fencing_token = $3;

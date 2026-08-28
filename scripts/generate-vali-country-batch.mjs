@@ -252,7 +252,7 @@ async function buildManifestEntries(outputRoot, state) {
       countryCode: entry.country.toUpperCase(),
       displayName: name,
       mapKey: `country/${countrySlug}`,
-      description: `Official GeoDuels ${name} country map generated from Vali coverage.`,
+      description: `Official GeoDuels ${name} country map!`,
       visibility: "public",
       difficulty: "normal",
       thumbnailKey: `countries/${countrySlug}`,

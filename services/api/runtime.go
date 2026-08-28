@@ -29,8 +29,8 @@ func redisFromEnv() (*redis.Client, func(), error) {
 }
 
 func (a *api) close() {
-	if a.store != nil {
-		a.store.Close()
+	if a.db != nil {
+		a.db.Close()
 	}
 	if a.redis != nil {
 		_ = a.redis.Close()
@@ -40,7 +40,7 @@ func (a *api) close() {
 func (a *api) launcher() matchlaunch.Launcher {
 	return matchlaunch.Launcher{
 		Coord:          a.coord,
-		Persist:        a.store,
+		Persist:        a.runtimeStore,
 		HTTPClient:     a.httpClient,
 		TicketSecret:   a.ticketAuth,
 		InternalSecret: a.internalSecret,

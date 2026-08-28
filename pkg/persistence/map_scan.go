@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"geoduels/pkg/contracts"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 type customMapScanner interface {
@@ -61,28 +62,17 @@ func scanCustomMap(row customMapScanner) (contracts.CustomMap, error) {
 	return item, nil
 }
 
-func (s *pgStore) mapCountryStats(ctx context.Context, mapID string) ([]contracts.MapCountryStat, error) {
+func (s *DB) mapCountryStats(ctx context.Context, mapID string) ([]contracts.MapCountryStat, error) {
 	if strings.TrimSpace(mapID) == "" {
 		return nil, nil
 	}
-	rows, err := s.pool.Query(ctx, `
-		select country, location_count
-		from map_country_stats
-		where map_id=$1
-		order by location_count desc, country asc
-		limit 64
-	`, strings.TrimSpace(mapID))
+	rows, err := s.db.ListMapCountryStats(ctx, chatUUID(strings.TrimSpace(mapID)))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []contracts.MapCountryStat{}
-	for rows.Next() {
-		var item contracts.MapCountryStat
-		if err := rows.Scan(&item.Country, &item.LocationCount); err != nil {
-			return nil, err
-		}
-		out = append(out, item)
+	out := make([]contracts.MapCountryStat, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, contracts.MapCountryStat{Country: row.Country, LocationCount: int(row.LocationCount)})
 	}
-	return out, rows.Err()
+	return out, nil
 }

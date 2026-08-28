@@ -18,7 +18,7 @@ func TestActiveAccountRejectsBannedUserWithStructuredError(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &adminModerationTestStore{identity: persistence.Identity{Sub: "user-1", IsBanned: true}}
-	a := &api{store: store, appAuthSecret: secret}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret}
 	called := false
 	handler := a.active(func(http.ResponseWriter, *http.Request) { called = true })
 	req := httptest.NewRequest(http.MethodPost, "/action", nil)
@@ -42,7 +42,7 @@ func TestActiveAccountPassesResolvedIdentityToHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &adminModerationTestStore{identity: persistence.Identity{Sub: "user-1"}}
-	a := &api{store: store, appAuthSecret: secret}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret}
 	handler := a.active(func(w http.ResponseWriter, r *http.Request) {
 		_, identity, err := a.authenticatedAccount(r)
 		if err != nil || identity.Sub != "user-1" {

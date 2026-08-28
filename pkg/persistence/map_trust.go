@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 const (
@@ -76,7 +78,7 @@ func mapCreatorTierName(tier int) string {
 	return limitsForMapCreatorTier(tier).name
 }
 
-func (s *pgStore) GetMapUploadQuota(userID string) (contracts.MapUploadQuota, error) {
+func (s *DB) GetMapUploadQuota(userID string) (contracts.MapUploadQuota, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return contracts.MapUploadQuota{}, errors.New("user required")
@@ -88,7 +90,7 @@ func (s *pgStore) GetMapUploadQuota(userID string) (contracts.MapUploadQuota, er
 		return contracts.MapUploadQuota{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtext($1))`, "map-upload:"+userID); err != nil {
+	if err := db.New(tx).LockMapUpload(ctx, "map-upload:"+userID); err != nil {
 		return contracts.MapUploadQuota{}, err
 	}
 	quota, err := refreshMapCreatorTrust(ctx, tx, userID)
@@ -101,7 +103,7 @@ func (s *pgStore) GetMapUploadQuota(userID string) (contracts.MapUploadQuota, er
 	return quota, nil
 }
 
-func (s *pgStore) SetMapCreatorTierOverride(userID string, tier *int) (contracts.MapUploadQuota, error) {
+func (s *DB) SetMapCreatorTierOverride(userID string, tier *int) (contracts.MapUploadQuota, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return contracts.MapUploadQuota{}, errors.New("user required")
@@ -116,14 +118,18 @@ func (s *pgStore) SetMapCreatorTierOverride(userID string, tier *int) (contracts
 		return contracts.MapUploadQuota{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtext($1))`, "map-upload:"+userID); err != nil {
+	if err := db.New(tx).LockMapUpload(ctx, "map-upload:"+userID); err != nil {
 		return contracts.MapUploadQuota{}, err
 	}
-	tag, err := tx.Exec(ctx, `update users set map_creator_tier_override=$2 where id=$1`, userID, tier)
+	var tierArg pgtype.Int2
+	if tier != nil {
+		tierArg = pgtype.Int2{Int16: int16(*tier), Valid: true}
+	}
+	tag, err := db.New(tx).SetMapCreatorTierOverride(ctx, db.SetMapCreatorTierOverrideParams{ID: mustMapUUID(userID), MapCreatorTierOverride: tierArg})
 	if err != nil {
 		return contracts.MapUploadQuota{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	if tag == 0 {
 		return contracts.MapUploadQuota{}, pgx.ErrNoRows
 	}
 	quota, err := refreshMapCreatorTrust(ctx, tx, userID)
@@ -137,6 +143,7 @@ func (s *pgStore) SetMapCreatorTierOverride(userID string, tier *int) (contracts
 }
 
 func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (contracts.MapUploadQuota, error) {
+	q := db.New(tx)
 	var (
 		accountType  string
 		createdAt    time.Time
@@ -145,39 +152,37 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 		deletedAt    *time.Time
 		override     *int
 	)
-	if err := tx.QueryRow(ctx, `
-		select account_type, created_at, banned_at, ban_expires_at, deleted_at, map_creator_tier_override
-		from users
-		where id=$1
-	`, userID).Scan(&accountType, &createdAt, &bannedAt, &banExpiresAt, &deletedAt, &override); err != nil {
+	u, err := q.GetMapTrustUser(ctx, mustMapUUID(userID))
+	if err != nil {
+		return contracts.MapUploadQuota{}, err
+	}
+	accountType = string(u.AccountType)
+	createdAt = u.CreatedAt.Time
+	if u.BannedAt.Valid {
+		bannedAt = &u.BannedAt.Time
+	}
+	if u.BanExpiresAt.Valid {
+		banExpiresAt = &u.BanExpiresAt.Time
+	}
+	if u.DeletedAt.Valid {
+		deletedAt = &u.DeletedAt.Time
+	}
+	if u.MapCreatorTierOverride.Valid {
+		v := int(u.MapCreatorTierOverride.Int16)
+		override = &v
+	}
+	activeSanction := u.ReportMutedAt.Valid && (!u.ReportMuteExpiresAt.Valid || u.ReportMuteExpiresAt.Time.After(time.Now()))
+	if false {
 		return contracts.MapUploadQuota{}, err
 	}
 
 	var qualifiedFavorites, qualifiedMaps int
-	if err := tx.QueryRow(ctx, `
-		select count(distinct mf.user_id)::int, count(distinct mf.map_id)::int
-		from map_favorites mf
-		join maps m on m.id=mf.map_id
-		join users favoriter on favoriter.id=mf.user_id
-		where m.owner_user_id=$1
-		  and mf.user_id<>$1
-		  and favoriter.account_type='registered'
-		  and favoriter.created_at <= now()-interval '7 days'
-		  and not coalesce(favoriter.banned_at is not null and (favoriter.ban_expires_at is null or favoriter.ban_expires_at > now()), false)
-		  and favoriter.deleted_at is null
-	`, userID).Scan(&qualifiedFavorites, &qualifiedMaps); err != nil {
+	f, err := q.GetQualifiedMapFavorites(ctx, mustMapUUID(userID))
+	if err != nil {
 		return contracts.MapUploadQuota{}, err
 	}
-
-	var activeSanction bool
-	if err := tx.QueryRow(ctx, `
-		select coalesce(
-			report_muted_at is not null and (report_mute_expires_at is null or report_mute_expires_at > now()),
-			false
-		) from users where id=$1
-	`, userID).Scan(&activeSanction); err != nil {
-		return contracts.MapUploadQuota{}, err
-	}
+	qualifiedFavorites = int(f.QualifiedFavorites)
+	qualifiedMaps = int(f.QualifiedMaps)
 
 	accountAgeDays := max(0, int(time.Since(createdAt).Hours()/24))
 	activeBan := bannedAt != nil && (banExpiresAt == nil || banExpiresAt.After(time.Now()))
@@ -189,21 +194,13 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 	limits := limitsForMapCreatorTier(tier)
 
 	var currentMaps, currentLocations int
-	if err := tx.QueryRow(ctx, `
-		select count(*)::int, coalesce(sum(location_count),0)::int
-		from maps
-		where owner_user_id=$1 and archived_at is null
-	`, userID).Scan(&currentMaps, &currentLocations); err != nil {
+	c, err := q.GetActiveMapCounts(ctx, mustMapUUID(userID))
+	if err != nil {
 		return contracts.MapUploadQuota{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		update users
-		set map_creator_tier=$2,
-		    map_creator_qualified_favorites=$3,
-		    map_creator_qualified_maps=$4,
-		    map_creator_trust_updated_at=now()
-		where id=$1
-	`, userID, tier, qualifiedFavorites, qualifiedMaps); err != nil {
+	currentMaps = int(c.CurrentMaps)
+	currentLocations = int(c.CurrentLocations)
+	if err := q.UpdateMapCreatorTrust(ctx, db.UpdateMapCreatorTrustParams{ID: mustMapUUID(userID), MapCreatorTier: int16(tier), MapCreatorQualifiedFavorites: int32(qualifiedFavorites), MapCreatorQualifiedMaps: int32(qualifiedMaps)}); err != nil {
 		return contracts.MapUploadQuota{}, err
 	}
 
@@ -253,31 +250,21 @@ func enforceMapUploadQuota(ctx context.Context, tx pgx.Tx, userID, mapID string,
 
 	currentLocations := quota.CurrentActiveLocations
 	if !create {
-		var existingLocations int
-		if err := tx.QueryRow(ctx, `
-			select location_count
-			from maps
-			where id=$1 and owner_user_id=$2 and archived_at is null
-		`, mapID, userID).Scan(&existingLocations); err != nil {
+		existing, err := db.New(tx).GetOwnedActiveMapLocationCount(ctx, db.GetOwnedActiveMapLocationCountParams{ID: mustMapUUID(mapID), OwnerUserID: mustMapUUID(userID)})
+		if err != nil {
 			return err
 		}
-		currentLocations -= existingLocations
+		currentLocations -= int(existing)
 	}
 	if currentLocations+incoming > quota.MaxActiveLocations {
 		return fmt.Errorf("%s tier account limit is %d active map locations", quota.Tier, quota.MaxActiveLocations)
 	}
 
-	var hourlyUploads, dailyUploads, hourlyLocations int
-	if err := tx.QueryRow(ctx, `
-		select
-			count(*) filter(where created_at>now()-interval '1 hour')::int,
-			count(*) filter(where created_at>now()-interval '1 day')::int,
-			coalesce(sum(location_count) filter(where created_at>now()-interval '1 hour'),0)::int
-		from map_upload_events
-		where user_id=$1
-	`, userID).Scan(&hourlyUploads, &dailyUploads, &hourlyLocations); err != nil {
+	stats, err := db.New(tx).GetMapUploadStats(ctx, mustMapUUID(userID))
+	if err != nil {
 		return err
 	}
+	hourlyUploads, dailyUploads, hourlyLocations := int(stats.HourlyUploads), int(stats.DailyUploads), int(stats.HourlyLocations)
 	if hourlyUploads >= quota.MaxUploadsPerHour || dailyUploads >= quota.MaxUploadsPerDay {
 		return errors.New("map upload rate limit exceeded")
 	}

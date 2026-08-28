@@ -9,9 +9,29 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
+
+func mapFromQueryRow(r db.ListMapsRow) contracts.CustomMap {
+	return mapFromParts(r.MID, r.Coalesce, r.Coalesce_2, r.Column4, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.Column13, r.Column14, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Exists, r.Btrim, r.Exists_2, r.Exists_3, r.Exists_4, r.CreatedAt, r.UpdatedAt, r.BestScore, r.Coalesce_3, r.AchievedAt)
+}
+func mapFromGetRow(r db.GetMapRow) contracts.CustomMap {
+	return mapFromParts(r.MID, r.Coalesce, r.Coalesce_2, r.Column4, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.Column13, r.Column14, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Exists, r.Btrim, r.Exists_2, r.Exists_3, r.Exists_4, r.CreatedAt, r.UpdatedAt, r.BestScore, r.Coalesce_3, r.AchievedAt)
+}
+func mapFromParts(id string, key, owner, author any, name, desc string, vis db.GdMapVisibility, status db.GdMapStatus, diff db.GdMapDifficulty, thumbVariant int32, thumbKey string, count int32, system pgtype.Bool, official any, published pgtype.Timestamptz, plays, favs, comments int32, trend float64, favorited bool, region []byte, moving, noMove, nmpz bool, created, updated pgtype.Timestamptz, best pgtype.Int2, match any, achieved pgtype.Timestamptz) contracts.CustomMap {
+	r := contracts.CustomMap{ID: id, MapKey: fmt.Sprint(key), OwnerUserID: fmt.Sprint(owner), AuthorName: fmt.Sprint(author), DisplayName: name, Description: desc, Visibility: string(vis), Status: string(status), Difficulty: string(diff), ThumbnailVariant: int(thumbVariant), ThumbnailKey: thumbKey, LocationCount: int(count), System: system.Bool, Official: fmt.Sprint(official) == "true", PlayCount: int(plays), FavoriteCount: int(favs), CommentCount: int(comments), TrendingScore: trend, Favorited: favorited, OfficialRegion: string(region), ModeMoving: moving, ModeNoMove: noMove, ModeNMPZ: nmpz, CreatedAt: created.Time, UpdatedAt: updated.Time}
+	if published.Valid {
+		t := published.Time
+		r.PublishedAt = &t
+	}
+	if best.Valid && achieved.Valid {
+		r.PersonalBest = &contracts.MapPersonalBest{Score: int(best.Int16), MatchID: fmt.Sprint(match), AchievedAt: achieved.Time}
+	}
+	return r
+}
 
 const (
 	absoluteMaxMapLocations   = 1_000_000
@@ -65,100 +85,38 @@ type OfficialMapImportInput struct {
 	OfficialRegionCode string
 }
 
-func (s *pgStore) ListMaps(userID string, opts contracts.MapListOptions) ([]contracts.CustomMap, error) {
+func (s *DB) ListMaps(userID string, opts contracts.MapListOptions) ([]contracts.CustomMap, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	scope := normalizeMapScope(opts.Scope)
 	sortMode := normalizeMapSort(opts.Sort)
 	searchPattern := mapSearchPattern(opts.Search)
-	query := `
-		select m.id::text,coalesce((select a.alias from map_aliases a where a.map_id=m.id order by a.created_at,a.alias limit 1),m.id::text),coalesce(m.owner_user_id::text, ''), case when m.official_at is not null then 'GeoDuels' else coalesce(u.display_name, 'GeoDuels') end, m.display_name, m.description, m.visibility, m.status,
-		       m.difficulty, m.thumbnail_variant, coalesce(m.thumbnail_key, 'generic/variant-' || greatest(1, least(5, m.thumbnail_variant))::text), m.location_count, (m.owner_user_id is null or m.official_at is not null),
-		       m.official_at is not null,
-		       coalesce(m.published_at, '0001-01-01'::timestamptz), m.play_count, m.favorite_count, m.comment_count, m.trending_score,
-		       exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($1,'')::uuid),
-		       trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))),
-		       ` + gameplayMapRoleFlagsSQL() + `,
-		       m.created_at,m.updated_at,pb.best_score,coalesce(pb.match_id::text,''),pb.achieved_at
-		from maps m
-		left join users u on u.id = m.owner_user_id
-		left join player_map_bests pb on pb.map_id=m.id and pb.user_id=nullif($1,'')::uuid and pb.ruleset=0
-		where m.archived_at is null
-	`
-	args := []any{strings.TrimSpace(userID)}
-	switch scope {
-	case "official":
-		query += ` and (m.owner_user_id is null or m.official_at is not null)`
-	case "community":
-		query += ` and ` + communityMapListPredicate
-	case "favorites":
-		query += ` and exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($1,'')::uuid)`
-	case "mine":
-		query += ` and m.owner_user_id = nullif($1,'')::uuid`
-	default:
-		query += ` and (m.owner_user_id is null or m.official_at is not null or m.owner_user_id = nullif($1,'')::uuid)`
-	}
-	if searchPattern != "" {
-		args = append(args, searchPattern)
-		searchArg := len(args)
-		query += fmt.Sprintf(` and (
-			m.display_name ilike $%[1]d escape '\'
-			or m.description ilike $%[1]d escape '\'
-			or exists(select 1 from map_aliases a where a.map_id=m.id and a.alias ilike $%[1]d escape '\')
-			or coalesce(u.display_name, 'GeoDuels') ilike $%[1]d escape '\'
-			or trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))) ilike $%[1]d escape '\'
-		)`, searchArg)
-	}
-	switch sortMode {
-	case "popular":
-		query += ` order by (m.play_count + m.favorite_count * 3) desc, m.published_at desc nulls last, m.updated_at desc`
-	case "new":
-		query += ` order by m.published_at desc nulls last, m.updated_at desc`
-	default:
-		query += ` order by m.trending_score desc, m.published_at desc nulls last, m.updated_at desc`
-	}
-	query += ` limit 72`
-	rows, err := s.pool.Query(ctx, query, args...)
+	rows, err := s.db.ListMaps(ctx, db.ListMapsParams{UserID: strings.TrimSpace(userID), Scope: scope, Search: searchPattern, Sort: sortMode})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []contracts.CustomMap{}
-	for rows.Next() {
-		item, err := scanCustomMap(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, item)
+	out := make([]contracts.CustomMap, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapFromQueryRow(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (s *pgStore) GetMap(userID, mapID string) (contracts.MapDetails, bool, error) {
+func (s *DB) GetMap(userID, mapID string) (contracts.MapDetails, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	row := s.pool.QueryRow(ctx, `
-		select m.id::text,coalesce((select a.alias from map_aliases a where a.map_id=m.id order by a.created_at,a.alias limit 1),m.id::text),coalesce(m.owner_user_id::text, ''), case when m.official_at is not null then 'GeoDuels' else coalesce(u.display_name, 'GeoDuels') end, m.display_name, m.description, m.visibility, m.status,
-		       m.difficulty, m.thumbnail_variant, coalesce(m.thumbnail_key, 'generic/variant-' || greatest(1, least(5, m.thumbnail_variant))::text), m.location_count, (m.owner_user_id is null or m.official_at is not null),
-		       m.official_at is not null,
-		       coalesce(m.published_at, '0001-01-01'::timestamptz), m.play_count, m.favorite_count, m.comment_count, m.trending_score,
-		       exists(select 1 from map_favorites mf where mf.map_id=m.id and mf.user_id=nullif($2,'')::uuid),
-		       trim(both ':' from concat_ws(':', nullif(m.official_region_type,''), nullif(m.official_region_code,''))),
-		       ` + gameplayMapRoleFlagsSQL() + `,
-		       m.created_at,m.updated_at,pb.best_score,coalesce(pb.match_id::text,''),pb.achieved_at
-		from maps m
-		left join users u on u.id = m.owner_user_id
-		left join player_map_bests pb on pb.map_id=m.id and pb.user_id=nullif($2,'')::uuid and pb.ruleset=0
-		where (m.id::text=$1 or exists(select 1 from map_aliases a where a.map_id=m.id and a.alias=$1)) and m.archived_at is null
-		  and `+mapVisibleToUserSQL("m", 2, true)+`
-	`, strings.TrimSpace(mapID), strings.TrimSpace(userID))
-	item, err := scanCustomMap(row)
+	parsedID, parseErr := profileUUID(strings.TrimSpace(mapID))
+	if parseErr != nil {
+		return contracts.MapDetails{}, false, nil
+	}
+	row, err := s.db.GetMap(ctx, db.GetMapParams{MapID: parsedID, UserID: strings.TrimSpace(userID)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.MapDetails{}, false, nil
 	}
 	if err != nil {
 		return contracts.MapDetails{}, false, err
 	}
+	item := mapFromGetRow(row)
 	stats, err := s.mapCountryStats(ctx, item.ID)
 	if err != nil {
 		return contracts.MapDetails{}, false, err

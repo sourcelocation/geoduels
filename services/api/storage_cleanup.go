@@ -20,10 +20,7 @@ func (a *api) runStorageCleanupLoop() {
 }
 
 func (a *api) cleanupStorage() {
-	maintenance, ok := a.store.(persistence.StorageMaintenance)
-	if !ok {
-		return
-	}
+	maintenance := a.db
 	if _, err := maintenance.ReconcileStaleMatchSessions(a.staleMatchGrace, a.storageCleanupBatchSize); err != nil {
 		observability.Log("warn", "stale match reconciliation failed", map[string]any{"error": err.Error()})
 	}

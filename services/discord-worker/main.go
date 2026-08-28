@@ -26,8 +26,16 @@ const (
 	discordSyncBatch      = 10
 )
 
+// discordPersistence is the narrow persistence surface the discord worker
+// needs; satisfied by the sqlc-backed persistence store.
+type discordPersistence interface {
+	persistence.BadgeRepository
+	persistence.ContentRepository
+	Close()
+}
+
 type worker struct {
-	store    persistence.Store
+	store    discordPersistence
 	session  *discordgo.Session
 	configMu sync.RWMutex
 	config   persistence.DiscordIntegrationSettings

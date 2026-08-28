@@ -7,11 +7,10 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
-	"geoduels/pkg/persistence"
 )
 
 type guestCleanupTestStore struct {
-	persistence.Store
+	testRepositories
 	calls   int
 	deleted []int
 	ttl     time.Duration
@@ -37,7 +36,7 @@ func TestCleanupGuestAccountsDeletesUntilBatchNotFull(t *testing.T) {
 
 	store := &guestCleanupTestStore{deleted: []int{1000, 25}}
 	a := &api{
-		store:                 store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		redis:                 rdb,
 		guestAccountTTL:       24 * time.Hour,
 		guestCleanupInterval:  time.Hour,

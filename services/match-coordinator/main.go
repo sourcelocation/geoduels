@@ -32,10 +32,29 @@ import (
 	"geoduels/pkg/sessionpolicy"
 )
 
+// persistentStore is the narrow persistence surface the coordinator service
+// needs; satisfied by the sqlc-backed persistence store.
+// Handler-facing persistence types are re-exported locally so handler files
+// never import the persistence package directly.
+type chatRestriction = persistence.ChatRestriction
+
+var errPartyMapUnavailable = persistence.ErrPartyMapUnavailable
+
+type persistentStore interface {
+	persistence.AccountRepository
+	persistence.ProfileRepository
+	persistence.MatchRepository
+	persistence.RuntimeRepository
+	persistence.PartyRepository
+	persistence.GameplayMapRepository
+	persistence.ChatRepository
+	Close()
+}
+
 type matchCoordinator struct {
 	store           matchstore.Store
 	state           *coordinator.Store
-	persist         persistence.Store
+	persist         persistentStore
 	redis           *redis.Client
 	httpClient      *http.Client
 	appSecret       []byte

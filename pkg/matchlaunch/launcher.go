@@ -17,9 +17,16 @@ import (
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
 	"geoduels/pkg/gameticket"
-	"geoduels/pkg/persistence"
 	"geoduels/pkg/sessionpolicy"
 )
+
+// MatchPersistence is the narrow store surface the launcher needs; implemented
+// by the persistence store and test doubles.
+type MatchPersistence interface {
+	UpsertMatchSession(ctx context.Context, p contracts.MatchSessionUpsert) error
+	RecordRuntimeMatch(ctx context.Context, matchID, state string, ownerEpoch int64, terminal bool) error
+	GetRuntimeMatch(ctx context.Context, matchID string) (contracts.RuntimeMatch, bool, error)
+}
 
 type AssignmentStatus string
 
@@ -32,7 +39,7 @@ const (
 
 type Launcher struct {
 	Coord          *coordinator.Store
-	Persist        persistence.Store
+	Persist        MatchPersistence
 	HTTPClient     *http.Client
 	TicketSecret   []byte
 	InternalSecret string
@@ -179,7 +186,7 @@ func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFou
 		ReturnTarget:          found.ReturnTarget,
 	}
 	if l.Persist != nil {
-		if err := l.Persist.UpsertMatchSession(ctx, persistence.MatchSessionUpsert{
+		if err := l.Persist.UpsertMatchSession(ctx, contracts.MatchSessionUpsert{
 			Found:       found,
 			NodeID:      target.NodeID,
 			NodeEpoch:   target.OwnerEpoch,

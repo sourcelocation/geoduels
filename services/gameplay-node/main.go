@@ -41,6 +41,14 @@ const (
 
 var upgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
 
+// gameplayPersistence is the narrow persistence surface the gameplay node
+// needs; satisfied by the sqlc-backed persistence store.
+type gameplayPersistence interface {
+	persistence.MatchRepository
+	persistence.RuntimeRepository
+	Close()
+}
+
 type gameplayNode struct {
 	mu sync.RWMutex
 
@@ -49,7 +57,7 @@ type gameplayNode struct {
 	publicRoute string
 	internalURL string
 
-	persist    persistence.Store
+	persist    gameplayPersistence
 	coord      *coordinator.Store
 	redis      *redis.Client
 	ticketAuth []byte

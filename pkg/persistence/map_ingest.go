@@ -10,17 +10,19 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *pgStore) CreateCustomMap(userID, displayName, description, visibility, difficulty, thumbnailKey string, thumbnailVariant int, source io.Reader) (contracts.CustomMap, error) {
+func (s *DB) CreateCustomMap(userID, displayName, description, visibility, difficulty, thumbnailKey string, thumbnailVariant int, source io.Reader) (contracts.CustomMap, error) {
 	mapID := entityid.New()
 	return s.ingestCustomMap(userID, mapID, displayName, description, visibility, difficulty, thumbnailKey, thumbnailVariant, source, true)
 }
 
-func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportInput, source io.Reader) (contracts.CustomMap, error) {
+func (s *DB) ImportOfficialMap(adminUserID string, input OfficialMapImportInput, source io.Reader) (contracts.CustomMap, error) {
 	mapKey := strings.TrimSpace(input.MapKey)
 	displayName := strings.TrimSpace(input.DisplayName)
 	if mapKey == "" {
@@ -69,66 +71,42 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 	defer tx.Rollback(ctx)
 
 	mapID := entityid.Derive("map", mapKey)
-	if _, err := tx.Exec(ctx, `
-		insert into maps(
-			id,owner_user_id,display_name,description,visibility,status,difficulty,
-			thumbnail_variant,thumbnail_key,location_count,content_hash,rejected_location_count,
-			published_at,official_at,official_by,official_region_type,official_region_code,created_at,updated_at
-		)
-		values($1,null,$2,$3,$4,'processing',$5,$6,$7,0,$8,$9,case when $4='public'::gd_map_visibility then now() else null end,now(),nullif($10,'')::uuid,$11,$12,now(),now())
-		on conflict(id) do update set
-			owner_user_id=null,
-			display_name=excluded.display_name,
-			description=excluded.description,
-			visibility=excluded.visibility,
-			status='processing',
-			difficulty=excluded.difficulty,
-			thumbnail_variant=excluded.thumbnail_variant,
-			thumbnail_key=excluded.thumbnail_key,
-			content_hash=excluded.content_hash,
-			rejected_location_count=excluded.rejected_location_count,
-			published_at=case when excluded.visibility='public' then coalesce(maps.published_at, now()) else null end,
-			official_at=coalesce(maps.official_at, now()),
-			official_by=excluded.official_by,
-			official_region_type=excluded.official_region_type,
-			official_region_code=excluded.official_region_code,
-			archived_at=null,
-			updated_at=now()
-	`, mapID, displayName, strings.TrimSpace(input.Description), visibility, difficulty, thumbnailVariant, thumbnailKey, digestBytes, rejected, strings.TrimSpace(adminUserID), regionType, regionCode); err != nil {
+	mapUUID, err := profileUUID(mapID)
+	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
+	q := db.New(tx)
+	if err := q.UpsertOfficialMap(ctx, db.UpsertOfficialMapParams{
+		ID: mapUUID, DisplayName: displayName, Description: strings.TrimSpace(input.Description),
+		Visibility: db.GdMapVisibility(visibility), Difficulty: db.GdMapDifficulty(difficulty), ThumbnailVariant: int32(thumbnailVariant),
+		ThumbnailKey: thumbnailKey, ContentHash: digestBytes, Rejected: int32(rejected),
+		OfficialBy: strings.TrimSpace(adminUserID), RegionType: regionType, RegionCode: regionCode,
+	}); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	var mapStorageID int32
-	if err := tx.QueryRow(ctx, `select storage_id from maps where id=$1`, mapID).Scan(&mapStorageID); err != nil {
+	if err := q.UpsertAlias(ctx, db.UpsertAliasParams{Alias: mapKey, MapID: mapUUID}); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `delete from locations where map_storage_id=$1`, mapStorageID); err != nil {
+	storageID, err := q.StorageID(ctx, mapUUID)
+	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	block := make([][]any, 0, len(parsed))
-	for _, row := range parsed {
-		block = append(block, []any{mapStorageID, row.LatE7, row.LngE7, row.Country, row.PanoID, row.HeadingCDeg, row.PitchCDeg, row.RandKey})
-	}
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"locations"}, []string{"map_storage_id", "lat_e7", "lng_e7", "country", "pano_id", "heading_cdeg", "pitch_cdeg", "rand_key_i"}, pgx.CopyFromRows(block)); err != nil {
+	if err := q.DeleteLocations(ctx, storageID); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `delete from map_country_stats where map_id=$1`, mapID); err != nil {
+	if err := insertIngestLocations(ctx, q, storageID, parsed); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into map_country_stats(map_id,country,location_count)
-		select $1,coalesce(nullif(country,''),'Unknown'),count(*)::int
-		from locations where map_storage_id=$2
-		group by coalesce(nullif(country,''), 'Unknown')
-	`, mapID, mapStorageID); err != nil {
+	if err := q.DeleteCountryStats(ctx, mapUUID); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `update maps set status='ready',location_count=$2,updated_at=now() where id=$1`, mapID, len(parsed)); err != nil {
+	if err := q.InsertCountryStats(ctx, db.InsertCountryStatsParams{MapID: mapUUID, StorageID: storageID}); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `insert into map_aliases(alias,map_id) values($1,$2) on conflict(alias) do update set map_id=excluded.map_id`, mapKey, mapID); err != nil {
+	if err := q.MarkMapReady(ctx, db.MarkMapReadyParams{MapID: mapUUID, LocationCount: int32(len(parsed)), ContentHash: digestBytes, Rejected: int32(rejected)}); err != nil {
+		return contracts.CustomMap{}, err
+	}
+	if err := q.UpsertAlias(ctx, db.UpsertAliasParams{Alias: mapKey, MapID: mapUUID}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -141,11 +119,11 @@ func (s *pgStore) ImportOfficialMap(adminUserID string, input OfficialMapImportI
 	return details.Map, nil
 }
 
-func (s *pgStore) ReplaceCustomMapLocations(userID, mapID string, source io.Reader) (contracts.CustomMap, error) {
+func (s *DB) ReplaceCustomMapLocations(userID, mapID string, source io.Reader) (contracts.CustomMap, error) {
 	return s.ingestCustomMap(userID, strings.TrimSpace(mapID), "", "", "", "", "", 0, source, false)
 }
 
-func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visibility, difficulty, thumbnailKey string, thumbnailVariant int, source io.Reader, create bool) (contracts.CustomMap, error) {
+func (s *DB) ingestCustomMap(userID, mapID, displayName, description, visibility, difficulty, thumbnailKey string, thumbnailVariant int, source io.Reader, create bool) (contracts.CustomMap, error) {
 	userID, mapID = strings.TrimSpace(userID), strings.TrimSpace(mapID)
 	if userID == "" || mapID == "" {
 		return contracts.CustomMap{}, errors.New("user and map required")
@@ -182,67 +160,73 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 		return contracts.CustomMap{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtext($1))`, "map-upload:"+userID); err != nil {
+	q := db.New(tx)
+	trustQ := db.New(tx)
+	if err := trustQ.LockMapUpload(ctx, "map-upload:"+userID); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := enforceMapUploadQuota(ctx, tx, userID, mapID, len(parsed), create); err != nil {
 		return contracts.CustomMap{}, err
 	}
+	userUUID, err := profileUUID(userID)
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
 	if create {
-		_, err = tx.Exec(ctx, `
-			insert into maps(id,owner_user_id,display_name,description,visibility,status,difficulty,thumbnail_variant,thumbnail_key,location_count,published_at,created_at,updated_at)
-			values($1,$2,$3,$4,$5,'processing',$6,$7,$8,0,case when $5='public'::gd_map_visibility then now() else null end,now(),now())
-		`, mapID, userID, displayName, strings.TrimSpace(description), visibility, difficulty, thumbnailVariant, thumbnailKey)
+		mapUUID, parseErr := profileUUID(mapID)
+		if parseErr != nil {
+			return contracts.CustomMap{}, parseErr
+		}
+		err = q.CreateMap(ctx, db.CreateMapParams{MapID: mapUUID, UserID: userUUID, DisplayName: displayName, Description: strings.TrimSpace(description), Visibility: db.GdMapVisibility(visibility), Difficulty: db.GdMapDifficulty(difficulty), ThumbnailVariant: int32(thumbnailVariant), ThumbnailKey: thumbnailKey})
 	} else {
-		var owner string
 		var canonicalID string
 		if canonicalID, _, err = resolveMapIdentity(ctx, tx, mapID); err == nil {
 			mapID = canonicalID
 		}
 		if err == nil {
-			err = tx.QueryRow(ctx, `select coalesce(owner_user_id::text,'') from maps where id=$1 and archived_at is null for update`, mapID).Scan(&owner)
-		}
-		if err == nil && owner != userID {
-			err = errors.New("map is not owned by this account")
+			mapUUID, parseErr := profileUUID(mapID)
+			if parseErr != nil {
+				err = parseErr
+			} else {
+				var owner string
+				owner, err = q.LockMapOwner(ctx, mapUUID)
+				if err == nil && owner != userID {
+					err = errors.New("map is not owned by this account")
+				}
+			}
 		}
 	}
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	var mapStorageID int32
-	if err := tx.QueryRow(ctx, `select storage_id from maps where id=$1`, mapID).Scan(&mapStorageID); err != nil {
+	mapUUID, err := profileUUID(mapID)
+	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-
-	if _, err := tx.Exec(ctx, `delete from locations where map_storage_id=$1`, mapStorageID); err != nil {
+	storageID, err := q.StorageID(ctx, mapUUID)
+	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	block := make([][]any, 0, len(parsed))
-	for _, row := range parsed {
-		block = append(block, []any{mapStorageID, row.LatE7, row.LngE7, row.Country, row.PanoID, row.HeadingCDeg, row.PitchCDeg, row.RandKey})
-	}
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"locations"}, []string{"map_storage_id", "lat_e7", "lng_e7", "country", "pano_id", "heading_cdeg", "pitch_cdeg", "rand_key_i"}, pgx.CopyFromRows(block)); err != nil {
+	if err := q.DeleteLocations(ctx, storageID); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `delete from map_country_stats where map_id=$1`, mapID); err != nil {
+	if err := insertIngestLocations(ctx, q, storageID, parsed); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into map_country_stats(map_id,country,location_count)
-		select $1,coalesce(nullif(country,''),'Unknown'),count(*)::int
-		from locations where map_storage_id=$2
-		group by coalesce(nullif(country,''), 'Unknown')
-	`, mapID, mapStorageID); err != nil {
+	if err := q.DeleteCountryStats(ctx, mapUUID); err != nil {
+		return contracts.CustomMap{}, err
+	}
+	if err := q.InsertCountryStats(ctx, db.InsertCountryStatsParams{MapID: mapUUID, StorageID: storageID}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	digestBytes, err := hex.DecodeString(digest)
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `update maps set status='ready',location_count=$2,content_hash=$3,rejected_location_count=$4,updated_at=now() where id=$1`, mapID, len(parsed), digestBytes, rejected); err != nil {
+	if err := q.MarkMapReady(ctx, db.MarkMapReadyParams{MapID: mapUUID, LocationCount: int32(len(parsed)), ContentHash: digestBytes, Rejected: int32(rejected)}); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if _, err := tx.Exec(ctx, `insert into map_upload_events(user_id,map_id,location_count) values($1,$2,$3)`, userID, mapID, len(parsed)); err != nil {
+	if err := q.InsertUploadEvent(ctx, db.InsertUploadEventParams{UserID: userUUID, MapID: mapUUID, LocationCount: int32(len(parsed))}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -255,7 +239,7 @@ func (s *pgStore) ingestCustomMap(userID, mapID, displayName, description, visib
 	return details.Map, nil
 }
 
-func (s *pgStore) UpdateCustomMap(userID, mapID string, update contracts.CustomMapUpdate) (contracts.CustomMap, error) {
+func (s *DB) UpdateCustomMap(userID, mapID string, update contracts.CustomMapUpdate) (contracts.CustomMap, error) {
 	name := strings.TrimSpace(update.DisplayName)
 	if name == "" || len(name) > 80 || len(update.Description) > 500 {
 		return contracts.CustomMap{}, errors.New("invalid map details")
@@ -267,22 +251,26 @@ func (s *pgStore) UpdateCustomMap(userID, mapID string, update contracts.CustomM
 		return contracts.CustomMap{}, err
 	}
 	mapID = canonicalID
-	tag, err := s.pool.Exec(ctx, `
-		update maps
-		set display_name=$3, description=$4, visibility=$5, difficulty=$6, thumbnail_variant=$7, thumbnail_key=$8, updated_at=now()
-		where id=$1 and owner_user_id=$2 and archived_at is null
-	`, strings.TrimSpace(mapID), strings.TrimSpace(userID), name, strings.TrimSpace(update.Description), normalizeMapVisibility(update.Visibility), normalizeMapDifficulty(update.Difficulty), normalizeThumbnailVariant(update.ThumbnailVariant), normalizeThumbnailKey(update.ThumbnailKey, update.ThumbnailVariant))
+	mapUUID, err := profileUUID(strings.TrimSpace(mapID))
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	userUUID, err := profileUUID(strings.TrimSpace(userID))
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
+	rows, err := s.db.UpdateMapDetails(ctx, db.UpdateMapDetailsParams{DisplayName: name, Description: strings.TrimSpace(update.Description), Visibility: db.GdMapVisibility(normalizeMapVisibility(update.Visibility)), Difficulty: db.GdMapDifficulty(normalizeMapDifficulty(update.Difficulty)), ThumbnailVariant: int32(normalizeThumbnailVariant(update.ThumbnailVariant)), ThumbnailKey: normalizeThumbnailKey(update.ThumbnailKey, update.ThumbnailVariant), MapID: mapUUID, UserID: userUUID})
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
+	if rows == 0 {
 		return contracts.CustomMap{}, pgx.ErrNoRows
 	}
 	details, _, err := s.GetMap(userID, mapID)
 	return details.Map, err
 }
 
-func (s *pgStore) PublishCustomMap(userID, mapID string) (contracts.CustomMap, error) {
+func (s *DB) PublishCustomMap(userID, mapID string) (contracts.CustomMap, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	canonicalID, _, err := resolveMapIdentity(ctx, s.pool, mapID)
@@ -290,22 +278,26 @@ func (s *pgStore) PublishCustomMap(userID, mapID string) (contracts.CustomMap, e
 		return contracts.CustomMap{}, err
 	}
 	mapID = canonicalID
-	tag, err := s.pool.Exec(ctx, `
-		update maps
-		set visibility='public', published_at=coalesce(published_at, now()), updated_at=now()
-		where id=$1 and owner_user_id=$2 and archived_at is null and status='ready'
-	`, strings.TrimSpace(mapID), strings.TrimSpace(userID))
+	mapUUID, err := profileUUID(strings.TrimSpace(mapID))
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	userUUID, err := profileUUID(strings.TrimSpace(userID))
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
+	rows, err := s.db.PublishMap(ctx, db.PublishMapParams{MapID: mapUUID, UserID: userUUID})
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
+	if rows == 0 {
 		return contracts.CustomMap{}, pgx.ErrNoRows
 	}
 	details, _, err := s.GetMap(userID, mapID)
 	return details.Map, err
 }
 
-func (s *pgStore) SetMapFavorite(userID, mapID string, favorite bool) (contracts.CustomMap, error) {
+func (s *DB) SetMapFavorite(userID, mapID string, favorite bool) (contracts.CustomMap, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -318,38 +310,42 @@ func (s *pgStore) SetMapFavorite(userID, mapID string, favorite bool) (contracts
 		return contracts.CustomMap{}, err
 	}
 	mapID = canonicalID
-	var visible bool
-	var ownerUserID string
-	if err := tx.QueryRow(ctx, `
-		select
-			exists(select 1 from maps where id=$1 and archived_at is null and `+mapVisibleToUserSQL("maps", 2, true)+`),
-			coalesce((select owner_user_id::text from maps where id=$1 and archived_at is null), '')
-	`, strings.TrimSpace(mapID), strings.TrimSpace(userID)).Scan(&visible, &ownerUserID); err != nil {
+	mapUUID, err := profileUUID(strings.TrimSpace(mapID))
+	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if !visible {
+	userUUID, err := profileUUID(strings.TrimSpace(userID))
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
+	q := db.New(tx)
+	visibility, err := q.FavoriteVisibility(ctx, db.FavoriteVisibilityParams{MapID: mapUUID, UserID: userUUID})
+	if err != nil {
+		return contracts.CustomMap{}, err
+	}
+	if !visibility.Visible {
 		return contracts.CustomMap{}, pgx.ErrNoRows
 	}
 	changed := false
 	if favorite {
-		tag, err := tx.Exec(ctx, `insert into map_favorites(map_id,user_id) values($1,$2) on conflict do nothing`, strings.TrimSpace(mapID), strings.TrimSpace(userID))
+		rows, err := q.AddFavorite(ctx, db.AddFavoriteParams{MapID: mapUUID, UserID: userUUID})
 		if err != nil {
 			return contracts.CustomMap{}, err
 		}
-		if tag.RowsAffected() > 0 {
+		if rows > 0 {
 			changed = true
 			if err := incrementMapFavoriteStats(ctx, tx, strings.TrimSpace(mapID), strings.TrimSpace(userID)); err != nil {
 				return contracts.CustomMap{}, err
 			}
 		}
 	} else {
-		tag, err := tx.Exec(ctx, `delete from map_favorites where map_id=$1 and user_id=$2`, strings.TrimSpace(mapID), strings.TrimSpace(userID))
+		rows, err := q.RemoveFavorite(ctx, db.RemoveFavoriteParams{MapID: mapUUID, UserID: userUUID})
 		if err != nil {
 			return contracts.CustomMap{}, err
 		}
-		if tag.RowsAffected() > 0 {
+		if rows > 0 {
 			changed = true
-			if _, err := tx.Exec(ctx, `update maps set favorite_count=greatest(favorite_count-1,0), updated_at=now() where id=$1`, strings.TrimSpace(mapID)); err != nil {
+			if err := q.DecrementFavoriteCount(ctx, mapUUID); err != nil {
 				return contracts.CustomMap{}, err
 			}
 			if err := refreshMapTrendingScore(ctx, tx, strings.TrimSpace(mapID)); err != nil {
@@ -357,8 +353,8 @@ func (s *pgStore) SetMapFavorite(userID, mapID string, favorite bool) (contracts
 			}
 		}
 	}
-	if changed && ownerUserID != "" {
-		if _, err := refreshMapCreatorTrust(ctx, tx, ownerUserID); err != nil {
+	if changed && visibility.OwnerUserID != "" {
+		if _, err := refreshMapCreatorTrust(ctx, tx, visibility.OwnerUserID); err != nil {
 			return contracts.CustomMap{}, err
 		}
 	}
@@ -372,7 +368,7 @@ func (s *pgStore) SetMapFavorite(userID, mapID string, favorite bool) (contracts
 	return details.Map, nil
 }
 
-func (s *pgStore) ArchiveCustomMap(userID, mapID string, allowAnyMap bool) error {
+func (s *DB) ArchiveCustomMap(userID, mapID string, allowAnyMap bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -385,27 +381,24 @@ func (s *pgStore) ArchiveCustomMap(userID, mapID string, allowAnyMap bool) error
 		return err
 	}
 	mapID = canonicalID
-	tag, err := tx.Exec(ctx, `
-		delete from maps m
-		where m.id=$1
-		  and (m.owner_user_id=$2 or $3)
-		  and m.archived_at is null
-		  and not exists(select 1 from match_round_plans p where p.map_id=m.id)
-		  and not exists(select 1 from parties p where p.map_id=m.id)
-	`, strings.TrimSpace(mapID), strings.TrimSpace(userID), allowAnyMap)
+	mapUUID, err := profileUUID(strings.TrimSpace(mapID))
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		tag, err = tx.Exec(ctx, `
-			update maps
-			set status='archived', archived_at=now(), updated_at=now()
-			where id=$1
-			  and (owner_user_id=$2 or $3)
-			  and archived_at is null
-		`, strings.TrimSpace(mapID), strings.TrimSpace(userID), allowAnyMap)
+	userUUID, err := profileUUID(strings.TrimSpace(userID))
+	if err != nil {
+		return err
 	}
-	if err == nil && tag.RowsAffected() == 0 {
+	q := db.New(tx)
+	params := db.DeleteArchivableMapParams{MapID: mapUUID, UserID: userUUID, AllowAny: allowAnyMap}
+	rows, err := q.DeleteArchivableMap(ctx, params)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		rows, err = q.ArchiveMap(ctx, db.ArchiveMapParams{MapID: mapUUID, UserID: userUUID, AllowAny: allowAnyMap})
+	}
+	if err == nil && rows == 0 {
 		return pgx.ErrNoRows
 	}
 	if err != nil {
@@ -413,3 +406,30 @@ func (s *pgStore) ArchiveCustomMap(userID, mapID string, allowAnyMap bool) error
 	}
 	return tx.Commit(ctx)
 }
+
+func insertIngestLocations(ctx context.Context, q *db.Queries, storageID int32, rows []mapRow) error {
+	arg := db.InsertLocationsParams{StorageID: storageID}
+	for _, row := range rows {
+		heading, pitch, pano := int16(0), int16(0), ""
+		if row.HeadingCDeg != nil {
+			heading = *row.HeadingCDeg
+		}
+		if row.PitchCDeg != nil {
+			pitch = *row.PitchCDeg
+		}
+		if row.PanoID != nil {
+			pano = *row.PanoID
+		}
+		arg.Lats = append(arg.Lats, row.LatE7)
+		arg.Lngs = append(arg.Lngs, row.LngE7)
+		arg.Countries = append(arg.Countries, row.Country)
+		arg.Panos = append(arg.Panos, pano)
+		arg.Headings = append(arg.Headings, heading)
+		arg.Pitches = append(arg.Pitches, pitch)
+		arg.RandKeys = append(arg.RandKeys, row.RandKey)
+	}
+	return q.InsertLocations(ctx, arg)
+}
+
+func ingestText(value string) pgtype.Text { return pgtype.Text{String: value, Valid: true} }
+func ingestInt4(value int32) pgtype.Int4  { return pgtype.Int4{Int32: value, Valid: true} }

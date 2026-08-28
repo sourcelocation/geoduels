@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,23 +12,24 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/persistence"
+	preferencesdomain "geoduels/pkg/preferences"
 )
 
 type preferencesTestStore struct {
-	persistence.Store
+	testRepositories
 	value persistence.UserPreferences
 }
 
-func (s *preferencesTestStore) GetUserPreferences(string) (persistence.UserPreferences, error) {
+func (s *preferencesTestStore) GetUserPreferences(context.Context, string) (persistence.UserPreferences, error) {
 	return s.value, nil
 }
 
-func (s *preferencesTestStore) UpdateUserPreferences(_ string, version int, preferences json.RawMessage, revision int64) (persistence.UserPreferences, error) {
+func (s *preferencesTestStore) UpdateUserPreferences(_ context.Context, _ string, _ int, preferences json.RawMessage, revision int64) (persistence.UserPreferences, error) {
 	if revision != s.value.Revision {
-		return persistence.UserPreferences{}, persistence.ErrPreferenceRevisionConflict
+		return persistence.UserPreferences{}, ErrPreferenceRevisionConflict
 	}
 	s.value = persistence.UserPreferences{
-		SchemaVersion: version,
+		SchemaVersion: 1,
 		Preferences:   preferences,
 		Revision:      revision + 1,
 	}
@@ -42,7 +45,21 @@ func preferenceRequest(t *testing.T, method, body string, store *preferencesTest
 	}
 	request := httptest.NewRequest(method, "/v1/me/preferences", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
-	return &api{store: store, appAuthSecret: secret}, request, httptest.NewRecorder()
+	return &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, preferences: preferencesdomain.NewService(preferenceTestAdapter{store: store}), appAuthSecret: secret}, request, httptest.NewRecorder()
+}
+
+type preferenceTestAdapter struct{ store *preferencesTestStore }
+
+func (a preferenceTestAdapter) GetUserPreferences(ctx context.Context, userID string) (preferencesdomain.UserPreferences, error) {
+	v, err := a.store.GetUserPreferences(ctx, userID)
+	return preferencesdomain.UserPreferences{SchemaVersion: v.SchemaVersion, Preferences: v.Preferences, Revision: v.Revision}, err
+}
+func (a preferenceTestAdapter) UpdateUserPreferences(ctx context.Context, userID string, version int, value json.RawMessage, revision int64) (preferencesdomain.UserPreferences, error) {
+	v, err := a.store.UpdateUserPreferences(ctx, userID, version, value, revision)
+	if errors.Is(err, ErrPreferenceRevisionConflict) {
+		return preferencesdomain.UserPreferences{}, preferencesdomain.ErrRevisionConflict
+	}
+	return preferencesdomain.UserPreferences{SchemaVersion: v.SchemaVersion, Preferences: v.Preferences, Revision: v.Revision}, err
 }
 
 func TestUpdateUserPreferences(t *testing.T) {
@@ -71,5 +88,30 @@ func TestUpdateUserPreferencesRejectsStaleRevision(t *testing.T) {
 
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+	}
+}
+
+func TestGetUserPreferences(t *testing.T) {
+	store := &preferencesTestStore{value: persistence.UserPreferences{
+		SchemaVersion: 1,
+		Preferences:   json.RawMessage(`{"version":1,"audioMuted":true}`),
+		Revision:      7,
+	}}
+	a, request, response := preferenceRequest(t, http.MethodGet, "", store)
+
+	a.userPreferences(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var got struct {
+		Preferences json.RawMessage `json:"preferences"`
+		Revision    int64           `json:"revision"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 7 || string(got.Preferences) != `{"version":1,"audioMuted":true}` {
+		t.Fatalf("response = %+v", got)
 	}
 }

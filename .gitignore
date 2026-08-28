@@ -58,3 +58,6 @@ apps/web/assets/source-map-thumbnails/continents/*
 !apps/web/assets/source-map-thumbnails/continents/.gitkeep
 apps/web/assets/source-map-thumbnails/countries/*
 !apps/web/assets/source-map-thumbnails/countries/.gitkeep
+
+# sqlc generated code is regenerated via: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+pkg/persistence/sqlc/

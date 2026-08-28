@@ -15,8 +15,8 @@ import (
 )
 
 type adminModerationTestStore struct {
-	persistence.Store
-	identity         persistence.Identity
+	testRepositories
+	identity         Identity
 	bannedUserID     string
 	bannedReason     string
 	banned           bool
@@ -28,7 +28,7 @@ type adminModerationTestStore struct {
 
 const moderationTargetUserID = "00000000-0000-7000-8000-000000000002"
 
-func (s *adminModerationTestStore) GetIdentity(sub string) (persistence.Identity, error) {
+func (s *adminModerationTestStore) GetIdentity(sub string) (Identity, error) {
 	return s.identity, nil
 }
 
@@ -49,10 +49,10 @@ func TestAdminCanListAndGrantBadges(t *testing.T) {
 		t.Fatalf("issue token: %v", err)
 	}
 	store := &adminModerationTestStore{
-		identity:        persistence.Identity{Sub: "admin-1", IsAdmin: true},
+		identity:        Identity{Sub: "admin-1", IsAdmin: true},
 		grantableBadges: []persistence.AdminBadgeDefinition{{ID: "event-winner-2026", Label: "2026 Event Winner", MaxLevel: 1}},
 	}
-	a := &api{store: store, appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/v1/admin/badges", nil)
 	listReq.Header.Set("Authorization", "Bearer "+token)
@@ -80,8 +80,8 @@ func TestNonAdminCannotGrantBadges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
-	store := &adminModerationTestStore{identity: persistence.Identity{Sub: "player-1"}}
-	a := &api{store: store, appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
+	store := &adminModerationTestStore{identity: Identity{Sub: "player-1"}}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/badges/grant", strings.NewReader(`{"nickname":"MapMaster","badgeId":"event-winner-2026"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
@@ -120,13 +120,13 @@ func TestModeratorCanBanPlayer(t *testing.T) {
 		t.Fatalf("issue token: %v", err)
 	}
 	store := &adminModerationTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:         "moderator-1",
 			IsModerator: true,
 		},
 	}
 	a := &api{
-		store:                store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}
@@ -159,13 +159,13 @@ func TestModeratorCanCheatingBanFromModeratorRoute(t *testing.T) {
 		t.Fatalf("issue token: %v", err)
 	}
 	store := &adminModerationTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:         "moderator-1",
 			IsModerator: true,
 		},
 	}
 	a := &api{
-		store:                store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}
@@ -195,13 +195,13 @@ func TestModeratorCanUnbanFromModeratorRoute(t *testing.T) {
 		t.Fatalf("issue token: %v", err)
 	}
 	store := &adminModerationTestStore{
-		identity: persistence.Identity{
+		identity: Identity{
 			Sub:         "moderator-1",
 			IsModerator: true,
 		},
 	}
 	a := &api{
-		store:                store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}
@@ -231,10 +231,10 @@ func TestNonModeratorCannotBanPlayer(t *testing.T) {
 		t.Fatalf("issue token: %v", err)
 	}
 	store := &adminModerationTestStore{
-		identity: persistence.Identity{Sub: "player-1"},
+		identity: Identity{Sub: "player-1"},
 	}
 	a := &api{
-		store:                store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}

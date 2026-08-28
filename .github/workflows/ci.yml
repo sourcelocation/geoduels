@@ -21,8 +21,10 @@ jobs:
           go-version: '1.26.x'
           cache: true
 
+      - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
       - run: go test ./...
       - run: go vet ./...
+      - run: bash scripts/check-backend-architecture.sh
 
   generated-queries:
     name: generated queries
@@ -36,9 +38,11 @@ jobs:
           cache: true
 
       - name: Regenerate sqlc query packages
+        # Generated code is gitignored and reproducible; a clean generate must
+        # succeed and the committed query files must compile.
         run: |
           go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
-          git diff --exit-code -- pkg/persistence/sqlc
+          go build ./pkg/persistence/...
 
   web:
     name: web

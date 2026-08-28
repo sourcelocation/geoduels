@@ -31,7 +31,11 @@ func NewFromEnv() (*DB, error) {
 		cfg.MaxConns = int32(maxConns)
 	}
 	if strings.EqualFold(os.Getenv("POSTGRES_PGBOUNCER"), "true") {
-		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+		// Use the unnamed extended-query flow so transaction-pooled PgBouncer
+		// never depends on connection-local prepared statements. Unlike simple
+		// protocol, this preserves PostgreSQL's inferred parameter types; that is
+		// required for sqlc JSON parameters represented as []byte.
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

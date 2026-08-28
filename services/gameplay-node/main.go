@@ -379,9 +379,11 @@ func (g *gameplayNode) ws(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
-	if snap.State != contracts.MatchEnded {
-		g.writeSnapshotToUser(userID, matchID, snap)
-	}
+	// Always send the initial snapshot, including for a match that has already
+	// ended in memory. Persistence can fail independently of the authoritative
+	// runtime; without this snapshot a reconnect receives ping acknowledgements
+	// but never leaves the client's awaiting-first-snapshot state.
+	g.writeSnapshotToUser(userID, matchID, snap)
 	g.publishRuntimeState(matchID, snap, userID)
 
 	for {
@@ -575,9 +577,13 @@ func (g *gameplayNode) terminalize(matchID string, snap *contracts.MatchSnapshot
 
 	finalized, err := g.persist.FinalizeMatch(*snap, g.nodeEpoch)
 	if err != nil {
+		g.mu.Lock()
+		delete(g.finalizing, matchID)
+		g.mu.Unlock()
 		g.metrics.DBWriteFailures.Inc()
 		observability.Log("error", "match finalization failed", map[string]any{
 			"matchId": matchID,
+			"error":   err.Error(),
 		})
 		return
 	}

@@ -1,6 +1,6 @@
 -- name: EnsureRankedSeasonSettings :exec
 INSERT INTO site_settings(key, value_json, updated_at)
-VALUES ('ranked_season', $1::jsonb, now())
+VALUES ('ranked_season', convert_from($1, 'UTF8')::jsonb, now())
 ON CONFLICT (key) DO NOTHING;
 
 -- name: GetActiveSeasonID :one
@@ -77,5 +77,5 @@ ON CONFLICT (user_id, mode, season_id) DO NOTHING;
 
 -- name: WriteRankedSeasonSettings :exec
 INSERT INTO site_settings(key, value_json, updated_at)
-VALUES ('ranked_season', $1::jsonb, now())
+VALUES ('ranked_season', convert_from($1, 'UTF8')::jsonb, now())
 ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_at = now();

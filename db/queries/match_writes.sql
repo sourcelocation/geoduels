@@ -36,25 +36,25 @@ WHERE match_id = $1;
 -- name: EnsureMatchRankedStats :exec
 INSERT INTO ranked_stats (user_id, mode, season_id, games_played, wins)
 SELECT input.user_id, sqlc.arg(mode), sqlc.arg(season_id), 0, 0
-FROM jsonb_to_recordset(sqlc.arg(player_ids_json)::jsonb) AS input(user_id uuid)
+FROM jsonb_to_recordset(convert_from(sqlc.arg(player_ids_json), 'UTF8')::jsonb) AS input(user_id uuid)
 ON CONFLICT (user_id, mode, season_id) DO NOTHING;
 
 -- name: EnsureMatchRanks :exec
 INSERT INTO ranks (user_id, mode, mmr, season_id)
 SELECT input.user_id, sqlc.arg(mode), sqlc.arg(mmr), sqlc.arg(season_id)
-FROM jsonb_to_recordset(sqlc.arg(player_ids_json)::jsonb) AS input(user_id uuid)
+FROM jsonb_to_recordset(convert_from(sqlc.arg(player_ids_json), 'UTF8')::jsonb) AS input(user_id uuid)
 ON CONFLICT (user_id, mode, season_id) DO NOTHING;
 
 -- name: EnsureMatchUserStats :exec
 INSERT INTO user_stats (user_id, games_played, wins)
 SELECT input.user_id, 0, 0
-FROM jsonb_to_recordset(sqlc.arg(player_ids_json)::jsonb) AS input(user_id uuid)
+FROM jsonb_to_recordset(convert_from(sqlc.arg(player_ids_json), 'UTF8')::jsonb) AS input(user_id uuid)
 ON CONFLICT (user_id) DO NOTHING;
 
 -- name: EnsureMatchUsers :exec
 INSERT INTO users (id, email, display_name, avatar_url, account_type)
 SELECT input.user_id, NULL, input.display_name, NULL, 'guest'
-FROM jsonb_to_recordset(sqlc.arg(players_json)::jsonb) AS input(user_id uuid, display_name text)
+FROM jsonb_to_recordset(convert_from(sqlc.arg(players_json), 'UTF8')::jsonb) AS input(user_id uuid, display_name text)
 ON CONFLICT (id) DO NOTHING;
 
 -- name: FindPartyIDByMatchID :one
@@ -109,7 +109,7 @@ LEFT JOIN ranks r
  AND r.season_id = sqlc.arg(season_id)
 WHERE mp.match_id = sqlc.arg(match_id)::uuid
   AND mp.user_id IN (
-    SELECT value::uuid FROM jsonb_array_elements_text(sqlc.arg(user_ids_json)::jsonb)
+    SELECT value::uuid FROM jsonb_array_elements_text(convert_from(sqlc.arg(user_ids_json), 'UTF8')::jsonb)
   );
 
 -- name: RecordRuntimeMatchEnded :exec
@@ -205,7 +205,7 @@ INSERT INTO match_players(
 SELECT
     sqlc.arg(match_id)::uuid, input.user_id, input.display_name, input.mmr, input.hp,
     input.rating_rd, input.total_score, sqlc.arg(ended_at)
-FROM jsonb_to_recordset(sqlc.arg(players_json)::jsonb) AS input(
+FROM jsonb_to_recordset(convert_from(sqlc.arg(players_json), 'UTF8')::jsonb) AS input(
     user_id uuid,
     display_name text,
     mmr integer,
@@ -224,7 +224,7 @@ ON CONFLICT (match_id, user_id) DO UPDATE SET
 -- name: UpsertPlayerMapBests :exec
 INSERT INTO player_map_bests(user_id, map_id, ruleset, best_score, match_id, achieved_at)
 SELECT input.user_id, sqlc.arg(map_id)::uuid, sqlc.arg(ruleset), input.total_score, sqlc.arg(match_id)::uuid, sqlc.arg(achieved_at)
-FROM jsonb_to_recordset(sqlc.arg(players_json)::jsonb) AS input(user_id uuid, total_score integer)
+FROM jsonb_to_recordset(convert_from(sqlc.arg(players_json), 'UTF8')::jsonb) AS input(user_id uuid, total_score integer)
 ON CONFLICT (user_id, map_id, ruleset) DO UPDATE
 SET best_score = excluded.best_score,
     match_id = excluded.match_id,
@@ -238,7 +238,7 @@ INSERT INTO ranked_guess_events(
 SELECT
     input.user_id, sqlc.arg(match_id)::uuid, input.round_number, input.score,
     input.guess_ms, input.evidence, input.occurred_at
-FROM jsonb_to_recordset(sqlc.arg(events_json)::jsonb) AS input(
+FROM jsonb_to_recordset(convert_from(sqlc.arg(events_json), 'UTF8')::jsonb) AS input(
     user_id uuid,
     round_number smallint,
     score smallint,

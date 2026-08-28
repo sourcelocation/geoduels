@@ -104,7 +104,7 @@ VALUES(
     sqlc.arg('action'),
     NULLIF(sqlc.arg('reason'), ''),
     sqlc.arg('expires_at'),
-    sqlc.arg('metadata')::jsonb
+    convert_from(sqlc.arg('metadata'), 'UTF8')::jsonb
 )
 RETURNING id;
 

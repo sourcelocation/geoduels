@@ -1,5 +1,5 @@
 -- name: CreatePlayerReportSignal :one
-INSERT INTO moderation_signals(subject_user_id,signal_type,source,severity,evidence_strength,reason_code,score,recommended_queue,reporter_user_id,match_id,payload_json,occurred_at) VALUES(sqlc.arg(subject_user_id)::uuid,sqlc.arg(signal_type),'player_report',sqlc.arg(severity),'limited',sqlc.arg(reason_code),sqlc.arg(score),true,sqlc.arg(reporter_user_id)::uuid,sqlc.arg(match_id)::uuid,sqlc.arg(payload_json)::jsonb,now()) ON CONFLICT (match_id,reporter_user_id,subject_user_id) WHERE source='player_report' AND reporter_user_id IS NOT NULL AND match_id IS NOT NULL DO NOTHING RETURNING id;
+INSERT INTO moderation_signals(subject_user_id,signal_type,source,severity,evidence_strength,reason_code,score,recommended_queue,reporter_user_id,match_id,payload_json,occurred_at) VALUES(sqlc.arg(subject_user_id)::uuid,sqlc.arg(signal_type),'player_report',sqlc.arg(severity),'limited',sqlc.arg(reason_code),sqlc.arg(score),true,sqlc.arg(reporter_user_id)::uuid,sqlc.arg(match_id)::uuid,convert_from(sqlc.arg(payload_json), 'UTF8')::jsonb,now()) ON CONFLICT (match_id,reporter_user_id,subject_user_id) WHERE source='player_report' AND reporter_user_id IS NOT NULL AND match_id IS NOT NULL DO NOTHING RETURNING id;
 
 -- name: GetSignalNotificationPayload :one
 SELECT s.id AS signal_id,s.subject_user_id::text AS subject_user_id,coalesce(nullif(u.display_name,''),s.subject_user_id::text) AS subject_display_name,s.severity,s.evidence_strength,s.reason_code,s.occurred_at FROM moderation_signals s LEFT JOIN users u ON u.id=s.subject_user_id WHERE s.id=sqlc.arg(signal_id);
@@ -29,7 +29,7 @@ INSERT INTO moderation_signals(
 VALUES(
     sqlc.arg(subject_user_id)::uuid, sqlc.arg(signal_type), 'risk_engine', sqlc.arg(severity), sqlc.arg(evidence_strength),
     NULLIF(sqlc.arg(detector_key)::text, ''), NULLIF(sqlc.arg(detector_version)::text, ''), sqlc.arg(reason_code), sqlc.arg(score), sqlc.arg(recommended_queue),
-    sqlc.arg(match_id)::uuid, sqlc.arg(payload_json)::jsonb, sqlc.arg(occurred_at)
+    sqlc.arg(match_id)::uuid, convert_from(sqlc.arg(payload_json), 'UTF8')::jsonb, sqlc.arg(occurred_at)
 )
 ON CONFLICT (subject_user_id, coalesce(match_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(detector_key, ''), coalesce(detector_version, ''), reason_code)
     WHERE source = 'risk_engine'

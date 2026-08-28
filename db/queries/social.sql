@@ -32,7 +32,7 @@ insert into friend_codes(code,user_id,expires_at) values($1,$2,$3);
 insert into friendships(user_id_low,user_id_high,created_from_request_id) values(least(sqlc.arg(user_a)::uuid,sqlc.arg(user_b)::uuid),greatest(sqlc.arg(user_a)::uuid,sqlc.arg(user_b)::uuid),sqlc.arg(created_from_request_id)) on conflict do nothing;
 
 -- name: InsertUserEvent :exec
-insert into user_events(user_id,sequence,type,payload_json) values(sqlc.arg(user_id),sqlc.arg(event_sequence),sqlc.arg(event_type),sqlc.arg(payload_json)::jsonb);
+insert into user_events(user_id,sequence,type,payload_json) values(sqlc.arg(user_id),sqlc.arg(event_sequence),sqlc.arg(event_type),convert_from(sqlc.arg(payload_json), 'UTF8')::jsonb);
 
 -- name: ListFriends :many
 with friend_ids as (select case when user_id_low=$1 then user_id_high else user_id_low end user_id,created_at from friendships where user_id_low=$1 or user_id_high=$1)

@@ -41,7 +41,7 @@ VALUES(
     sqlc.arg(match_id), sqlc.arg(preset_id), sqlc.arg(mode), 'live', sqlc.arg(ranked), sqlc.arg(source_kind),
     NULLIF(sqlc.arg(source_party_id)::text, '')::uuid, NULLIF(sqlc.arg(source_party_invite_code)::text, ''),
     sqlc.arg(node_id), sqlc.arg(node_epoch), sqlc.arg(public_route),
-    sqlc.arg(config_json)::jsonb, NULLIF(sqlc.arg(map_id)::text, '')::uuid,
+    convert_from(sqlc.arg(config_json), 'UTF8')::jsonb, NULLIF(sqlc.arg(map_id)::text, '')::uuid,
     NULLIF(sqlc.arg(return_target_kind)::text, ''), NULLIF(sqlc.arg(return_target_map_id)::text, '')::uuid, NULLIF(sqlc.arg(return_target_party_id)::text, '')::uuid,
     now() + sqlc.arg(lease_ttl)::interval, now()
 )

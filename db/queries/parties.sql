@@ -175,7 +175,7 @@ WHERE m.party_id = reopened.id;
 UPDATE party_members SET ready = false WHERE party_id = $1;
 
 -- name: SetPartyConfig :exec
-UPDATE parties SET config_json = sqlc.arg(config_json)::jsonb, map_id = sqlc.arg(map_id), updated_at = now() WHERE id = sqlc.arg(party_id);
+UPDATE parties SET config_json = convert_from(sqlc.arg(config_json), 'UTF8')::jsonb, map_id = sqlc.arg(map_id), updated_at = now() WHERE id = sqlc.arg(party_id);
 
 -- name: SetPartyMemberTeam :execrows
 UPDATE party_members SET team_id = $3

@@ -186,7 +186,7 @@ func (s *DB) SetPartyConfig(partyID string, cfg contracts.MatchConfig) (contract
 		return contracts.PartySnapshot{}, ErrPartyMapUnavailable
 	}
 	body, _ := json.Marshal(cfg)
-	if err := q.SetPartyConfig(ctx, db.SetPartyConfigParams{ID: partyUUID, Column2: body, MapID: mapUUID}); err != nil {
+	if err := q.SetPartyConfig(ctx, db.SetPartyConfigParams{PartyID: partyUUID, ConfigJson: body, MapID: mapUUID}); err != nil {
 		return contracts.PartySnapshot{}, err
 	}
 	if err := q.ResetPartyMembersReady(ctx, partyUUID); err != nil {
@@ -389,8 +389,8 @@ func (s *DB) CloseInactiveOpenParties(partyIDs []string, inactiveFor time.Durati
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	return s.db.CloseInactiveOpenParties(ctx, db.CloseInactiveOpenPartiesParams{
-		Column1: chatUUIDs(partyIDs),
-		Column2: inactiveFor.Seconds(),
+		PartyIds:        chatUUIDs(partyIDs),
+		InactiveSeconds: inactiveFor.Seconds(),
 	})
 }
 
@@ -637,9 +637,9 @@ func (s *DB) listPartyMembers(ctx context.Context, partyID string) ([]contracts.
 		member.UserID = row.UserID.String()
 		member.DisplayName = row.DisplayName
 		member.AvatarURL = row.AvatarUrl
-		member.IsGuest = row.Column4
+		member.IsGuest = row.IsGuest
 		member.IsAdmin = row.IsAdmin
-		member.TeamID = anyText(row.Coalesce)
+		member.TeamID = anyText(row.TeamID)
 		member.Role = string(row.Role)
 		member.Ready = row.Ready
 		member.JoinedAt = row.JoinedAt.Time

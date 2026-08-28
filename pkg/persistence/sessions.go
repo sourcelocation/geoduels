@@ -57,7 +57,7 @@ func (s *DB) CreateAuthSession(userID, refreshTokenHash string, expiresAt time.T
 			return queryErr
 		}
 		if strings.TrimSpace(params.IPAddress) != "" {
-			if queryErr = q.SetRegistrationIP(ctx, db.SetRegistrationIPParams{IpAddress: sessionText(strings.TrimSpace(params.IPAddress)), UserID: uid}); queryErr != nil {
+			if queryErr = q.SetRegistrationIP(ctx, db.SetRegistrationIPParams{RegistrationIpAddress: sessionText(strings.TrimSpace(params.IPAddress)), UserID: uid}); queryErr != nil {
 				return queryErr
 			}
 		}
@@ -94,7 +94,7 @@ func (s *DB) RotateAuthSession(sessionID, currentHash, nextHash string, expiresA
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	row, err := s.db.RotateAuthSession(ctx, db.RotateAuthSessionParams{ID: id, CurrentHash: currentHash, NextHash: nextHash, ExpiresAt: sessionTime(expiresAt), UsedAt: sessionTime(usedAt)})
+	row, err := s.db.RotateAuthSession(ctx, db.RotateAuthSessionParams{NextRefreshTokenHash: nextHash, ExpiresAt: sessionTime(expiresAt), LastUsedAt: sessionTime(usedAt), SessionID: id, CurrentRefreshTokenHash: currentHash})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RefreshTokenRecord{}, false, nil
 	}

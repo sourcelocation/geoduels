@@ -35,7 +35,7 @@ func (a notificationTxAdapter) upsert(ctx context.Context, userID, typ, dedupe s
 	if err != nil {
 		return err
 	}
-	row, err := a.queries.UpsertUserNotification(ctx, db.UpsertUserNotificationParams{UserID: u, NotificationType: db.GdNotificationType(typ), DedupeKey: dedupe, Payload: body})
+	row, err := a.queries.UpsertUserNotification(ctx, db.UpsertUserNotificationParams{UserID: u, Type: db.GdNotificationType(typ), DedupeKey: dedupe, PayloadJson: body})
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func (a notificationTxAdapter) enqueue(ctx context.Context, typ, dedupe string, 
 	if err != nil {
 		return err
 	}
-	return a.queries.EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{NotificationType: db.GdNotificationOutboxType(typ), DedupeKey: dedupe, Payload: body})
+	return a.queries.EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{Type: db.GdNotificationOutboxType(typ), DedupeKey: dedupe, PayloadJson: body})
 }
 
 func notificationItem(row db.ClaimPendingNotificationRow) NotificationOutboxItem {

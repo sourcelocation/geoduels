@@ -77,10 +77,10 @@ func (s *DB) ImportOfficialMap(adminUserID string, input OfficialMapImportInput,
 	}
 	q := db.New(tx)
 	if err := q.UpsertOfficialMap(ctx, db.UpsertOfficialMapParams{
-		ID: mapUUID, DisplayName: displayName, Description: strings.TrimSpace(input.Description),
+		MapID: mapUUID, DisplayName: displayName, Description: strings.TrimSpace(input.Description),
 		Visibility: db.GdMapVisibility(visibility), Difficulty: db.GdMapDifficulty(difficulty), ThumbnailVariant: int32(thumbnailVariant),
-		ThumbnailKey: thumbnailKey, ContentHash: digestBytes, Rejected: int32(rejected),
-		OfficialBy: strings.TrimSpace(adminUserID), RegionType: regionType, RegionCode: regionCode,
+		ThumbnailKey: thumbnailKey, ContentHash: digestBytes, RejectedLocationCount: int32(rejected),
+		OfficialBy: strings.TrimSpace(adminUserID), OfficialRegionType: regionType, OfficialRegionCode: regionCode,
 	}); err != nil {
 		return contracts.CustomMap{}, err
 	}
@@ -100,10 +100,10 @@ func (s *DB) ImportOfficialMap(adminUserID string, input OfficialMapImportInput,
 	if err := q.DeleteCountryStats(ctx, mapUUID); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if err := q.InsertCountryStats(ctx, db.InsertCountryStatsParams{MapID: mapUUID, StorageID: storageID}); err != nil {
+	if err := q.InsertCountryStats(ctx, db.InsertCountryStatsParams{MapID: mapUUID, MapStorageID: storageID}); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if err := q.MarkMapReady(ctx, db.MarkMapReadyParams{MapID: mapUUID, LocationCount: int32(len(parsed)), ContentHash: digestBytes, Rejected: int32(rejected)}); err != nil {
+	if err := q.MarkMapReady(ctx, db.MarkMapReadyParams{MapID: mapUUID, LocationCount: int32(len(parsed)), ContentHash: digestBytes, RejectedLocationCount: int32(rejected)}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := q.UpsertAlias(ctx, db.UpsertAliasParams{Alias: mapKey, MapID: mapUUID}); err != nil {
@@ -177,7 +177,7 @@ func (s *DB) ingestCustomMap(userID, mapID, displayName, description, visibility
 		if parseErr != nil {
 			return contracts.CustomMap{}, parseErr
 		}
-		err = q.CreateMap(ctx, db.CreateMapParams{MapID: mapUUID, UserID: userUUID, DisplayName: displayName, Description: strings.TrimSpace(description), Visibility: db.GdMapVisibility(visibility), Difficulty: db.GdMapDifficulty(difficulty), ThumbnailVariant: int32(thumbnailVariant), ThumbnailKey: thumbnailKey})
+		err = q.CreateMap(ctx, db.CreateMapParams{MapID: mapUUID, OwnerUserID: userUUID, DisplayName: displayName, Description: strings.TrimSpace(description), Visibility: db.GdMapVisibility(visibility), Difficulty: db.GdMapDifficulty(difficulty), ThumbnailVariant: int32(thumbnailVariant), ThumbnailKey: thumbnailKey})
 	} else {
 		var canonicalID string
 		if canonicalID, _, err = resolveMapIdentity(ctx, tx, mapID); err == nil {
@@ -216,14 +216,14 @@ func (s *DB) ingestCustomMap(userID, mapID, displayName, description, visibility
 	if err := q.DeleteCountryStats(ctx, mapUUID); err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if err := q.InsertCountryStats(ctx, db.InsertCountryStatsParams{MapID: mapUUID, StorageID: storageID}); err != nil {
+	if err := q.InsertCountryStats(ctx, db.InsertCountryStatsParams{MapID: mapUUID, MapStorageID: storageID}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	digestBytes, err := hex.DecodeString(digest)
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if err := q.MarkMapReady(ctx, db.MarkMapReadyParams{MapID: mapUUID, LocationCount: int32(len(parsed)), ContentHash: digestBytes, Rejected: int32(rejected)}); err != nil {
+	if err := q.MarkMapReady(ctx, db.MarkMapReadyParams{MapID: mapUUID, LocationCount: int32(len(parsed)), ContentHash: digestBytes, RejectedLocationCount: int32(rejected)}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := q.InsertUploadEvent(ctx, db.InsertUploadEventParams{UserID: userUUID, MapID: mapUUID, LocationCount: int32(len(parsed))}); err != nil {
@@ -259,7 +259,7 @@ func (s *DB) UpdateCustomMap(userID, mapID string, update contracts.CustomMapUpd
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	rows, err := s.db.UpdateMapDetails(ctx, db.UpdateMapDetailsParams{DisplayName: name, Description: strings.TrimSpace(update.Description), Visibility: db.GdMapVisibility(normalizeMapVisibility(update.Visibility)), Difficulty: db.GdMapDifficulty(normalizeMapDifficulty(update.Difficulty)), ThumbnailVariant: int32(normalizeThumbnailVariant(update.ThumbnailVariant)), ThumbnailKey: normalizeThumbnailKey(update.ThumbnailKey, update.ThumbnailVariant), MapID: mapUUID, UserID: userUUID})
+	rows, err := s.db.UpdateMapDetails(ctx, db.UpdateMapDetailsParams{DisplayName: name, Description: strings.TrimSpace(update.Description), Visibility: db.GdMapVisibility(normalizeMapVisibility(update.Visibility)), Difficulty: db.GdMapDifficulty(normalizeMapDifficulty(update.Difficulty)), ThumbnailVariant: int32(normalizeThumbnailVariant(update.ThumbnailVariant)), ThumbnailKey: normalizeThumbnailKey(update.ThumbnailKey, update.ThumbnailVariant), MapID: mapUUID, OwnerUserID: userUUID})
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
@@ -286,7 +286,7 @@ func (s *DB) PublishCustomMap(userID, mapID string) (contracts.CustomMap, error)
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	rows, err := s.db.PublishMap(ctx, db.PublishMapParams{MapID: mapUUID, UserID: userUUID})
+	rows, err := s.db.PublishMap(ctx, db.PublishMapParams{ID: mapUUID, OwnerUserID: userUUID})
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
@@ -319,7 +319,7 @@ func (s *DB) SetMapFavorite(userID, mapID string, favorite bool) (contracts.Cust
 		return contracts.CustomMap{}, err
 	}
 	q := db.New(tx)
-	visibility, err := q.FavoriteVisibility(ctx, db.FavoriteVisibilityParams{MapID: mapUUID, UserID: userUUID})
+	visibility, err := q.FavoriteVisibility(ctx, db.FavoriteVisibilityParams{ID: mapUUID, OwnerUserID: userUUID})
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
@@ -408,7 +408,7 @@ func (s *DB) ArchiveCustomMap(userID, mapID string, allowAnyMap bool) error {
 }
 
 func insertIngestLocations(ctx context.Context, q *db.Queries, storageID int32, rows []mapRow) error {
-	arg := db.InsertLocationsParams{StorageID: storageID}
+	arg := db.InsertLocationsParams{MapStorageID: storageID}
 	for _, row := range rows {
 		heading, pitch, pano := int16(0), int16(0), ""
 		if row.HeadingCDeg != nil {
@@ -420,13 +420,13 @@ func insertIngestLocations(ctx context.Context, q *db.Queries, storageID int32, 
 		if row.PanoID != nil {
 			pano = *row.PanoID
 		}
-		arg.Lats = append(arg.Lats, row.LatE7)
-		arg.Lngs = append(arg.Lngs, row.LngE7)
-		arg.Countries = append(arg.Countries, row.Country)
-		arg.Panos = append(arg.Panos, pano)
-		arg.Headings = append(arg.Headings, heading)
-		arg.Pitches = append(arg.Pitches, pitch)
-		arg.RandKeys = append(arg.RandKeys, row.RandKey)
+		arg.LatE7 = append(arg.LatE7, row.LatE7)
+		arg.LngE7 = append(arg.LngE7, row.LngE7)
+		arg.Country = append(arg.Country, row.Country)
+		arg.PanoID = append(arg.PanoID, pano)
+		arg.HeadingCdeg = append(arg.HeadingCdeg, heading)
+		arg.PitchCdeg = append(arg.PitchCdeg, pitch)
+		arg.RandKeyI = append(arg.RandKeyI, row.RandKey)
 	}
 	return q.InsertLocations(ctx, arg)
 }

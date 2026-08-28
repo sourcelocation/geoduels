@@ -16,10 +16,10 @@ import (
 )
 
 func mapFromQueryRow(r db.ListMapsRow) contracts.CustomMap {
-	return mapFromParts(r.MID, r.Coalesce, r.Coalesce_2, r.Column4, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.Column13, r.Column14, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Exists, r.Btrim, r.Exists_2, r.Exists_3, r.Exists_4, r.CreatedAt, r.UpdatedAt, r.BestScore, r.Coalesce_3, r.AchievedAt)
+	return mapFromParts(r.ID, r.MapKey, r.OwnerUserID, r.AuthorDisplayName, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.IsSystem, r.IsOfficial, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Favorited, r.OfficialRegion, r.ModeMoving, r.ModeNoMove, r.ModeNmpz, r.CreatedAt, r.UpdatedAt, r.BestScore, r.BestMatchID, r.AchievedAt)
 }
 func mapFromGetRow(r db.GetMapRow) contracts.CustomMap {
-	return mapFromParts(r.MID, r.Coalesce, r.Coalesce_2, r.Column4, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.Column13, r.Column14, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Exists, r.Btrim, r.Exists_2, r.Exists_3, r.Exists_4, r.CreatedAt, r.UpdatedAt, r.BestScore, r.Coalesce_3, r.AchievedAt)
+	return mapFromParts(r.ID, r.MapKey, r.OwnerUserID, r.AuthorDisplayName, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.IsSystem, r.IsOfficial, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Favorited, r.OfficialRegion, r.ModeMoving, r.ModeNoMove, r.ModeNmpz, r.CreatedAt, r.UpdatedAt, r.BestScore, r.BestMatchID, r.AchievedAt)
 }
 func mapFromParts(id string, key, owner, author any, name, desc string, vis db.GdMapVisibility, status db.GdMapStatus, diff db.GdMapDifficulty, thumbVariant int32, thumbKey string, count int32, system pgtype.Bool, official any, published pgtype.Timestamptz, plays, favs, comments int32, trend float64, favorited bool, region []byte, moving, noMove, nmpz bool, created, updated pgtype.Timestamptz, best pgtype.Int2, match any, achieved pgtype.Timestamptz) contracts.CustomMap {
 	r := contracts.CustomMap{ID: id, MapKey: fmt.Sprint(key), OwnerUserID: fmt.Sprint(owner), AuthorName: fmt.Sprint(author), DisplayName: name, Description: desc, Visibility: string(vis), Status: string(status), Difficulty: string(diff), ThumbnailVariant: int(thumbVariant), ThumbnailKey: thumbKey, LocationCount: int(count), System: system.Bool, Official: fmt.Sprint(official) == "true", PlayCount: int(plays), FavoriteCount: int(favs), CommentCount: int(comments), TrendingScore: trend, Favorited: favorited, OfficialRegion: string(region), ModeMoving: moving, ModeNoMove: noMove, ModeNMPZ: nmpz, CreatedAt: created.Time, UpdatedAt: updated.Time}
@@ -91,7 +91,7 @@ func (s *DB) ListMaps(userID string, opts contracts.MapListOptions) ([]contracts
 	scope := normalizeMapScope(opts.Scope)
 	sortMode := normalizeMapSort(opts.Sort)
 	searchPattern := mapSearchPattern(opts.Search)
-	rows, err := s.db.ListMaps(ctx, db.ListMapsParams{UserID: strings.TrimSpace(userID), Scope: scope, Search: searchPattern, Sort: sortMode})
+	rows, err := s.db.ListMaps(ctx, db.ListMapsParams{ViewerUserID: strings.TrimSpace(userID), Scope: scope, Search: searchPattern, Sort: sortMode})
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (s *DB) GetMap(userID, mapID string) (contracts.MapDetails, bool, error) {
 	if parseErr != nil {
 		return contracts.MapDetails{}, false, nil
 	}
-	row, err := s.db.GetMap(ctx, db.GetMapParams{MapID: parsedID, UserID: strings.TrimSpace(userID)})
+	row, err := s.db.GetMap(ctx, db.GetMapParams{ViewerUserID: strings.TrimSpace(userID), MapKey: parsedID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.MapDetails{}, false, nil
 	}

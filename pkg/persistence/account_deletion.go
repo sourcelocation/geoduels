@@ -35,12 +35,12 @@ func (s *DB) DeleteAccount(userID string) error {
 		}
 		return e
 	}
-	if banned, ok := u.Coalesce.(bool); ok && banned {
+	if banned, ok := u.IsBanned.(bool); ok && banned {
 		r := strings.TrimSpace(u.BanReason)
 		if r == "" {
 			r = "account deleted while banned"
 		}
-		if e = db.New(tx).BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: id, Column2: r}); e != nil {
+		if e = db.New(tx).BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: id, Reason: r}); e != nil {
 			return e
 		}
 	}

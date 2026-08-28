@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"geoduels/pkg/contracts"
-	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 type customMapScanner interface {

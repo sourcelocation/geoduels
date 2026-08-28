@@ -163,9 +163,9 @@ LIMIT 64;
 -- name: ListStaleMatchSessionIDs :many
 SELECT match_id::text AS match_id
 FROM match_sessions
-WHERE state = 'live' AND lease_expires_at < now() - $1::interval
+WHERE state = 'live' AND lease_expires_at < now() - sqlc.arg(stale_after)::interval
 ORDER BY lease_expires_at
-LIMIT $2
+LIMIT sqlc.arg(row_limit)
 FOR UPDATE SKIP LOCKED;
 
 -- name: ReopenPartiesForEndedSessions :exec

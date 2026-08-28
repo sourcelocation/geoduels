@@ -7,7 +7,7 @@ import (
 )
 
 func TestFinalizeMatchUsesTypedSetBasedStatUpdates(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/match_writes/match_writes.sql")
+	body, err := os.ReadFile("../../db/queries/match_writes.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestFinalizeMatchUsesTypedSetBasedStatUpdates(t *testing.T) {
 }
 
 func TestRecordMatchHistoryCastsReplayExpirationParameters(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/match_writes/match_writes.sql")
+	body, err := os.ReadFile("../../db/queries/match_writes.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestRecordMatchHistoryCastsReplayExpirationParameters(t *testing.T) {
 }
 
 func TestProfileHistoryStatsCountDuelsOnly(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/profiles/profiles.sql")
+	body, err := os.ReadFile("../../db/queries/profiles.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestRiskEngineSignalsDoNotCreateLegacyCases(t *testing.T) {
 }
 
 func TestCheatingBanRefundQueryUsesCompactRatingColumns(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/moderation_enforcement/moderation_enforcement.sql")
+	body, err := os.ReadFile("../../db/queries/moderation_enforcement.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestNullableTeamEnumsAreCastBeforeEmptyStringFallback(t *testing.T) {
 
 func TestTextTeamExpressionsAreCastBeforeEnumWrites(t *testing.T) {
 	checks := map[string][]string{
-		"../../db/queries/parties/queries.sql": {
+		"../../db/queries/parties.sql": {
 			"'a'::gd_team_id",
 			"'b'::gd_team_id",
 		},
@@ -134,7 +134,7 @@ func TestTextTeamExpressionsAreCastBeforeEnumWrites(t *testing.T) {
 }
 
 func TestComputedPartyRolesUseEnumValues(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/parties/queries.sql")
+	body, err := os.ReadFile("../../db/queries/parties.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestEnteringTeamDuelShufflesMembersIntoBalancedTeams(t *testing.T) {
 	if !strings.Contains(string(goBody), "string(currentMode) != string(contracts.ModeTeamDuel) && mode == contracts.ModeTeamDuel") {
 		t.Fatal("entering team-duel must shuffle members into balanced teams")
 	}
-	body, err := os.ReadFile("../../db/queries/parties/queries.sql")
+	body, err := os.ReadFile("../../db/queries/parties.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

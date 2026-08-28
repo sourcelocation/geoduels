@@ -1,7 +1,17 @@
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, createContext, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
 import { IconButton } from "./button";
+
+/**
+ * Set by the nearest modal shell so nested content can trigger the shell's
+ * animated dismiss (Escape/backdrop/X path). Null outside a modal shell.
+ */
+export const ModalCloseContext = createContext<(() => void) | null>(null);
+
+export function useModalClose() {
+  return useContext(ModalCloseContext);
+}
 
 type AppModalShellProps = {
   title: string;
@@ -64,6 +74,7 @@ export default function AppModalShell({
   }, [requestClose]);
 
   return (
+    <ModalCloseContext.Provider value={onClose ? requestClose : null}>
     <motion.div
       variants={{ open: { opacity: 1 }, closed: { opacity: 0 } }}
       initial="closed"
@@ -121,5 +132,6 @@ export default function AppModalShell({
         <div className={contentClassName}>{children}</div>
       </motion.div>
     </motion.div>
+    </ModalCloseContext.Provider>
   );
 }

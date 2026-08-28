@@ -1,8 +1,8 @@
 -- name: ExpireStaleRuntimeMatches :exec
 update runtime_matches
-set state = $1, ended_at = now()
-where runtime_matches.state = $2 and exists (select 1 from match_sessions ms where ms.match_id = runtime_matches.id and ms.mode = $3)
-  and started_at < now() - $4::interval and ended_at is null;
+set state = sqlc.arg(new_state), ended_at = now()
+where runtime_matches.state = sqlc.arg(current_state) and exists (select 1 from match_sessions ms where ms.match_id = runtime_matches.id and ms.mode = sqlc.arg(mode))
+  and started_at < now() - sqlc.arg(older_than)::interval and ended_at is null;
 
 -- name: GetRuntimeMatch :one
 select id, state, owner_epoch, started_at, coalesce(ended_at, '0001-01-01 00:00:00+00'::timestamptz) as ended_at

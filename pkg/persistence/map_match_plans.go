@@ -85,7 +85,7 @@ func (s *DB) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFound) 
 	}
 	selectedMap, err := q.SelectedMap(ctx, mapUUID)
 	if err == nil {
-		owner, _ = selectedMap.Coalesce.(string)
+		owner, _ = selectedMap.OwnerUserID.(string)
 		visibility, status, displayName, count = string(selectedMap.Visibility), string(selectedMap.Status), selectedMap.DisplayName, int(selectedMap.LocationCount)
 	}
 	if err != nil {
@@ -166,14 +166,14 @@ func selectPlanRows(ctx context.Context, tx pgx.Tx, mapID string, pivot int32, l
 	query := func(op string, n int) ([]plannedLocation, error) {
 		var rows []db.SelectPlanRowsGERow
 		var err error
-		params := db.SelectPlanRowsGEParams{ID: uuid, RandKeyI: pivot, Limit: int32(n)}
+		params := db.SelectPlanRowsGEParams{MapID: uuid, MinRandKey: pivot, RowLimit: int32(n)}
 		if op == ">=" {
 			rows, err = q.SelectPlanRowsGE(ctx, params)
 		} else {
 			var r []db.SelectPlanRowsLTRow
-			r, err = q.SelectPlanRowsLT(ctx, db.SelectPlanRowsLTParams{ID: uuid, RandKeyI: params.RandKeyI, Limit: params.Limit})
+			r, err = q.SelectPlanRowsLT(ctx, db.SelectPlanRowsLTParams{MapID: uuid, MaxRandKey: params.MinRandKey, RowLimit: params.RowLimit})
 			for _, x := range r {
-				rows = append(rows, db.SelectPlanRowsGERow{Column1: x.Column1, Column2: x.Column2, Country: x.Country, PanoID: x.PanoID, Column5: x.Column5, Column6: x.Column6})
+				rows = append(rows, db.SelectPlanRowsGERow{LatE7: x.LatE7, LngE7: x.LngE7, Country: x.Country, PanoID: x.PanoID, HeadingCdeg: x.HeadingCdeg, PitchCdeg: x.PitchCdeg})
 			}
 		}
 		if err != nil {
@@ -182,12 +182,12 @@ func selectPlanRows(ctx context.Context, tx pgx.Tx, mapID string, pivot int32, l
 		out := []plannedLocation{}
 		for _, row := range rows {
 			var p plannedLocation
-			p.Lat, p.Lng, p.Country = float64(row.Column1)/1e7, float64(row.Column2)/1e7, row.Country
+			p.Lat, p.Lng, p.Country = float64(row.LatE7)/1e7, float64(row.LngE7)/1e7, row.Country
 			if row.PanoID.Valid {
 				panoID := row.PanoID.String
 				p.PanoID = &panoID
 			}
-			heading, pitch := float64(row.Column5)/100, float64(row.Column6)/100
+			heading, pitch := float64(row.HeadingCdeg.Int16)/100, float64(row.PitchCdeg.Int16)/100
 			p.Heading, p.Pitch = &heading, &pitch
 			out = append(out, p)
 		}

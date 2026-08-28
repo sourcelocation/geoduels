@@ -11,7 +11,7 @@ UPDATE auth_sessions SET revoked_at=coalesce(revoked_at,now()) WHERE id=$1;
 UPDATE auth_sessions SET revoked_at=coalesce(revoked_at,now()) WHERE user_id=$1 AND revoked_at IS NULL;
 
 -- name: RotateAuthSession :one
-UPDATE auth_sessions SET refresh_token_hash=$1,expires_at=$2,last_used_at=$3 WHERE id=$4 AND refresh_token_hash=$5 AND revoked_at IS NULL RETURNING id,user_id,refresh_token_hash,expires_at,created_at,last_used_at,revoked_at,coalesce(user_agent,''),coalesce(ip_address,'');
+UPDATE auth_sessions SET refresh_token_hash=sqlc.arg(next_refresh_token_hash),expires_at=sqlc.arg(expires_at),last_used_at=sqlc.arg(last_used_at) WHERE id=sqlc.arg(session_id) AND refresh_token_hash=sqlc.arg(current_refresh_token_hash) AND revoked_at IS NULL RETURNING id,user_id,refresh_token_hash,expires_at,created_at,last_used_at,revoked_at,coalesce(user_agent,''),coalesce(ip_address,'');
 
 -- name: SetRegistrationIP :exec
-UPDATE users SET registration_ip_address=coalesce(nullif(trim(registration_ip_address),''),$1) WHERE id=$2;
+UPDATE users SET registration_ip_address=coalesce(nullif(trim(registration_ip_address),''),sqlc.arg(registration_ip_address)) WHERE id=sqlc.arg(user_id);

@@ -44,7 +44,7 @@ func (s *DB) UpdateUserPreferences(ctx context.Context, userID string, schemaVer
 	if err := id.Scan(userID); err != nil {
 		return result, err
 	}
-	row, err := s.db.UpsertUserPreferences(ctx, db.UpsertUserPreferencesParams{UserID: id, SchemaVersion: int32(schemaVersion), Preferences: preferences, ExpectedRevision: expectedRevision})
+	row, err := s.db.UpsertUserPreferences(ctx, db.UpsertUserPreferencesParams{UserID: id, SchemaVersion: int32(schemaVersion), PreferencesJson: preferences, ExpectedRevision: expectedRevision})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserPreferences{}, ErrPreferenceRevisionConflict
 	}

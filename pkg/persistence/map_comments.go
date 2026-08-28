@@ -27,7 +27,7 @@ func (s *DB) ListMapComments(userID, mapID string) ([]contracts.MapComment, erro
 	if err != nil {
 		return nil, err
 	}
-	visible, err = s.db.MapCommentsVisible(ctx, db.MapCommentsVisibleParams{Column1: id, Column2: strings.TrimSpace(userID)})
+	visible, err = s.db.MapCommentsVisible(ctx, db.MapCommentsVisibleParams{MapID: id, ViewerUserID: strings.TrimSpace(userID)})
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (s *DB) CreateMapComment(userID, mapID string, input contracts.MapCommentCr
 	if err != nil {
 		return contracts.MapComment{}, err
 	}
-	visible, err = db.New(tx).MapCommentsVisible(ctx, db.MapCommentsVisibleParams{Column1: mapUID, Column2: strings.TrimSpace(userID)})
+	visible, err = db.New(tx).MapCommentsVisible(ctx, db.MapCommentsVisibleParams{MapID: mapUID, ViewerUserID: strings.TrimSpace(userID)})
 	if err != nil {
 		return contracts.MapComment{}, err
 	}
@@ -72,7 +72,7 @@ func (s *DB) CreateMapComment(userID, mapID string, input contracts.MapCommentCr
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
-		parentParent, err := db.New(tx).MapCommentParent(ctx, db.MapCommentParentParams{Column1: pid, Column2: mapUID})
+		parentParent, err := db.New(tx).MapCommentParent(ctx, db.MapCommentParentParams{CommentID: pid, MapID: mapUID})
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
@@ -80,7 +80,7 @@ func (s *DB) CreateMapComment(userID, mapID string, input contracts.MapCommentCr
 			return contracts.MapComment{}, errors.New("only one reply level is supported")
 		}
 		var dup bool
-		dup, err = db.New(tx).MapCommentDuplicate(ctx, db.MapCommentDuplicateParams{Column1: mapUID, Column2: mustMapUUID(userID), Column3: parentID, Body: pgtype.Text{String: body, Valid: true}})
+		dup, err = db.New(tx).MapCommentDuplicate(ctx, db.MapCommentDuplicateParams{MapID: mapUID, UserID: mustMapUUID(userID), ParentID: parentID, Body: pgtype.Text{String: body, Valid: true}})
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
@@ -89,7 +89,7 @@ func (s *DB) CreateMapComment(userID, mapID string, input contracts.MapCommentCr
 		}
 	} else {
 		var dup bool
-		dup, err := db.New(tx).MapCommentDuplicate(ctx, db.MapCommentDuplicateParams{Column1: mapUID, Column2: mustMapUUID(userID), Body: pgtype.Text{String: body, Valid: true}})
+		dup, err := db.New(tx).MapCommentDuplicate(ctx, db.MapCommentDuplicateParams{MapID: mapUID, UserID: mustMapUUID(userID), Body: pgtype.Text{String: body, Valid: true}})
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
@@ -98,7 +98,7 @@ func (s *DB) CreateMapComment(userID, mapID string, input contracts.MapCommentCr
 		}
 	}
 	id := entityid.New()
-	if err := db.New(tx).InsertMapComment(ctx, db.InsertMapCommentParams{Column1: mustMapUUID(id), Column2: mustMapUUID(mapID), Column3: parentID, Column4: mustMapUUID(userID), Body: pgtype.Text{String: body, Valid: true}}); err != nil {
+	if err := db.New(tx).InsertMapComment(ctx, db.InsertMapCommentParams{CommentID: mustMapUUID(id), MapID: mustMapUUID(mapID), ParentID: parentID, UserID: mustMapUUID(userID), Body: pgtype.Text{String: body, Valid: true}}); err != nil {
 		return contracts.MapComment{}, err
 	}
 	if err := incrementMapCommentStats(ctx, tx, strings.TrimSpace(mapID), strings.TrimSpace(userID)); err != nil {
@@ -137,7 +137,7 @@ func (s *DB) DeleteMapComment(userID, mapID, commentID string, moderator bool) e
 		status = "moderated"
 	}
 	q := db.New(tx)
-	tag, err := q.DeleteMapComment(ctx, db.DeleteMapCommentParams{Column1: mustMapUUID(userID), Column2: mustMapUUID(commentID), Column3: mustMapUUID(mapID), Column4: moderator, Status: db.GdCommentStatus(status)})
+	tag, err := q.DeleteMapComment(ctx, db.DeleteMapCommentParams{DeletedBy: mustMapUUID(userID), CommentID: mustMapUUID(commentID), MapID: mustMapUUID(mapID), IsModerator: moderator, Status: db.GdCommentStatus(status)})
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (s *DB) SetMapCommentLike(userID, mapID, commentID string, liked bool) (con
 	mapID = canonicalID
 	var visible bool
 	q := db.New(tx)
-	visible, err = q.MapCommentLikeVisible(ctx, db.MapCommentLikeVisibleParams{Column1: mustMapUUID(commentID), Column2: mustMapUUID(mapID), Column3: userID})
+	visible, err = q.MapCommentLikeVisible(ctx, db.MapCommentLikeVisibleParams{CommentID: mustMapUUID(commentID), MapID: mustMapUUID(mapID), ViewerUserID: userID})
 	if err != nil {
 		return contracts.MapComment{}, err
 	}
@@ -178,7 +178,7 @@ func (s *DB) SetMapCommentLike(userID, mapID, commentID string, liked bool) (con
 	}
 	var changed bool
 	if liked {
-		tag, err := q.AddMapCommentLike(ctx, db.AddMapCommentLikeParams{Column1: mustMapUUID(commentID), Column2: mustMapUUID(userID)})
+		tag, err := q.AddMapCommentLike(ctx, db.AddMapCommentLikeParams{CommentID: mustMapUUID(commentID), UserID: mustMapUUID(userID)})
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
@@ -189,7 +189,7 @@ func (s *DB) SetMapCommentLike(userID, mapID, commentID string, liked bool) (con
 			}
 		}
 	} else {
-		tag, err := q.RemoveMapCommentLike(ctx, db.RemoveMapCommentLikeParams{Column1: mustMapUUID(commentID), Column2: mustMapUUID(userID)})
+		tag, err := q.RemoveMapCommentLike(ctx, db.RemoveMapCommentLikeParams{CommentID: mustMapUUID(commentID), UserID: mustMapUUID(userID)})
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
@@ -218,7 +218,7 @@ func (s *DB) SetMapCommentLike(userID, mapID, commentID string, liked bool) (con
 func (s *DB) listMapComments(ctx context.Context, userID, mapID string) ([]contracts.MapComment, error) {
 	profile, _ := s.GetProfile(userID)
 	canModerate := profile.IsAdmin || profile.IsModerator
-	rows, err := s.db.ListMapComments(ctx, db.ListMapCommentsParams{Column1: mustMapUUID(mapID), Column2: userID, Column3: canModerate})
+	rows, err := s.db.ListMapComments(ctx, db.ListMapCommentsParams{MapID: mustMapUUID(mapID), ViewerUserID: userID, CanModerate: canModerate})
 	if err != nil {
 		return nil, err
 	}

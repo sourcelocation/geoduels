@@ -114,7 +114,7 @@ func (s *DB) SetMapOfficial(adminUserID, mapID string, official bool) (contracts
 		if err := s.ensureReadyMap(ctx, mapID, minMapLocations); err != nil {
 			return contracts.CustomMap{}, err
 		}
-		affected, err = s.db.SetMapOfficial(ctx, db.SetMapOfficialParams{Column1: mapUUID, Column2: adminUUID})
+		affected, err = s.db.SetMapOfficial(ctx, db.SetMapOfficialParams{MapID: mapUUID, OfficialBy: adminUUID})
 	} else {
 		affected, err = s.db.ClearMapOfficial(ctx, mapUUID)
 	}
@@ -165,7 +165,7 @@ func (s *DB) SetGameplayMapRole(adminUserID, mapID, role string) (contracts.Cust
 	if err != nil {
 		return contracts.CustomMap{}, err
 	}
-	if err := db.New(tx).SetGameplayMapSettings(ctx, db.SetGameplayMapSettingsParams{Key: gameplayMapSettingsKey, Column2: payload}); err != nil {
+	if err := db.New(tx).SetGameplayMapSettings(ctx, db.SetGameplayMapSettingsParams{Key: gameplayMapSettingsKey, ValueJson: payload}); err != nil {
 		return contracts.CustomMap{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

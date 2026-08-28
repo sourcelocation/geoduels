@@ -4,8 +4,8 @@ VALUES ($1, $2, 'owner', false, 'a');
 
 -- name: CloseInactiveOpenParties :execrows
 UPDATE parties SET state = 'closed', updated_at = now()
-WHERE state = 'open' AND id = ANY($1::uuid[])
-  AND updated_at < now() - ($2::double precision * interval '1 second');
+WHERE state = 'open' AND id = ANY(sqlc.arg(party_ids)::uuid[])
+  AND updated_at < now() - (sqlc.arg(inactive_seconds)::double precision * interval '1 second');
 
 -- name: CloseParty :exec
 UPDATE parties SET state = 'closed', updated_at = now()
@@ -107,9 +107,9 @@ WHERE ub.user_id = ANY($1::uuid[])
 ORDER BY ub.user_id ASC, ub.awarded_at DESC, ub.badge_code ASC;
 
 -- name: ListPartyMembers :many
-SELECT m.user_id, u.display_name, COALESCE(u.avatar_url, ''),
-       u.account_type = 'guest', COALESCE(u.is_admin, false),
-       COALESCE(u.selected_badge_code, 0), COALESCE(m.team_id::text, ''),
+SELECT m.user_id, u.display_name, COALESCE(u.avatar_url, '') AS avatar_url,
+       u.account_type = 'guest' AS is_guest, COALESCE(u.is_admin, false) AS is_admin,
+       COALESCE(u.selected_badge_code, 0) AS selected_badge_code, COALESCE(m.team_id::text, '') AS team_id,
        m.role, m.ready, m.joined_at
 FROM party_members m JOIN users u ON u.id = m.user_id
 WHERE m.party_id = $1 AND m.left_at IS NULL
@@ -175,7 +175,7 @@ WHERE m.party_id = reopened.id;
 UPDATE party_members SET ready = false WHERE party_id = $1;
 
 -- name: SetPartyConfig :exec
-UPDATE parties SET config_json = $2::jsonb, map_id = $3, updated_at = now() WHERE id = $1;
+UPDATE parties SET config_json = sqlc.arg(config_json)::jsonb, map_id = sqlc.arg(map_id), updated_at = now() WHERE id = sqlc.arg(party_id);
 
 -- name: SetPartyMemberTeam :execrows
 UPDATE party_members SET team_id = $3

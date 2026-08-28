@@ -496,16 +496,16 @@ func (s *DB) GetIdentity(sub string) (Identity, error) {
 		}
 		return Identity{}, err
 	}
-	out.Sub = r.UID
+	out.Sub = r.UserID
 	out.Email = r.Email
 	out.GoogleName = r.ProviderName
 	out.AvatarURL = r.AvatarUrl
-	out.NicknameRequired, _ = r.Coalesce.(bool)
-	out.DisplayName = r.ProviderName_2.String
+	out.NicknameRequired, _ = r.NeedsNickname.(bool)
+	out.DisplayName = r.DisplayName.String
 	out.AccountType = string(r.AccountType)
 	out.IsAdmin = r.IsAdmin
 	out.IsModerator = r.IsModerator
-	out.IsBanned, _ = r.Coalesce_2.(bool)
+	out.IsBanned, _ = r.IsBanned.(bool)
 	out.BanReason = r.BanReason
 	out.ProviderName = out.GoogleName
 	out.LinkedProviders, _ = s.userProviders(ctx, sub)

@@ -71,7 +71,7 @@ func (s *DB) ReconcileStaleMatchSessions(g time.Duration, n int) (int64, error) 
 	var out int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		q := s.db.WithTx(tx)
-		ids, e := q.ListStaleMatchSessionIDs(ctx, db.ListStaleMatchSessionIDsParams{Column1: pgtype.Interval{Microseconds: g.Microseconds(), Valid: true}, Limit: int32(min(n, 10000))})
+		ids, e := q.ListStaleMatchSessionIDs(ctx, db.ListStaleMatchSessionIDsParams{StaleAfter: pgtype.Interval{Microseconds: g.Microseconds(), Valid: true}, RowLimit: int32(min(n, 10000))})
 		if e != nil {
 			return e
 		}

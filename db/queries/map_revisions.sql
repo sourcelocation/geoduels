@@ -14,7 +14,7 @@ group by coalesce(nullif(country,''),'Unknown');
 
 -- name: InsertMapLocations :exec
 insert into locations(map_storage_id,lat_e7,lng_e7,country,pano_id,heading_cdeg,pitch_cdeg,rand_key_i)
-select $1, unnest($2::int[]), unnest($3::int[]), unnest($4::text[]), unnest($5::text[]), unnest($6::smallint[]), unnest($7::smallint[]), unnest($8::int[]);
+select sqlc.arg(map_storage_id), unnest(sqlc.arg(lat_e7)::int[]), unnest(sqlc.arg(lng_e7)::int[]), unnest(sqlc.arg(country)::text[]), unnest(sqlc.arg(pano_id)::text[]), unnest(sqlc.arg(heading_cdeg)::smallint[]), unnest(sqlc.arg(pitch_cdeg)::smallint[]), unnest(sqlc.arg(rand_key_i)::int[]);
 
 -- name: LockMapStorageID :one
 select storage_id from maps where id=$1 for update;

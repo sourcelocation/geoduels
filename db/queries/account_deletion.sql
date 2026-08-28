@@ -13,7 +13,7 @@ DELETE FROM user_identities WHERE user_id = $1::uuid;
 WITH batch AS MATERIALIZED (SELECT id FROM users WHERE account_type = 'guest' AND deleted_at IS NULL AND created_at < now() - (sqlc.arg('ttl_seconds')::double precision * interval '1 second') ORDER BY created_at ASC LIMIT sqlc.arg('account_limit')), del_ranked AS (DELETE FROM ranked_stats USING batch WHERE ranked_stats.user_id = batch.id), del_ranks AS (DELETE FROM ranks USING batch WHERE ranks.user_id = batch.id), del_stats AS (DELETE FROM user_stats USING batch WHERE user_stats.user_id = batch.id) DELETE FROM users USING batch WHERE users.id = batch.id RETURNING users.id;
 
 -- name: GetDeletionUser :one
-SELECT coalesce(banned_at is not null and (ban_expires_at is null or ban_expires_at > now()), false), coalesce(ban_reason, '') FROM users WHERE id = $1::uuid;
+SELECT coalesce(banned_at is not null and (ban_expires_at is null or ban_expires_at > now()), false) AS is_banned, coalesce(ban_reason, '') AS ban_reason FROM users WHERE id = sqlc.arg(user_id)::uuid;
 
 -- name: ListDeletionDiscordIdentities :many
 SELECT provider_user_id FROM user_identities WHERE user_id = sqlc.arg('user_id')::uuid AND provider = sqlc.arg('provider');

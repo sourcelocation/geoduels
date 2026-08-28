@@ -73,8 +73,8 @@ func (s *DB) CreatePlayerReportSignal(p CreatePlayerReportSignalParams) (Moderat
 	if e != nil {
 		return ModerationSignalCreated{}, e
 	}
-	np, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: id, SubjectUserID: r.SSubjectUserID, SubjectName: textVal(r.Coalesce), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: string(r.ReasonCode), OccurredAt: r.OccurredAt.Time})
-	if e = s.db.WithTx(tx).EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{NotificationType: "moderation_signal_queued", DedupeKey: fmt.Sprintf("moderation_signal:%d:queued", id), Payload: np}); e != nil {
+	np, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: id, SubjectUserID: r.SubjectUserID, SubjectName: textVal(r.SubjectDisplayName), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: string(r.ReasonCode), OccurredAt: r.OccurredAt.Time})
+	if e = s.db.WithTx(tx).EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{Type: "moderation_signal_queued", DedupeKey: fmt.Sprintf("moderation_signal:%d:queued", id), PayloadJson: np}); e != nil {
 		return ModerationSignalCreated{}, e
 	}
 	if e = tx.Commit(ctx); e != nil {
@@ -135,24 +135,24 @@ func (s *DB) ListModerationLog(n int) ([]ModerationAuditLogEntry, error) {
 	return s.listModerationLog(ctx, pgtype.UUID{}, int32(n))
 }
 func (s *DB) listSignals(ctx context.Context, u pgtype.UUID, n int32) ([]ModerationSignalSummary, error) {
-	r, e := s.db.ListModerationSignals(ctx, db.ListModerationSignalsParams{SubjectUserID: u, LimitCount: n})
+	r, e := s.db.ListModerationSignals(ctx, db.ListModerationSignalsParams{SubjectUserID: u, RowLimit: n})
 	if e != nil {
 		return nil, e
 	}
 	o := make([]ModerationSignalSummary, 0, len(r))
 	for _, x := range r {
-		o = append(o, ModerationSignalSummary{ID: x.ID, SubjectUserID: x.SSubjectUserID, SubjectName: textVal(x.Coalesce), SignalType: x.SignalType, Source: string(x.Source), Severity: string(x.Severity), EvidenceStrength: string(x.EvidenceStrength), DetectorKey: x.DetectorKey, DetectorVersion: x.DetectorVersion, ReasonCode: x.ReasonCode, Score: x.Score, RecommendedQueue: x.RecommendedQueue, ReporterUserID: textVal(x.Coalesce_2), ReporterName: textVal(x.Coalesce_3), MatchID: textVal(x.Coalesce_4), Payload: json.RawMessage(x.SPayloadJson), OccurredAt: x.OccurredAt.Time, CreatedAt: x.CreatedAt.Time})
+		o = append(o, ModerationSignalSummary{ID: x.SignalID, SubjectUserID: x.SubjectUserID, SubjectName: textVal(x.SubjectDisplayName), SignalType: x.SignalType, Source: string(x.Source), Severity: string(x.Severity), EvidenceStrength: string(x.EvidenceStrength), DetectorKey: x.DetectorKey, DetectorVersion: x.DetectorVersion, ReasonCode: x.ReasonCode, Score: x.Score, RecommendedQueue: x.RecommendedQueue, ReporterUserID: textVal(x.ReporterUserID), ReporterName: textVal(x.ReporterDisplayName), MatchID: textVal(x.MatchID), Payload: json.RawMessage(x.PayloadJson), OccurredAt: x.OccurredAt.Time, CreatedAt: x.CreatedAt.Time})
 	}
 	return o, nil
 }
 func (s *DB) listModerationLog(ctx context.Context, u pgtype.UUID, n int32) ([]ModerationAuditLogEntry, error) {
-	r, e := s.db.ListModerationLog(ctx, db.ListModerationLogParams{SubjectUserID: u, LimitCount: n})
+	r, e := s.db.ListModerationLog(ctx, db.ListModerationLogParams{SubjectUserID: u, RowLimit: n})
 	if e != nil {
 		return nil, e
 	}
 	o := make([]ModerationAuditLogEntry, 0, len(r))
 	for _, x := range r {
-		o = append(o, ModerationAuditLogEntry{ID: x.ID, SubjectUserID: textVal(x.Coalesce), SubjectName: textVal(x.Coalesce_2), ActorUserID: textVal(x.Coalesce_3), ActorName: textVal(x.Coalesce_4), Action: string(x.Action), Reason: x.Reason, SignalIDs: x.SignalIds, Metadata: json.RawMessage(x.LMetadata), CreatedAt: x.CreatedAt.Time})
+		o = append(o, ModerationAuditLogEntry{ID: x.LogID, SubjectUserID: textVal(x.SubjectUserID), SubjectName: textVal(x.SubjectDisplayName), ActorUserID: textVal(x.ActorUserID), ActorName: textVal(x.ActorDisplayName), Action: string(x.Action), Reason: x.Reason, SignalIDs: x.SignalIds, Metadata: json.RawMessage(x.Metadata), CreatedAt: x.CreatedAt.Time})
 	}
 	return o, nil
 }
@@ -194,6 +194,6 @@ func enqueueSignalNotification(ctx context.Context, tx pgx.Tx, signalID int64) e
 	if err != nil {
 		return err
 	}
-	p, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: signalID, SubjectUserID: r.SSubjectUserID, SubjectName: textVal(r.Coalesce), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: r.ReasonCode, OccurredAt: r.OccurredAt.Time})
-	return db.New(tx).EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{NotificationType: "moderation_signal_queued", DedupeKey: fmt.Sprintf("moderation_signal:%d:queued", signalID), Payload: p})
+	p, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: signalID, SubjectUserID: r.SubjectUserID, SubjectName: textVal(r.SubjectDisplayName), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: r.ReasonCode, OccurredAt: r.OccurredAt.Time})
+	return db.New(tx).EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{Type: "moderation_signal_queued", DedupeKey: fmt.Sprintf("moderation_signal:%d:queued", signalID), PayloadJson: p})
 }

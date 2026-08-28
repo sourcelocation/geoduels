@@ -14,13 +14,13 @@ SELECT joined_at FROM party_members WHERE party_id = $1 AND user_id = $2;
 
 -- name: RenewMatchSessionLeases :exec
 UPDATE match_sessions
-SET lease_expires_at = now() + $4::interval, updated_at = now()
-WHERE node_id = $1 AND node_epoch = $2 AND state = 'live'
-  AND match_id::text = ANY($3::text[]);
+SET lease_expires_at = now() + sqlc.arg(ttl)::interval, updated_at = now()
+WHERE node_id = sqlc.arg(node_id) AND node_epoch = sqlc.arg(node_epoch) AND state = 'live'
+  AND match_id::text = ANY(sqlc.arg(match_ids)::text[]);
 
 -- name: UpsertMatchParticipant :exec
 INSERT INTO match_participants(match_id, user_id, team_id, display_name, avatar_url, joined_party_at)
-VALUES($1, $2, NULLIF($3, ''), $4, $5, $6)
+VALUES(sqlc.arg(match_id), sqlc.arg(user_id), NULLIF(sqlc.arg(team_id)::text, ''), sqlc.arg(display_name), sqlc.arg(avatar_url), sqlc.arg(joined_party_at))
 ON CONFLICT (match_id, user_id) DO UPDATE SET
     team_id = excluded.team_id,
     display_name = excluded.display_name,
@@ -38,12 +38,12 @@ INSERT INTO match_sessions(
     lease_expires_at, updated_at
 )
 VALUES(
-    $1, $2, $3, 'live', $4, $5,
-    NULLIF($6, '')::uuid, NULLIF($7, ''),
-    $8, $9, $10,
-    $11::jsonb, NULLIF($12, '')::uuid,
-    NULLIF($13, ''), NULLIF($14, '')::uuid, NULLIF($15, '')::uuid,
-    now() + $16::interval, now()
+    sqlc.arg(match_id), sqlc.arg(preset_id), sqlc.arg(mode), 'live', sqlc.arg(ranked), sqlc.arg(source_kind),
+    NULLIF(sqlc.arg(source_party_id)::text, '')::uuid, NULLIF(sqlc.arg(source_party_invite_code)::text, ''),
+    sqlc.arg(node_id), sqlc.arg(node_epoch), sqlc.arg(public_route),
+    sqlc.arg(config_json)::jsonb, NULLIF(sqlc.arg(map_id)::text, '')::uuid,
+    NULLIF(sqlc.arg(return_target_kind)::text, ''), NULLIF(sqlc.arg(return_target_map_id)::text, '')::uuid, NULLIF(sqlc.arg(return_target_party_id)::text, '')::uuid,
+    now() + sqlc.arg(lease_ttl)::interval, now()
 )
 ON CONFLICT (match_id) DO UPDATE SET
     preset_id = excluded.preset_id,

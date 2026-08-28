@@ -206,7 +206,7 @@ func (s *DB) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.New(s.pool).ListRecentPlayers(context.Background(), db.ListRecentPlayersParams{Column1: id, Limit: int32(limit)})
+	rows, err := db.New(s.pool).ListRecentPlayers(context.Background(), db.ListRecentPlayersParams{SelfUserID: id, RowLimit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +307,7 @@ func acceptFriendRequestTx(ctx context.Context, tx pgx.Tx, requestID, recipientI
 	if err != nil {
 		return err
 	}
-	return q.InsertFriendship(ctx, db.InsertFriendshipParams{Column1: senderUUID, Column2: recipientUUID, CreatedFromRequestID: requestUUID})
+	return q.InsertFriendship(ctx, db.InsertFriendshipParams{UserA: senderUUID, UserB: recipientUUID, CreatedFromRequestID: requestUUID})
 }
 
 func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
@@ -352,7 +352,7 @@ func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
 			return ErrSocialNotFound
 		}
 	}
-	_ = q.MarkFriendRequestNotificationRead(ctx, db.MarkFriendRequestNotificationReadParams{UserID: userUUID, Column2: ingestText(requestID)})
+	_ = q.MarkFriendRequestNotificationRead(ctx, db.MarkFriendRequestNotificationReadParams{UserID: userUUID, RequestID: ingestText(requestID)})
 	return tx.Commit(ctx)
 }
 
@@ -365,7 +365,7 @@ func (s *DB) RemoveFriend(userID, targetID string) error {
 	if err != nil {
 		return err
 	}
-	return db.New(s.pool).RemoveFriend(context.Background(), db.RemoveFriendParams{Column1: userUUID, Column2: targetUUID})
+	return db.New(s.pool).RemoveFriend(context.Background(), db.RemoveFriendParams{UserA: userUUID, UserB: targetUUID})
 }
 
 func (s *DB) SetUserBlock(userID, targetID string, blocked bool) error {
@@ -391,8 +391,8 @@ func (s *DB) SetUserBlock(userID, targetID string, blocked bool) error {
 		if err := q.AddUserBlock(ctx, db.AddUserBlockParams{BlockerUserID: userUUID, BlockedUserID: targetUUID}); err != nil {
 			return err
 		}
-		_ = q.RemoveFriend(ctx, db.RemoveFriendParams{Column1: userUUID, Column2: targetUUID})
-		_ = q.CancelPairFriendRequests(ctx, db.CancelPairFriendRequestsParams{Column1: userUUID, Column2: targetUUID})
+		_ = q.RemoveFriend(ctx, db.RemoveFriendParams{UserA: userUUID, UserB: targetUUID})
+		_ = q.CancelPairFriendRequests(ctx, db.CancelPairFriendRequestsParams{UserA: userUUID, UserB: targetUUID})
 	} else {
 		err = q.RemoveUserBlock(ctx, db.RemoveUserBlockParams{BlockerUserID: userUUID, BlockedUserID: targetUUID})
 		if err != nil {
@@ -487,7 +487,7 @@ func (s *DB) CreatePartyInvitation(partyID, inviterID, recipientID string, ttl t
 		return PartyInvitation{}, ErrSocialBlocked
 	}
 	q := db.New(tx)
-	eligibility, err := q.PartyInvitationEligibility(ctx, db.PartyInvitationEligibilityParams{ID: partyUUID, UserID: inviterUUID, Column3: recipientUUID})
+	eligibility, err := q.PartyInvitationEligibility(ctx, db.PartyInvitationEligibilityParams{PartyID: partyUUID, InviterUserID: inviterUUID, RecipientUserID: recipientUUID})
 	if err != nil {
 		return PartyInvitation{}, ErrSocialBlocked
 	}
@@ -549,7 +549,7 @@ func (s *DB) RespondPartyInvitation(userID, invitationID, response string) (Part
 	if err != nil {
 		return PartyInvitation{}, ErrSocialNotFound
 	}
-	_ = q.MarkPartyInvitationNotificationRead(context.Background(), db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, Column2: ingestText(invitationID)})
+	_ = q.MarkPartyInvitationNotificationRead(context.Background(), db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, InvitationID: ingestText(invitationID)})
 	return PartyInvitation{ID: row.PiID, PartyID: row.PID, InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
 }
 
@@ -594,7 +594,7 @@ func appendUserEventTxScan(ctx context.Context, tx pgx.Tx, userID, eventType str
 		return err
 	}
 	*sequence = value
-	return q.InsertUserEvent(ctx, db.InsertUserEventParams{UserID: userUUID, Sequence: value, Type: db.GdUserEventType(eventType), Column4: body})
+	return q.InsertUserEvent(ctx, db.InsertUserEventParams{UserID: userUUID, EventSequence: value, EventType: db.GdUserEventType(eventType), PayloadJson: body})
 }
 
 func (s *DB) ListUserEvents(userID string, after int64, limit int) ([]UserEvent, error) {

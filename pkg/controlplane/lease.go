@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	controlplanequeries "geoduels/pkg/persistence/sqlc/controlplane"
+	controlplanequeries "geoduels/pkg/persistence/sqlc/db"
 )
 
 var ErrLeaseNotHeld = errors.New("control-plane lease is not held")
@@ -72,7 +72,7 @@ func (s *PostgresLeaseStore) Acquire(ctx context.Context, name, owner string, tt
 	var lease Lease
 	lease.Name, lease.Owner = name, owner
 	row, err := s.queries.AcquireLease(ctx, controlplanequeries.AcquireLeaseParams{
-		Name: name, OwnerID: owner, Column3: interval(ttl),
+		Name: name, OwnerID: owner, Ttl: interval(ttl),
 	})
 	if err != nil {
 		// pgx returns ErrNoRows when another non-expired owner holds the row.
@@ -92,7 +92,7 @@ func (s *PostgresLeaseStore) Renew(ctx context.Context, lease Lease, ttl time.Du
 		return false, fmt.Errorf("lease ttl must be positive")
 	}
 	_, err := s.queries.RenewLease(ctx, controlplanequeries.RenewLeaseParams{
-		Name: lease.Name, OwnerID: lease.Owner, FencingToken: lease.Token, Column4: interval(ttl),
+		Name: lease.Name, OwnerID: lease.Owner, FencingToken: lease.Token, Ttl: interval(ttl),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

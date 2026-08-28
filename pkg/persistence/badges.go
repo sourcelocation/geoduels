@@ -230,9 +230,9 @@ func upsertBadgeTx(ctx context.Context, tx pgx.Tx, userID string, code, level, e
 		level = def.MaxLevel
 	}
 	var oldLevel, oldExtra int16
-	row, err := db.New(tx).LockBadge(ctx, db.LockBadgeParams{Column1: chatUUID(userID), BadgeCode: code})
+	row, err := db.New(tx).LockBadge(ctx, db.LockBadgeParams{UserID: chatUUID(userID), BadgeCode: code})
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err := db.New(tx).InsertBadge(ctx, db.InsertBadgeParams{Column1: chatUUID(userID), BadgeCode: code, Level: level, Column4: extra}); err != nil {
+		if err := db.New(tx).InsertBadge(ctx, db.InsertBadgeParams{UserID: chatUUID(userID), BadgeCode: code, Level: level, Extra: extra}); err != nil {
 			return false, err
 		}
 		if notify {
@@ -253,7 +253,7 @@ func upsertBadgeTx(ctx context.Context, tx pgx.Tx, userID string, code, level, e
 	if extra < oldExtra {
 		extra = oldExtra
 	}
-	if err := db.New(tx).UpdateBadge(ctx, db.UpdateBadgeParams{Column1: chatUUID(userID), BadgeCode: code, Level: level, Column4: extra}); err != nil {
+	if err := db.New(tx).UpdateBadge(ctx, db.UpdateBadgeParams{UserID: chatUUID(userID), BadgeCode: code, Level: level, Extra: extra}); err != nil {
 		return false, err
 	}
 	if notify && level > oldLevel {
@@ -300,12 +300,12 @@ func (s *DB) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.
 		return contracts.PlayerBadge{}, false, err
 	}
 	var level, extra int16
-	badge, err := db.New(tx).GetBadge(ctx, db.GetBadgeParams{Column1: chatUUID(userID), BadgeCode: def.Code})
+	badge, err := db.New(tx).GetBadge(ctx, db.GetBadgeParams{UserID: chatUUID(userID), BadgeCode: def.Code})
 	if err != nil {
 		return contracts.PlayerBadge{}, false, err
 	}
 	level, extra = badge.Level, badge.Extra
-	if err := db.New(tx).InsertBadgeGrantLog(ctx, db.InsertBadgeGrantLogParams{Column1: chatUUID(userID), Column2: actorUserID, Column3: def.ID}); err != nil {
+	if err := db.New(tx).InsertBadgeGrantLog(ctx, db.InsertBadgeGrantLogParams{SubjectUserID: chatUUID(userID), ActorUserID: actorUserID, BadgeID: def.ID}); err != nil {
 		return contracts.PlayerBadge{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -316,7 +316,7 @@ func (s *DB) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.
 
 func awardTopFinishTx(ctx context.Context, tx pgx.Tx, userID string) (bool, error) {
 	var count int16
-	value, err := db.New(tx).LockTopFinish(ctx, db.LockTopFinishParams{Column1: chatUUID(userID), BadgeCode: badgeCodeTopFinish})
+	value, err := db.New(tx).LockTopFinish(ctx, db.LockTopFinishParams{UserID: chatUUID(userID), BadgeCode: badgeCodeTopFinish})
 	count = int16(value)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return upsertBadgeTx(ctx, tx, userID, badgeCodeTopFinish, 1, 1, true)
@@ -339,10 +339,10 @@ func topFinishLevel(count int16) int16 {
 }
 
 func removeGeoDuelsTeamBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
-	if err := db.New(tx).ClearTeamBadgeSelection(ctx, db.ClearTeamBadgeSelectionParams{Column1: chatUUID(userID), SelectedBadgeCode: pgtype.Int2{Int16: badgeCodeGeoDuelsTeam, Valid: true}}); err != nil {
+	if err := db.New(tx).ClearTeamBadgeSelection(ctx, db.ClearTeamBadgeSelectionParams{UserID: chatUUID(userID), BadgeCode: pgtype.Int2{Int16: badgeCodeGeoDuelsTeam, Valid: true}}); err != nil {
 		return err
 	}
-	return db.New(tx).DeleteTeamBadge(ctx, db.DeleteTeamBadgeParams{Column1: chatUUID(userID), BadgeCode: badgeCodeGeoDuelsTeam})
+	return db.New(tx).DeleteTeamBadge(ctx, db.DeleteTeamBadgeParams{UserID: chatUUID(userID), BadgeCode: badgeCodeGeoDuelsTeam})
 }
 
 func (s *DB) SyncLoginBadges(userID string) error {
@@ -363,18 +363,18 @@ func (s *DB) SyncLoginBadges(userID string) error {
 	}
 	var isGuest, hasTeamRole bool
 	var mmr int
-	info, err := db.New(tx).LoginBadgeInfo(ctx, db.LoginBadgeInfoParams{Column1: chatUUID(userID), Mode: modeDuel, Column3: int32(initialMMR), SeasonID: seasonID})
+	info, err := db.New(tx).LoginBadgeInfo(ctx, db.LoginBadgeInfoParams{UserID: chatUUID(userID), Mode: modeDuel, DefaultMmr: int32(initialMMR), SeasonID: seasonID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errors.New("user not found")
 		}
 		return err
 	}
-	if v, ok := info.Coalesce.(bool); ok {
+	if v, ok := info.IsGuest.(bool); ok {
 		isGuest = v
 	}
-	hasTeamRole = info.Column2.Bool
-	mmr = int(info.Column3)
+	hasTeamRole = info.IsStaff.Bool
+	mmr = int(info.Mmr)
 	if hasTeamRole {
 		if _, err := awardBadgeTx(ctx, tx, userID, "geoduels-team"); err != nil {
 			return err
@@ -455,7 +455,7 @@ func (s *DB) ClaimPendingDiscordSync(now time.Time) (DiscordSyncOutboxItem, bool
 		return DiscordSyncOutboxItem{}, false, err
 	}
 	defer tx.Rollback(ctx)
-	row, err := db.New(tx).ClaimDiscordSync(ctx, db.ClaimDiscordSyncParams{NextAttemptAt: timestamptz(now), NextAttemptAt_2: timestamptz(now.Add(5 * time.Minute))})
+	row, err := db.New(tx).ClaimDiscordSync(ctx, db.ClaimDiscordSyncParams{NextAttemptAt: timestamptz(now), NewNextAttemptAt: timestamptz(now.Add(5 * time.Minute))})
 	var item DiscordSyncOutboxItem
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -492,7 +492,7 @@ func (s *DB) MarkDiscordSyncFailed(id int64, nextAttemptAt time.Time, lastError 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	return s.db.MarkDiscordSyncFailed(ctx, db.MarkDiscordSyncFailedParams{ID: id, NextAttemptAt: timestamptz(nextAttemptAt), Column3: lastError})
+	return s.db.MarkDiscordSyncFailed(ctx, db.MarkDiscordSyncFailedParams{OutboxID: id, NextAttemptAt: timestamptz(nextAttemptAt), LastError: lastError})
 }
 
 func (s *DB) GetDiscordLinkedUser(discordUserID string) (DiscordLinkedUser, bool, error) {
@@ -502,7 +502,7 @@ func (s *DB) GetDiscordLinkedUser(discordUserID string) (DiscordLinkedUser, bool
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	row, err := s.db.LoginDiscordSyncInfo(ctx, db.LoginDiscordSyncInfoParams{Provider: IdentityProviderDiscord, ProviderUserID: discordUserID, Column3: badgeCodeElo2000, Column4: badgeCodeElo1500, Column5: badgeCodeElo1000})
+	row, err := s.db.LoginDiscordSyncInfo(ctx, db.LoginDiscordSyncInfoParams{Provider: IdentityProviderDiscord, ProviderUserID: discordUserID, Elo2000Code: badgeCodeElo2000, Elo1500Code: badgeCodeElo1500, Elo1000Code: badgeCodeElo1000})
 	var user DiscordLinkedUser
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -522,7 +522,7 @@ func (s *DB) CreateDonationRef(userID string) (string, error) {
 	ref := "don_" + strings.TrimPrefix(newUserID(), "u_")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	if err := s.db.InsertDonationRef(ctx, db.InsertDonationRefParams{Ref: ref, Column2: chatUUID(userID)}); err != nil {
+	if err := s.db.InsertDonationRef(ctx, db.InsertDonationRefParams{DonationRef: ref, UserID: chatUUID(userID)}); err != nil {
 		return "", err
 	}
 	return ref, nil

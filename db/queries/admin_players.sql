@@ -13,27 +13,27 @@ select count(*)::int as total_matches,
 from match_history h join match_players p on p.match_id = h.match_id where p.user_id = $1;
 
 -- name: GrantRoleLog :exec
-insert into moderation_log(subject_user_id,actor_user_id,action,reason,metadata) values($1,nullif($2,'')::uuid,'role_granted',nullif($3,''),jsonb_build_object('role',$4::text));
+insert into moderation_log(subject_user_id,actor_user_id,action,reason,metadata) values(sqlc.arg(subject_user_id),nullif(sqlc.arg(actor_user_id),'')::uuid,'role_granted',nullif(sqlc.arg(reason),''),jsonb_build_object('role',sqlc.arg(role)::text));
 
 -- name: GrantUserRole :execresult
-update users set is_admin=case when $2='admin' then true else is_admin end, is_moderator=case when $2 in ('admin','moderator') then true else is_moderator end where id=$1;
+update users set is_admin=case when sqlc.arg(role)='admin' then true else is_admin end, is_moderator=case when sqlc.arg(role) in ('admin','moderator') then true else is_moderator end where id=sqlc.arg(user_id);
 
 -- name: HasTeamRole :one
 select is_admin or is_moderator from users where id=$1;
 
 -- name: ListUserRoles :many
-select u.id, coalesce(nullif(u.display_name, ''), u.id::text), coalesce(u.email, ''),
- case when u.is_admin then 'admin' else 'moderator' end,
- coalesce(last_grant.actor_user_id::text, ''), coalesce(last_grant.created_at, u.created_at),
- null::timestamptz, coalesce(last_grant.reason, '')
+select u.id, coalesce(nullif(u.display_name, ''), u.id::text) AS display_name, coalesce(u.email, '') AS email,
+ case when u.is_admin then 'admin' else 'moderator' end AS role,
+ coalesce(last_grant.actor_user_id::text, '') AS actor_user_id, coalesce(last_grant.created_at, u.created_at) AS granted_at,
+ null::timestamptz AS revoked_at, coalesce(last_grant.reason, '') AS last_reason
 from users u left join lateral (select actor_user_id, created_at, reason from moderation_log where subject_user_id=u.id and action='role_granted' order by created_at desc,id desc limit 1) last_grant on true
 where u.is_admin or u.is_moderator order by u.is_admin desc, coalesce(last_grant.created_at,u.created_at) desc;
 
 -- name: RevokeRoleLog :exec
-insert into moderation_log(subject_user_id,actor_user_id,action,reason,metadata) values($1,nullif($2,'')::uuid,'role_revoked',nullif($3,''),jsonb_build_object('role',$4::text));
+insert into moderation_log(subject_user_id,actor_user_id,action,reason,metadata) values(sqlc.arg(subject_user_id),nullif(sqlc.arg(actor_user_id),'')::uuid,'role_revoked',nullif(sqlc.arg(reason),''),jsonb_build_object('role',sqlc.arg(role)::text));
 
 -- name: RevokeUserRole :execresult
-update users set is_admin=case when $2='admin' then false else is_admin end, is_moderator=case when $2='admin' then false when is_admin then true else false end where id=$1;
+update users set is_admin=case when sqlc.arg(role)='admin' then false else is_admin end, is_moderator=case when sqlc.arg(role)='admin' then false when is_admin then true else false end where id=sqlc.arg(user_id);
 
 -- name: SearchAdminPlayers :many
 select
@@ -41,7 +41,7 @@ select
     coalesce(u.email, '') as email,
     coalesce(nullif(u.display_name, ''), ui.provider_name, u.id::text) as display_name,
     coalesce(u.avatar_url, ui.avatar_url, '') as avatar_url,
-    coalesce(r.mmr, $3::int) as mmr,
+    coalesce(r.mmr, sqlc.arg(default_mmr)::int) as mmr,
     coalesce(us.games_played, 0) as games_played,
     coalesce(us.wins, 0) as wins,
     coalesce(rs.games_played, 0) as ranked_games_played,
@@ -74,24 +74,24 @@ left join lateral (
     order by last_used_at desc, created_at desc
     limit 1
 ) latest_session on true
-left join ranks r on r.user_id = u.id and r.mode = $1 and r.season_id = $2
+left join ranks r on r.user_id = u.id and r.mode = sqlc.arg(mode) and r.season_id = sqlc.arg(season_id)
 left join user_stats us on us.user_id = u.id
-left join ranked_stats rs on rs.user_id = u.id and rs.mode = $1 and rs.season_id = $2
-where ($4 = '%%'
-       or lower(u.id::text) like $4
-       or lower(coalesce(u.email, '')) like $4
-       or lower(coalesce(u.display_name, ui.provider_name, '')) like $4
+left join ranked_stats rs on rs.user_id = u.id and rs.mode = sqlc.arg(mode) and rs.season_id = sqlc.arg(season_id)
+where (sqlc.arg(search) = '%%'
+       or lower(u.id::text) like sqlc.arg(search)
+       or lower(coalesce(u.email, '')) like sqlc.arg(search)
+       or lower(coalesce(u.display_name, ui.provider_name, '')) like sqlc.arg(search)
        or exists (
         select 1
         from user_identity_history ih
         where ih.user_id = u.id
           and (
-            lower(ih.provider) like $4
-            or lower(ih.provider_user_id) like $4
-            or lower(coalesce(ih.email, '')) like $4
-            or lower(coalesce(ih.provider_name, '')) like $4
+            lower(ih.provider::text) like sqlc.arg(search)
+            or lower(ih.provider_user_id) like sqlc.arg(search)
+            or lower(coalesce(ih.email, '')) like sqlc.arg(search)
+            or lower(coalesce(ih.provider_name, '')) like sqlc.arg(search)
           )
        ))
-  and ($6::uuid is null or u.id = $6)
+  and (sqlc.arg(creator_id)::uuid is null or u.id = sqlc.arg(creator_id)::uuid)
 order by u.created_at desc, u.id desc
-limit $5;
+limit sqlc.arg(row_limit);

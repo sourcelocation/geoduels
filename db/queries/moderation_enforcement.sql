@@ -19,15 +19,15 @@ WHERE id = $1;
 
 -- name: BanUserOAuthIdentities :exec
 INSERT INTO oauth_identity_bans(provider, provider_user_id, banned_user_id, reason, created_by, created_at, revoked_at)
-SELECT provider, provider_user_id, $1, NULLIF($2, ''), NULLIF($3, '')::uuid, now(), NULL
+SELECT provider, provider_user_id, sqlc.arg(banned_user_id), NULLIF(sqlc.arg(reason)::text, ''), NULLIF(sqlc.arg(created_by)::text, '')::uuid, now(), NULL
 FROM (
     SELECT provider, provider_user_id
     FROM user_identity_history
-    WHERE user_id = $1
+    WHERE user_id = sqlc.arg(banned_user_id)
     UNION
     SELECT provider, provider_user_id
     FROM user_identities
-    WHERE user_id = $1
+    WHERE user_id = sqlc.arg(banned_user_id)
 ) identities
 ON CONFLICT (provider, provider_user_id) DO UPDATE SET
     banned_user_id = excluded.banned_user_id,
@@ -53,12 +53,12 @@ WHERE id = $1;
 
 -- name: GetPlayerRiskContext :one
 SELECT
-    COALESCE(r.mmr, $4)::int AS rating,
+    COALESCE(r.mmr, sqlc.arg(default_rating))::int AS rating,
     COALESCE(rs.games_played, 0)::int AS ranked_games
 FROM users u
-LEFT JOIN ranks r ON r.user_id = u.id AND r.mode = $2 AND r.season_id = $3
-LEFT JOIN ranked_stats rs ON rs.user_id = u.id AND rs.mode = $2 AND rs.season_id = $3
-WHERE u.id = $1;
+LEFT JOIN ranks r ON r.user_id = u.id AND r.mode = sqlc.arg(mode) AND r.season_id = sqlc.arg(season_id)
+LEFT JOIN ranked_stats rs ON rs.user_id = u.id AND rs.mode = sqlc.arg(mode) AND rs.season_id = sqlc.arg(season_id)
+WHERE u.id = sqlc.arg(user_id);
 
 -- name: GetUserRegistrationIP :one
 SELECT COALESCE(registration_ip_address, '') AS registration_ip
@@ -88,7 +88,7 @@ ON CONFLICT (user_id, match_id, cheater_user_id) DO NOTHING;
 
 -- name: InsertIPSignupBan :exec
 INSERT INTO ip_signup_bans(ip_address, reason, created_by, created_at, revoked_at)
-VALUES($1, NULLIF($2, ''), NULLIF($3, '')::uuid, now(), NULL)
+VALUES($1, NULLIF(sqlc.arg(reason)::text, ''), NULLIF(sqlc.arg(created_by)::text, '')::uuid, now(), NULL)
 ON CONFLICT (ip_address) DO UPDATE SET
     reason = excluded.reason,
     created_by = excluded.created_by,
@@ -129,7 +129,7 @@ WITH candidate_matches AS (
         h.winner_user_id,
         opponent.user_id AS opponent_user_id,
         cheater.mmr AS cheater_mmr,
-        COALESCE(cheater.rating_rd, $3::double precision) AS cheater_rd,
+        COALESCE(cheater.rating_rd, sqlc.arg(default_rating_rd)::double precision) AS cheater_rd,
         opponent.final_ranked_delta AS original_delta
     FROM match_history h
     JOIN match_players cheater ON cheater.match_id = h.match_id AND cheater.user_id = $1
@@ -139,7 +139,7 @@ WITH candidate_matches AS (
         OR l.last_match_id = h.match_id
     WHERE h.mode = $2
         AND h.winner_user_id = $1
-        AND ($4::timestamptz IS NULL OR h.ended_at >= $4)
+        AND (sqlc.narg(since)::timestamptz IS NULL OR h.ended_at >= sqlc.narg(since))
         AND h.ranked
         AND l.id IS NULL
 )
@@ -215,8 +215,8 @@ WHERE banned_user_id = $1 AND revoked_at IS NULL;
 
 -- name: SetChatMute :execrows
 UPDATE users
-SET chat_muted_at = now(), chat_mute_reason = NULLIF($2, ''), chat_mute_expires_at = $3
-WHERE id = $1;
+SET chat_muted_at = now(), chat_mute_reason = NULLIF(sqlc.arg(reason)::text, ''), chat_mute_expires_at = sqlc.arg(chat_mute_expires_at)
+WHERE id = sqlc.arg(user_id);
 
 -- name: SetEloRefundNotification :exec
 UPDATE elo_refunds
@@ -225,5 +225,5 @@ WHERE user_id = $1 AND match_id = $2 AND cheater_user_id = $3;
 
 -- name: SetReportMute :execrows
 UPDATE users
-SET report_muted_at = now(), report_mute_reason = NULLIF($2, ''), report_mute_expires_at = $3
-WHERE id = $1;
+SET report_muted_at = now(), report_mute_reason = NULLIF(sqlc.arg(reason)::text, ''), report_mute_expires_at = sqlc.arg(report_mute_expires_at)
+WHERE id = sqlc.arg(user_id);

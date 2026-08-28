@@ -45,14 +45,14 @@ func (s *DB) RecordChatMessage(cid, scope, scopeID string, m ChatMessage) error 
 		t = time.Now()
 	}
 	sid := entityid.Derive("conversation", cid)
-	if e := s.db.EnsureConversation(ctx, db.EnsureConversationParams{ID: chatUUID(sid), Column2: db.GdChatScope(scope), Column3: chatUUID(scopeID)}); e != nil {
+	if e := s.db.EnsureConversation(ctx, db.EnsureConversationParams{ConversationID: chatUUID(sid), ScopeKind: db.GdChatScope(scope), ScopeID: chatUUID(scopeID)}); e != nil {
 		return e
 	}
 	match, team := "", ""
 	if m.Audience == contracts.ChatAudienceTeam {
 		match, team = m.MatchID, m.TeamID
 	}
-	return s.db.InsertMessage(ctx, db.InsertMessageParams{ID: chatUUID(m.ID), ConversationID: chatUUID(sid), Column3: match, SenderUserID: chatUUID(m.SenderUserID), SenderDisplayName: m.SenderDisplayName, Column6: db.GdChatKind(m.Kind), Body: chatText(m.Body), Emote: chatText(string(m.Emote)), Column9: db.GdChatAudience(m.Audience), Column10: team, CreatedAt: pgtype.Timestamptz{Time: t, Valid: true}})
+	return s.db.InsertMessage(ctx, db.InsertMessageParams{MessageID: chatUUID(m.ID), ConversationID: chatUUID(sid), TeamMatchID: match, SenderUserID: chatUUID(m.SenderUserID), SenderDisplayName: m.SenderDisplayName, Kind: db.GdChatKind(m.Kind), Body: chatText(m.Body), Emote: chatText(string(m.Emote)), Audience: db.GdChatAudience(m.Audience), TeamID: team, CreatedAt: pgtype.Timestamptz{Time: t, Valid: true}})
 }
 func (s *DB) ListChatMessages(id string, n int) ([]ChatMessage, error) {
 	return s.listChatMessages(id, "", n)
@@ -70,7 +70,7 @@ func (s *DB) listChatMessages(id, u string, n int) ([]ChatMessage, error) {
 	}
 	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
 	defer c()
-	rs, e := s.db.ListMessages(ctx, db.ListMessagesParams{ConversationID: chatUUID(entityid.Derive("conversation", id)), Column2: u, Limit: int32(n)})
+	rs, e := s.db.ListMessages(ctx, db.ListMessagesParams{ConversationID: chatUUID(entityid.Derive("conversation", id)), ViewerUserID: u, RowLimit: int32(n)})
 	if e != nil {
 		return nil, e
 	}
@@ -83,15 +83,15 @@ func (s *DB) listChatMessages(id, u string, n int) ([]ChatMessage, error) {
 func (s *DB) ActivePartyChatTeam(p, u string) (string, string, bool, error) {
 	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
 	defer c()
-	r, e := s.db.ActivePartyChatTeam(ctx, db.ActivePartyChatTeamParams{ID: chatUUID(p), UserID: chatUUID(u)})
+	r, e := s.db.ActivePartyChatTeam(ctx, db.ActivePartyChatTeamParams{PartyID: chatUUID(p), UserID: chatUUID(u)})
 	if errors.Is(e, pgx.ErrNoRows) {
 		return "", "", false, nil
 	}
 	if e != nil {
 		return "", "", false, e
 	}
-	t := chatStr(r.Coalesce)
-	return r.MsMatchID, t, t != "", nil
+	t := chatStr(r.TeamID)
+	return r.MatchID, t, t != "", nil
 }
 func (s *DB) ChatTeamForMatch(m, u string) (string, bool, error) {
 	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)

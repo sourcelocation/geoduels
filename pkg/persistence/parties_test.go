@@ -7,7 +7,7 @@ import (
 )
 
 func TestPartyMapAccessIncludesPublishedCommunityMaps(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/parties/queries.sql")
+	body, err := os.ReadFile("../../db/queries/parties.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestMapVisibleToUserHonorsCurrentVisibility(t *testing.T) {
 }
 
 func TestPartyReadQueryCastsNullableMapID(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/parties/queries.sql")
+	body, err := os.ReadFile("../../db/queries/parties.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

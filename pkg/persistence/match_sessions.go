@@ -54,7 +54,7 @@ func (s *DB) UpsertMatchSession(ctx context.Context, p MatchSessionUpsert) error
 		}
 		b, _ := json.Marshal(f.Config)
 		r := f.ReturnTarget
-		var sourcePartyID, sourceInvite, mapID, returnKind, returnMap, returnParty any
+		var sourcePartyID, sourceInvite, mapID, returnKind, returnMap, returnParty string
 		if f.SourcePartyID != "" {
 			sourcePartyID = f.SourcePartyID
 		}
@@ -125,7 +125,7 @@ func (s *DB) UpsertMatchSession(ctx context.Context, p MatchSessionUpsert) error
 			if err != nil {
 				return err
 			}
-			if e = q.UpsertMatchParticipant(ctx, db.UpsertMatchParticipantParams{MatchID: matchUUID, UserID: userUUID, Column3: nullableSessionText(team), DisplayName: pr.DisplayName, AvatarUrl: pr.AvatarURL, JoinedPartyAt: joined}); e != nil {
+			if e = q.UpsertMatchParticipant(ctx, db.UpsertMatchParticipantParams{MatchID: matchUUID, UserID: userUUID, TeamID: strings.TrimSpace(team), DisplayName: pr.DisplayName, AvatarUrl: pr.AvatarURL, JoinedPartyAt: joined}); e != nil {
 				return e
 			}
 		}
@@ -178,8 +178,8 @@ func (s *DB) RenewMatchSessionLeases(node string, epoch int64, ids []string, ttl
 	return s.db.RenewMatchSessionLeases(ctx, db.RenewMatchSessionLeasesParams{
 		NodeID:    pgtype.Text{String: node, Valid: true},
 		NodeEpoch: pgtype.Int8{Int64: epoch, Valid: true},
-		Column3:   ids,
-		Column4:   pgtype.Interval{Microseconds: ttl.Microseconds(), Valid: true},
+		MatchIds:  ids,
+		Ttl:       pgtype.Interval{Microseconds: ttl.Microseconds(), Valid: true},
 	})
 }
 func matchPresetID(f contracts.MatchFound) contracts.MatchPresetID {

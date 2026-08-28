@@ -46,11 +46,11 @@ func markMapDailyUser(c context.Context, t pgx.Tx, m, u, f string) error {
 	var a bool
 	switch f {
 	case "played":
-		a, e = q.DailyUserPlayed(c, db.DailyUserPlayedParams{Column1: id, Column2: uid})
+		a, e = q.DailyUserPlayed(c, db.DailyUserPlayedParams{MapID: id, UserID: uid})
 	case "favorited":
-		a, e = q.DailyUserFavorited(c, db.DailyUserFavoritedParams{Column1: id, Column2: uid})
+		a, e = q.DailyUserFavorited(c, db.DailyUserFavoritedParams{MapID: id, UserID: uid})
 	case "commented":
-		a, e = q.DailyUserCommented(c, db.DailyUserCommentedParams{Column1: id, Column2: uid})
+		a, e = q.DailyUserCommented(c, db.DailyUserCommentedParams{MapID: id, UserID: uid})
 	default:
 		return errors.New("invalid map stat field")
 	}
@@ -63,19 +63,19 @@ func markMapDailyUser(c context.Context, t pgx.Tx, m, u, f string) error {
 	}
 	switch f {
 	case "played":
-		e = q.UpsertDailyPlayed(c, db.UpsertDailyPlayedParams{Column1: id, Column2: uid})
+		e = q.UpsertDailyPlayed(c, db.UpsertDailyPlayedParams{MapID: id, UserID: uid})
 		if e == nil {
-			e = q.IncrementDailyPlayed(c, db.IncrementDailyPlayedParams{Column1: id, UniquePlayers: n})
+			e = q.IncrementDailyPlayed(c, db.IncrementDailyPlayedParams{MapID: id, Increment: n})
 		}
 	case "favorited":
-		e = q.UpsertDailyFavorited(c, db.UpsertDailyFavoritedParams{Column1: id, Column2: uid})
+		e = q.UpsertDailyFavorited(c, db.UpsertDailyFavoritedParams{MapID: id, UserID: uid})
 		if e == nil {
-			e = q.IncrementDailyFavorited(c, db.IncrementDailyFavoritedParams{Column1: id, UniqueFavoriters: n})
+			e = q.IncrementDailyFavorited(c, db.IncrementDailyFavoritedParams{MapID: id, Increment: n})
 		}
 	case "commented":
-		e = q.UpsertDailyCommented(c, db.UpsertDailyCommentedParams{Column1: id, Column2: uid})
+		e = q.UpsertDailyCommented(c, db.UpsertDailyCommentedParams{MapID: id, UserID: uid})
 		if e == nil {
-			e = q.IncrementDailyCommented(c, db.IncrementDailyCommentedParams{Column1: id, UniqueCommenters: n})
+			e = q.IncrementDailyCommented(c, db.IncrementDailyCommentedParams{MapID: id, Increment: n})
 		}
 	}
 	if e != nil {
@@ -89,17 +89,17 @@ func refreshMapTrendingScore(c context.Context, t pgx.Tx, m string) error {
 	if e != nil {
 		return e
 	}
-	r, e := q.TrendingInputs(c, db.TrendingInputsParams{Column1: id, Column2: mapTrendingWindowDays})
+	r, e := q.TrendingInputs(c, db.TrendingInputsParams{MapID: id, WindowDays: mapTrendingWindowDays})
 	if e != nil {
 		return e
 	}
-	s := r.Column1
-	if r.Column2 >= 3 && r.PublishedAt.Valid {
+	s := r.WeightedScore
+	if r.ActivityTotal >= 3 && r.PublishedAt.Valid {
 		x := time.Since(r.PublishedAt.Time)
 		if x < 0 {
 			x = 0
 		}
 		s *= 1 + 19*(1-math.Min(x.Hours()/(24*7), 1))
 	}
-	return q.UpdateTrendingScore(c, db.UpdateTrendingScoreParams{Column1: id, TrendingScore: s})
+	return q.UpdateTrendingScore(c, db.UpdateTrendingScoreParams{MapID: id, TrendingScore: s})
 }

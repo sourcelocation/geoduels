@@ -44,7 +44,7 @@ func (s *DB) ReplaceMapLocations(mapKey, displayName string, dataset []byte) (Ma
 	if err := id.Scan(mapID); err != nil {
 		return MapImportSummary{}, err
 	}
-	q := s.maprevisions
+	q := db.New(s.pool)
 	if err := q.WithTx(tx).UpsertMap(ctx, db.UpsertMapParams{ID: id, DisplayName: displayName, ContentHash: digest[:]}); err != nil {
 		return MapImportSummary{}, err
 	}
@@ -73,7 +73,7 @@ func (s *DB) ReplaceMapLocations(mapKey, displayName string, dataset []byte) (Ma
 			pano[i] = *row.PanoID
 		}
 	}
-	if err := q.WithTx(tx).InsertMapLocations(ctx, db.InsertMapLocationsParams{MapStorageID: storage, Column2: lat, Column3: lng, Column4: country, Column5: pano, Column6: heading, Column7: pitch, Column8: rand}); err != nil {
+	if err := q.WithTx(tx).InsertMapLocations(ctx, db.InsertMapLocationsParams{MapStorageID: storage, LatE7: lat, LngE7: lng, Country: country, PanoID: pano, HeadingCdeg: heading, PitchCdeg: pitch, RandKeyI: rand}); err != nil {
 		return MapImportSummary{}, err
 	}
 	if err := q.WithTx(tx).DeleteMapCountryStats(ctx, id); err != nil {

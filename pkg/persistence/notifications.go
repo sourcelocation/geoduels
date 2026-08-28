@@ -27,7 +27,7 @@ func (s *DB) ClaimPendingNotification(notificationType string, now time.Time) (N
 	defer tx.Rollback(ctx)
 	q := db.New(tx)
 	var nt pgtype.Timestamptz = timestamptz(now)
-	row, scanErr := q.ClaimPendingNotification(ctx, db.ClaimPendingNotificationParams{NotificationType: db.GdNotificationOutboxType(notificationType), Now: nt, NextAttemptAt: timestamptz(now.Add(5 * time.Minute))})
+	row, scanErr := q.ClaimPendingNotification(ctx, db.ClaimPendingNotificationParams{LeaseUntil: timestamptz(now.Add(5 * time.Minute)), NotificationType: db.GdNotificationOutboxType(notificationType), Now: nt})
 	if scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return NotificationOutboxItem{}, false, nil
@@ -67,7 +67,7 @@ func (s *DB) MarkNotificationFailed(id int64, nextAttemptAt time.Time, lastError
 	if err != nil {
 		return err
 	}
-	return s.db.MarkNotificationFailed(ctx, db.MarkNotificationFailedParams{ID: value, NextAttemptAt: timestamptz(nextAttemptAt), LastError: lastError})
+	return s.db.MarkNotificationFailed(ctx, db.MarkNotificationFailedParams{NextAttemptAt: timestamptz(nextAttemptAt), LastError: lastError, OutboxID: value})
 }
 
 func upsertUserNotification(ctx context.Context, tx pgx.Tx, userID, notificationType, dedupeKey string, payload any, id *int64) error {
@@ -134,7 +134,7 @@ func (s *DB) ListUserNotifications(userID string, limit int) ([]UserNotification
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.ListUserNotifications(ctx, db.ListUserNotificationsParams{UserID: u, LimitCount: int32(limit)})
+	rows, err := s.db.ListUserNotifications(ctx, db.ListUserNotificationsParams{UserID: u, Limit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (s *DB) ListNotificationInbox(userID string, limit int, beforeID int64) ([]
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.ListNotificationInbox(ctx, db.ListNotificationInboxParams{UserID: u, LimitCount: int32(limit), BeforeID: beforeID})
+	rows, err := s.db.ListNotificationInbox(ctx, db.ListNotificationInboxParams{UserID: u, BeforeID: beforeID, RowLimit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}

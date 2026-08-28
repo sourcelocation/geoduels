@@ -70,7 +70,7 @@ func (s *DB) BanPlayerForCheating(userID, reason, actorUserID string) (CheatingB
 	if tag == 0 {
 		return CheatingBanSummary{}, errors.New("user not found")
 	}
-	if err := q.BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: uid, Column2: reason, Column3: actorUserID}); err != nil {
+	if err := q.BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: uid, Reason: reason, CreatedBy: actorUserID}); err != nil {
 		return CheatingBanSummary{}, err
 	}
 	registrationIP, err := q.GetUserRegistrationIP(ctx, uid)
@@ -111,8 +111,8 @@ func (s *DB) BanPlayerForCheating(userID, reason, actorUserID string) (CheatingB
 		if relatedCheater {
 			if err := q.InsertIPSignupBan(ctx, db.InsertIPSignupBanParams{
 				IpAddress: registrationIP,
-				Column2:   "Automatic signup ban: repeated cheating bans from registration IP",
-				Column3:   actorUserID,
+				Reason:    "Automatic signup ban: repeated cheating bans from registration IP",
+				CreatedBy: actorUserID,
 			}); err != nil {
 				return CheatingBanSummary{}, err
 			}
@@ -141,10 +141,10 @@ func issueCurrentMMRRefundsForCheater(ctx context.Context, tx pgx.Tx, cheaterUse
 		return EloRefundSummary{}, err
 	}
 	rows, err := q.ListCheaterRefundCandidates(ctx, db.ListCheaterRefundCandidatesParams{
-		UserID:  cheaterUUID,
-		Mode:    db.GdMatchMode(modeDuel),
-		Column3: initialRatingRD,
-		Column4: sinceArg,
+		UserID:          cheaterUUID,
+		Mode:            db.GdMatchMode(modeDuel),
+		DefaultRatingRd: initialRatingRD,
+		Since:           sinceArg,
 	})
 	if err != nil {
 		return EloRefundSummary{}, err
@@ -354,10 +354,10 @@ func (s *DB) riskEngineRecentGuessEvents(ctx context.Context, userID string) ([]
 
 func (s *DB) riskEnginePlayerContext(ctx context.Context, userID, seasonID string) (int, int, error) {
 	row, err := s.db.GetPlayerRiskContext(ctx, db.GetPlayerRiskContextParams{
-		ID:       chatUUID(userID),
-		Mode:     db.GdMatchMode(modeDuel),
-		SeasonID: seasonID,
-		Column4:  int32(initialMMR),
+		UserID:        chatUUID(userID),
+		Mode:          db.GdMatchMode(modeDuel),
+		SeasonID:      seasonID,
+		DefaultRating: int32(initialMMR),
 	})
 	if err != nil {
 		return 0, 0, err
@@ -379,11 +379,11 @@ func (s *DB) recordRiskEngineSignal(ctx context.Context, matchID string, signal 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	signalID, err := moderationv2queries.New(tx).UpsertRiskEngineSignal(ctx, moderationv2queries.UpsertRiskEngineSignalParams{
+	signalID, err := db.New(tx).UpsertRiskEngineSignal(ctx, db.UpsertRiskEngineSignalParams{
 		SubjectUserID:    chatUUID(signal.SubjectUserID),
 		SignalType:       normalizeRiskSignalType(signal.SignalType),
-		Severity:         moderationv2queries.GdModerationSeverity(normalizeRiskSeverity(signal.Severity)),
-		EvidenceStrength: moderationv2queries.GdEvidenceStrength(normalizeRiskEvidenceStrength(signal.EvidenceStrength)),
+		Severity:         db.GdModerationSeverity(normalizeRiskSeverity(signal.Severity)),
+		EvidenceStrength: db.GdEvidenceStrength(normalizeRiskEvidenceStrength(signal.EvidenceStrength)),
 		DetectorKey:      signal.DetectorKey,
 		DetectorVersion:  signal.DetectorVersion,
 		ReasonCode:       nonempty(signal.ReasonCode, "risk_engine_signal"),
@@ -413,8 +413,8 @@ func (s *DB) AddSignupIPBan(ipAddress, reason, createdBy string) error {
 	defer cancel()
 	return s.db.InsertIPSignupBan(ctx, db.InsertIPSignupBanParams{
 		IpAddress: ipAddress,
-		Column2:   strings.TrimSpace(reason),
-		Column3:   strings.TrimSpace(createdBy),
+		Reason:    strings.TrimSpace(reason),
+		CreatedBy: strings.TrimSpace(createdBy),
 	})
 }
 

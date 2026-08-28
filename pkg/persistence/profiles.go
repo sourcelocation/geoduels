@@ -69,7 +69,7 @@ func (s *DB) GetProfile(userID string) (Profile, error) {
 	}
 	p.SeasonID = seasonID
 	row, err := s.db.GetProfile(ctx, db.GetProfileParams{
-		Column1: userID, Mode: modeDuel, SeasonID: seasonID, Column4: initialMMR, Column5: initialRatingRD,
+		UserID: userID, Mode: modeDuel, SeasonID: seasonID, DefaultMmr: initialMMR, DefaultRd: initialRatingRD,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -110,7 +110,7 @@ func (s *DB) GetPublicPlayerProfileByNickname(nickname string) (PublicPlayerProf
 	p.SeasonID = seasonID
 	var selectedBadgeCode int16
 	err = func() error {
-		row, e := s.db.GetPublicProfile(ctx, db.GetPublicProfileParams{Lower: nickname, Mode: modeDuel, SeasonID: seasonID, Column4: initialMMR, Column5: initialRatingRD})
+		row, e := s.db.GetPublicProfile(ctx, db.GetPublicProfileParams{DisplayName: nickname, Mode: modeDuel, SeasonID: seasonID, DefaultMmr: initialMMR, DefaultRd: initialRatingRD})
 		if e != nil {
 			return e
 		}
@@ -140,7 +140,7 @@ func (s *DB) GetPublicPlayerProfileByNickname(nickname string) (PublicPlayerProf
 	if e != nil {
 		return p, e
 	}
-	streak, e := s.db.GetBestWinStreak(ctx, db.GetBestWinStreakParams{Column1: id, Column2: profileTimestamptz(seasonStartedAt)})
+	streak, e := s.db.GetBestWinStreak(ctx, db.GetBestWinStreakParams{UserID: id, Since: profileTimestamptz(seasonStartedAt)})
 	if e != nil {
 		return p, e
 	}
@@ -226,7 +226,7 @@ func (s *DB) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	if err := s.db.UpdateSelectedBadge(ctx, db.UpdateSelectedBadgeParams{ID: id, Column2: code}); err != nil {
+	if err := s.db.UpdateSelectedBadge(ctx, db.UpdateSelectedBadgeParams{UserID: id, BadgeCode: code}); err != nil {
 		return Profile{}, err
 	}
 	return s.GetProfile(userID)

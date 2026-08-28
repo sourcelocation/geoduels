@@ -11,11 +11,11 @@ WITH ranked AS (
  SELECT r.user_id, row_number() OVER (ORDER BY r.mmr DESC, r.updated_at ASC, r.user_id ASC) AS rank,
         count(*) OVER () AS total_players
  FROM ranks r LEFT JOIN users u ON u.id = r.user_id
- WHERE r.mode = $2 AND r.season_id = $3
+ WHERE r.mode = sqlc.arg(mode) AND r.season_id = sqlc.arg(season_id)
    AND coalesce(u.account_type, 'registered') <> 'guest'
    AND NOT coalesce(u.banned_at IS NOT NULL AND (u.ban_expires_at IS NULL OR u.ban_expires_at > now()), false)
 )
-SELECT coalesce(max(rank) FILTER (WHERE user_id = nullif($1, '')::uuid), 0)::int AS self_rank,
+SELECT coalesce(max(rank) FILTER (WHERE user_id = nullif(sqlc.arg(self_user_id), '')::uuid), 0)::int AS self_rank,
        coalesce(max(total_players), 0)::int AS total_players FROM ranked;
 
 -- name: GetRankedSeasonSettings :one
@@ -31,7 +31,7 @@ FOR UPDATE;
 
 -- name: ListLeaderboard :many
 SELECT row_number() OVER (ORDER BY r.mmr DESC, r.updated_at ASC, r.user_id ASC) AS rank,
-       r.user_id::text,
+       r.user_id::text AS user_id,
        coalesce(nullif(u.display_name, r.user_id::text), ui.provider_name, r.user_id::text) AS display_name,
        coalesce(u.avatar_url, ui.avatar_url, '') AS avatar_url,
        r.mmr,

@@ -121,7 +121,7 @@ func TestMapSearchPatternCapsLongTermsByRune(t *testing.T) {
 }
 
 func TestMapCommentsQueryCastsUUIDsForStringScanning(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/map_comments/queries.sql")
+	body, err := os.ReadFile("../../db/queries/map_comments.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +132,13 @@ func TestMapCommentsQueryCastsUUIDsForStringScanning(t *testing.T) {
 		}
 	}
 	compact := strings.ReplaceAll(source, " ", "")
-	if !strings.Contains(compact, "coalesce(c.user_id=nullif($2,'')::uuidor$3::boolean,false)") {
+	if !strings.Contains(compact, "coalesce(c.user_id=nullif(sqlc.arg(viewer_user_id),'')::uuidorsqlc.arg(can_moderate)::boolean,false)") {
 		t.Fatal("map comments query must normalize anonymous can-delete results to false")
 	}
 }
 
 func TestArchiveCustomMapAdminOverrideIncludesOwnerlessMaps(t *testing.T) {
-	body, err := os.ReadFile("../../db/queries/map_ingest/queries.sql")
+	body, err := os.ReadFile("../../db/queries/map_ingest.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

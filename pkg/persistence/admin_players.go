@@ -25,13 +25,13 @@ func (s *DB) ListUserRoles() ([]UserRoleGrant, error) {
 	for _, row := range rows {
 		var item UserRoleGrant
 		item.UserID = row.ID.String()
-		item.DisplayName, _ = row.Coalesce.(string)
-		item.Email, item.Role, item.GrantedBy, item.Reason = row.Email, row.Column4, "", row.Reason
-		if v, ok := row.Coalesce_2.(string); ok {
+		item.DisplayName, _ = row.DisplayName.(string)
+		item.Email, item.Role, item.GrantedBy, item.Reason = row.Email, row.Role, "", row.LastReason
+		if v, ok := row.ActorUserID.(string); ok {
 			item.GrantedBy = v
 		}
-		if row.CreatedAt.Valid {
-			item.GrantedAt = row.CreatedAt.Time
+		if row.GrantedAt.Valid {
+			item.GrantedAt = row.GrantedAt.Time
 		}
 		out = append(out, item)
 	}
@@ -69,14 +69,14 @@ func (s *DB) GrantUserRole(userID, role, grantedBy, reason string) error {
 		return err
 	}
 	q := s.db.WithTx(tx)
-	tag, err := q.GrantUserRole(ctx, db.GrantUserRoleParams{ID: uid, Column2: role})
+	tag, err := q.GrantUserRole(ctx, db.GrantUserRoleParams{UserID: uid, Role: role})
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return errors.New("user not found")
 	}
-	if err := q.GrantRoleLog(ctx, db.GrantRoleLogParams{SubjectUserID: uid, Column2: strings.TrimSpace(grantedBy), Column3: strings.TrimSpace(reason), Column4: role}); err != nil {
+	if err := q.GrantRoleLog(ctx, db.GrantRoleLogParams{SubjectUserID: uid, ActorUserID: strings.TrimSpace(grantedBy), Reason: strings.TrimSpace(reason), Role: role}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -103,7 +103,7 @@ func (s *DB) RevokeUserRole(userID, role, revokedBy, reason string) error {
 	if err != nil {
 		return err
 	}
-	tag, err := q.RevokeUserRole(ctx, db.RevokeUserRoleParams{ID: uid, Column2: role})
+	tag, err := q.RevokeUserRole(ctx, db.RevokeUserRoleParams{UserID: uid, Role: role})
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (s *DB) RevokeUserRole(userID, role, revokedBy, reason string) error {
 			return err
 		}
 	}
-	if err := q.RevokeRoleLog(ctx, db.RevokeRoleLogParams{SubjectUserID: uid, Column2: strings.TrimSpace(revokedBy), Column3: strings.TrimSpace(reason), Column4: role}); err != nil {
+	if err := q.RevokeRoleLog(ctx, db.RevokeRoleLogParams{SubjectUserID: uid, ActorUserID: strings.TrimSpace(revokedBy), Reason: strings.TrimSpace(reason), Role: role}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -145,12 +145,12 @@ func (s *DB) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, error
 		return nil, err
 	}
 	rows, err := s.db.SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
-		Mode:     db.GdMatchMode(modeDuel),
-		SeasonID: seasonID,
-		Column3:  int32(initialMMR),
-		Column4:  pattern,
-		Limit:    int32(limit),
-		Column6:  pgtype.UUID{},
+		Mode:        db.GdMatchMode(modeDuel),
+		SeasonID:    seasonID,
+		DefaultMmr:  int32(initialMMR),
+		Search:      pattern,
+		RowLimit:    int32(limit),
+		CreatorID:   pgtype.UUID{},
 	})
 	if err != nil {
 		return nil, err
@@ -204,12 +204,12 @@ func (s *DB) getAdminPlayerSummary(ctx context.Context, userID string) (AdminPla
 		return AdminPlayerSummary{}, err
 	}
 	rows, err := s.db.SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
-		Mode:     db.GdMatchMode(modeDuel),
-		SeasonID: seasonID,
-		Column3:  int32(initialMMR),
-		Column4:  "%",
-		Limit:    1,
-		Column6:  uid,
+		Mode:       db.GdMatchMode(modeDuel),
+		SeasonID:   seasonID,
+		DefaultMmr: int32(initialMMR),
+		Search:     "%",
+		RowLimit:   1,
+		CreatorID:  uid,
 	})
 	if err != nil {
 		return AdminPlayerSummary{}, err
@@ -333,7 +333,7 @@ func (s *DB) SetPlayerBan(userID, reason, actorUserID string, banned bool) error
 		return errors.New("user not found")
 	}
 	if banned {
-		if err := q.BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: uid, Column2: strings.TrimSpace(reason), Column3: strings.TrimSpace(actorUserID)}); err != nil {
+		if err := q.BanUserOAuthIdentities(ctx, db.BanUserOAuthIdentitiesParams{BannedUserID: uid, Reason: strings.TrimSpace(reason), CreatedBy: strings.TrimSpace(actorUserID)}); err != nil {
 			return err
 		}
 	} else {
@@ -479,9 +479,9 @@ func (s *DB) SetPlayerMute(userID, kind, reason, actorUserID string, until time.
 			until = time.Now().Add(7 * 24 * time.Hour)
 		}
 		if kind == "chat" {
-			tag, err = q.SetChatMute(ctx, db.SetChatMuteParams{ID: uid, Column2: strings.TrimSpace(reason), ChatMuteExpiresAt: pgtype.Timestamptz{Time: until, Valid: true}})
+			tag, err = q.SetChatMute(ctx, db.SetChatMuteParams{UserID: uid, Reason: strings.TrimSpace(reason), ChatMuteExpiresAt: pgtype.Timestamptz{Time: until, Valid: true}})
 		} else {
-			tag, err = q.SetReportMute(ctx, db.SetReportMuteParams{ID: uid, Column2: strings.TrimSpace(reason), ReportMuteExpiresAt: pgtype.Timestamptz{Time: until, Valid: true}})
+			tag, err = q.SetReportMute(ctx, db.SetReportMuteParams{UserID: uid, Reason: strings.TrimSpace(reason), ReportMuteExpiresAt: pgtype.Timestamptz{Time: until, Valid: true}})
 		}
 	} else if kind == "chat" {
 		tag, err = q.ClearChatMute(ctx, uid)

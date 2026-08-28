@@ -123,8 +123,8 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *c
 	}
 
 	locked, err := q.LockDuelRatings(ctx, db.LockDuelRatingsParams{
-		User1:    p1.userID,
-		User2:    p2.userID,
+		User1ID:  p1.userID,
+		User2ID:  p2.userID,
 		Mode:     db.GdMatchMode(modeDuel),
 		SeasonID: seasonID,
 	})
@@ -155,11 +155,11 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *c
 	if ratedMatch {
 		p1.update, p2.update = CalculateDuelRatingUpdates(p1.rating, p2.rating, result.ratingWinner(), now)
 		if err := q.UpdateDuelRanks(ctx, db.UpdateDuelRanksParams{
-			P1UserID: p1.userID, P1Mmr: int32(p1.update.MMR), P1Rd: p1.update.RD, P1Apply: !p1.guest,
-			P2UserID: p2.userID, P2Mmr: int32(p2.update.MMR), P2Rd: p2.update.RD, P2Apply: !p2.guest,
 			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 			Mode:      db.GdMatchMode(modeDuel),
 			SeasonID:  seasonID,
+			P1UserID: p1.userID, P1Mmr: int32(p1.update.MMR), P1Rd: p1.update.RD, P1Apply: !p1.guest,
+			P2UserID: p2.userID, P2Mmr: int32(p2.update.MMR), P2Rd: p2.update.RD, P2Apply: !p2.guest,
 		}); err != nil {
 			return err
 		}
@@ -172,15 +172,15 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *c
 	}
 	if ratedMatch {
 		if err := q.AddDuelRankedStats(ctx, db.AddDuelRankedStatsParams{
-			P1UserID: p1.userID, P1Won: p1.won, P1Apply: !p1.guest,
-			P2UserID: p2.userID, P2Won: p2.won, P2Apply: !p2.guest,
 			Mode:     db.GdMatchMode(modeDuel),
 			SeasonID: seasonID,
+			P1UserID: p1.userID, P1Won: p1.won, P1Apply: !p1.guest,
+			P2UserID: p2.userID, P2Won: p2.won, P2Apply: !p2.guest,
 		}); err != nil {
 			return err
 		}
 		if err := q.SetMatchPlayerRatingDeltas(ctx, db.SetMatchPlayerRatingDeltasParams{
-			MatchID:  chatUUID(snap.MatchID),
+			MatchID: chatUUID(snap.MatchID),
 			P1UserID: p1.userID, P1RatingBefore: int32(p1.rating.MMR), P1RatingAfter: int32(p1.update.MMR), P1Apply: !p1.guest,
 			P2UserID: p2.userID, P2RatingBefore: int32(p2.rating.MMR), P2RatingAfter: int32(p2.update.MMR), P2Apply: !p2.guest,
 		}); err != nil {
@@ -244,11 +244,11 @@ func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, q *db.Queri
 		return err
 	}
 	rows, err := q.MatchPlayerPersistedRatings(ctx, db.MatchPlayerPersistedRatingsParams{
-		MatchID:    chatUUID(snap.MatchID),
-		Mode:       db.GdMatchMode(modeDuel),
-		SeasonID:   seasonID,
-		FallbackRd: initialRatingRD,
-		Players:    encodedIDs,
+		DefaultRd: initialRatingRD,
+		Mode:      db.GdMatchMode(modeDuel),
+		SeasonID:  seasonID,
+		MatchID:   chatUUID(snap.MatchID),
+		UserIdsJson: encodedIDs,
 	})
 	if err != nil {
 		return err
@@ -356,13 +356,13 @@ func ensureMatchUsersTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap cont
 	if err := q.EnsureMatchUsers(ctx, encodedSeeds); err != nil {
 		return err
 	}
-	if err := q.EnsureMatchRanks(ctx, db.EnsureMatchRanksParams{Players: encodedSeeds, Mode: db.GdMatchMode(modeDuel), Mmr: int32(initialMMR), SeasonID: seasonID}); err != nil {
+	if err := q.EnsureMatchRanks(ctx, db.EnsureMatchRanksParams{Mode: db.GdMatchMode(modeDuel), Mmr: int32(initialMMR), SeasonID: seasonID, PlayerIdsJson: encodedSeeds}); err != nil {
 		return err
 	}
 	if err := q.EnsureMatchUserStats(ctx, encodedSeeds); err != nil {
 		return err
 	}
-	return q.EnsureMatchRankedStats(ctx, db.EnsureMatchRankedStatsParams{Players: encodedSeeds, Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID})
+	return q.EnsureMatchRankedStats(ctx, db.EnsureMatchRankedStatsParams{Mode: db.GdMatchMode(modeDuel), SeasonID: seasonID, PlayerIdsJson: encodedSeeds})
 }
 
 func recordMatchHistory(
@@ -474,7 +474,7 @@ func recordMatchHistory(
 	}
 	if err := q.UpsertMatchPlayers(ctx, db.UpsertMatchPlayersParams{
 		MatchID: matchUUID,
-		Players: encodedPlayers,
+		PlayersJson: encodedPlayers,
 		EndedAt: pgtype.Timestamptz{Time: endedAt, Valid: true},
 	}); err != nil {
 		return err
@@ -485,11 +485,11 @@ func recordMatchHistory(
 			rulesetCode = 1
 		}
 		if err := q.UpsertPlayerMapBests(ctx, db.UpsertPlayerMapBestsParams{
-			MatchID:    matchUUID,
 			MapID:      chatUUID(mapID),
 			Ruleset:    int16(rulesetCode),
-			Players:    encodedPlayers,
+			MatchID:    matchUUID,
 			AchievedAt: pgtype.Timestamptz{Time: endedAt, Valid: true},
+			PlayersJson: encodedPlayers,
 		}); err != nil {
 			return err
 		}
@@ -534,7 +534,7 @@ func recordMatchHistory(
 		}
 		if err := q.UpsertRankedGuessEvents(ctx, db.UpsertRankedGuessEventsParams{
 			MatchID: matchUUID,
-			Guesses: encodedGuesses,
+			EventsJson: encodedGuesses,
 		}); err != nil {
 			return err
 		}

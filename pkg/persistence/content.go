@@ -56,7 +56,7 @@ func (s *DB) SetLobbyChangelog(content LobbyChangelogContent) error {
 	if err != nil {
 		return err
 	}
-	return s.db.SetSetting(ctx, db.SetSettingParams{Key: "lobby_changelog", Column2: payload})
+	return s.db.SetSetting(ctx, db.SetSettingParams{SettingKey: "lobby_changelog", ValueJson: payload})
 }
 
 func (s *DB) ListChangelogPosts(includeUnpublished bool) ([]ChangelogPost, error) {
@@ -73,7 +73,7 @@ func (s *DB) ListChangelogPosts(includeUnpublished bool) ([]ChangelogPost, error
 func (s *DB) GetChangelogPostBySlug(slug string, publishedOnly bool) (ChangelogPost, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	post, err := s.db.GetChangelogPost(ctx, db.GetChangelogPostParams{Slug: slug, Column2: publishedOnly})
+	post, err := s.db.GetChangelogPost(ctx, db.GetChangelogPostParams{Slug: slug, IncludeUnpublished: publishedOnly})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ChangelogPost{}, false, nil
@@ -130,7 +130,7 @@ func (s *DB) SetModerationSettings(settings ModerationSettings) error {
 	if err != nil {
 		return err
 	}
-	return s.db.SetSetting(ctx, db.SetSettingParams{Key: "moderation_settings", Column2: payload})
+	return s.db.SetSetting(ctx, db.SetSettingParams{SettingKey: "moderation_settings", ValueJson: payload})
 }
 
 func (s *DB) GetDiscordIntegrationSettings() (DiscordIntegrationSettings, error) {
@@ -171,7 +171,7 @@ func (s *DB) SetDiscordIntegrationSettings(settings DiscordIntegrationSettings) 
 	}
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		q := s.db.WithTx(tx)
-		if err := q.SetSetting(ctx, db.SetSettingParams{Key: "discord_integration", Column2: payload}); err != nil {
+		if err := q.SetSetting(ctx, db.SetSettingParams{SettingKey: "discord_integration", ValueJson: payload}); err != nil {
 			return err
 		}
 		return q.EnqueueDiscordSyncAll(ctx, db.EnqueueDiscordSyncAllParams{Action: DiscordSyncActionSync, Provider: IdentityProviderDiscord})

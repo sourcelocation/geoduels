@@ -26,13 +26,13 @@ func (s *DB) ListLeaderboard(ctx context.Context, mode, seasonID string, limit, 
 			return nil, err
 		}
 	}
-	rows, err := s.db.ListLeaderboard(ctx, db.ListLeaderboardParams{Mode: db.GdMatchMode(mode), SeasonID: seasonID, LimitCount: int32(limit), OffsetCount: int32(offset)})
+	rows, err := s.db.ListLeaderboard(ctx, db.ListLeaderboardParams{Mode: db.GdMatchMode(mode), SeasonID: seasonID, Limit: int32(limit), Offset: int32(offset)})
 	if err != nil {
 		return nil, err
 	}
 	entries := make([]LeaderboardEntry, 0, limit)
 	for _, row := range rows {
-		entries = append(entries, LeaderboardEntry{Rank: int(row.Rank), UserID: row.RUserID, DisplayName: row.DisplayName.String, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), GamesPlayed: int(row.GamesPlayed), Wins: int(row.Wins)})
+		entries = append(entries, LeaderboardEntry{Rank: int(row.Rank), UserID: row.UserID, DisplayName: row.DisplayName.String, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), GamesPlayed: int(row.GamesPlayed), Wins: int(row.Wins)})
 	}
 	return entries, nil
 }
@@ -57,7 +57,7 @@ func (s *DB) GetLeaderboardOverview(ctx context.Context, userID, mode, seasonID 
 			return LeaderboardOverview{}, err
 		}
 	}
-	totals, err := s.db.GetLeaderboardTotals(ctx, db.GetLeaderboardTotalsParams{UserID: userID, Mode: db.GdMatchMode(mode), SeasonID: seasonID})
+	totals, err := s.db.GetLeaderboardTotals(ctx, db.GetLeaderboardTotalsParams{SelfUserID: userID, Mode: db.GdMatchMode(mode), SeasonID: seasonID})
 	if err != nil {
 		return LeaderboardOverview{}, err
 	}

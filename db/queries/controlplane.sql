@@ -1,6 +1,6 @@
 -- name: AcquireLease :one
 insert into control_plane_leases (name, owner_id, fencing_token, expires_at)
-values ($1, $2, 1, now() + $3::interval)
+values ($1, $2, 1, now() + sqlc.arg(ttl)::interval)
 on conflict (name) do update
 set owner_id = excluded.owner_id,
     fencing_token = case
@@ -19,7 +19,7 @@ where name = $1 and owner_id = $2 and fencing_token = $3;
 
 -- name: RenewLease :one
 update control_plane_leases
-set expires_at = now() + $4::interval,
+set expires_at = now() + sqlc.arg(ttl)::interval,
     updated_at = now()
 where name = $1
   and owner_id = $2

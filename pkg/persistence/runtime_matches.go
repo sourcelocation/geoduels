@@ -45,5 +45,5 @@ func (s *DB) ExpireStaleRuntimeMatches(ctx context.Context, mode string, olderTh
 	if mode == "" || olderThan <= 0 {
 		return nil
 	}
-	return s.db.ExpireStaleRuntimeMatches(ctx, db.ExpireStaleRuntimeMatchesParams{State: db.GdRuntimeStateEnded, State_2: db.GdRuntimeStateLive, Mode: db.GdMatchMode(mode), Column4: pgtype.Interval{Microseconds: olderThan.Microseconds(), Valid: true}})
+	return s.db.ExpireStaleRuntimeMatches(ctx, db.ExpireStaleRuntimeMatchesParams{NewState: db.GdRuntimeStateEnded, CurrentState: db.GdRuntimeStateLive, Mode: db.GdMatchMode(mode), OlderThan: pgtype.Interval{Microseconds: olderThan.Microseconds(), Valid: true}})
 }

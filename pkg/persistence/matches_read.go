@@ -37,7 +37,7 @@ func (s *DB) GetFinalMatchSnapshot(id string) ([]byte, bool, error) {
 		}
 		return []byte(r.ReplayJson), true, nil
 	}
-	raw, e := decompressReplay(r.ReplayZstd, int(r.Column2), int(r.ReplayUncompressedBytes))
+	raw, e := decompressReplay(r.ReplayZstd, int(r.ReplayCodec), int(r.ReplayUncompressedBytes))
 	if e != nil {
 		return nil, false, e
 	}
@@ -77,32 +77,32 @@ func (s *DB) ListPlayerMatchHistoryPage(id string, l int, b time.Time, bid strin
 	if e != nil {
 		return MatchHistoryPage{}, e
 	}
-	var rs []q.ListPlayerMatchHistoryBasicRow
+	var rs []db.ListPlayerMatchHistoryBasicRow
 	if rk {
-		xs, ee := s.db.ListPlayerMatchHistoryRanked(context.Background(), q.ListPlayerMatchHistoryRankedParams{UserID: u, Limit: int32(l + 1)})
+		xs, ee := s.db.ListPlayerMatchHistoryRanked(context.Background(), db.ListPlayerMatchHistoryRankedParams{UserID: u, Limit: int32(l + 1)})
 		e = ee
 		for _, x := range xs {
-			rs = append(rs, q.ListPlayerMatchHistoryBasicRow{MatchID: x.MatchID, Mode: x.Mode, StartedAt: x.StartedAt, EndedAt: x.EndedAt, Coalesce: x.Coalesce, Column6: x.Column6, Column7: x.Column7, FinalRankedDelta: x.FinalRankedDelta, TotalScore: x.TotalScore, UserID: x.UserID, DisplayName: x.DisplayName})
+			rs = append(rs, db.ListPlayerMatchHistoryBasicRow{MatchID: x.MatchID, Mode: x.Mode, StartedAt: x.StartedAt, EndedAt: x.EndedAt, WinnerUserID: x.WinnerUserID, Outcome: x.Outcome, Ranked: x.Ranked, RankedDelta: x.RankedDelta, TotalScore: x.TotalScore, OpponentUserID: x.OpponentUserID, OpponentDisplayName: x.OpponentDisplayName})
 		}
 	} else if !b.IsZero() && bid != "" {
 		v, e2 := mu(bid)
 		if e2 != nil {
 			return MatchHistoryPage{}, e2
 		}
-		xs, ee := s.db.ListPlayerMatchHistoryBefore(context.Background(), q.ListPlayerMatchHistoryBeforeParams{UserID: u, Limit: int32(l + 1), EndedAt: pgtype.Timestamptz{Time: b, Valid: true}, Column4: v})
+		xs, ee := s.db.ListPlayerMatchHistoryBefore(context.Background(), db.ListPlayerMatchHistoryBeforeParams{UserID: u, Limit: int32(l + 1), CursorEndedAt: pgtype.Timestamptz{Time: b, Valid: true}, CursorMatchID: v})
 		e = ee
 		for _, x := range xs {
-			rs = append(rs, q.ListPlayerMatchHistoryBasicRow{MatchID: x.MatchID, Mode: x.Mode, StartedAt: x.StartedAt, EndedAt: x.EndedAt, Coalesce: x.Coalesce, Column6: x.Column6, Column7: x.Column7, FinalRankedDelta: x.FinalRankedDelta, TotalScore: x.TotalScore, UserID: x.UserID, DisplayName: x.DisplayName})
+			rs = append(rs, db.ListPlayerMatchHistoryBasicRow{MatchID: x.MatchID, Mode: x.Mode, StartedAt: x.StartedAt, EndedAt: x.EndedAt, WinnerUserID: x.WinnerUserID, Outcome: x.Outcome, Ranked: x.Ranked, RankedDelta: x.RankedDelta, TotalScore: x.TotalScore, OpponentUserID: x.OpponentUserID, OpponentDisplayName: x.OpponentDisplayName})
 		}
 	} else {
-		rs, e = s.db.ListPlayerMatchHistoryBasic(context.Background(), q.ListPlayerMatchHistoryBasicParams{UserID: u, Limit: int32(l + 1)})
+		rs, e = s.db.ListPlayerMatchHistoryBasic(context.Background(), db.ListPlayerMatchHistoryBasicParams{UserID: u, Limit: int32(l + 1)})
 	}
 	if e != nil {
 		return MatchHistoryPage{}, e
 	}
 	o := make([]MatchHistorySummary, 0, len(rs))
 	for _, x := range rs {
-		o = append(o, MatchHistorySummary{MatchID: fmt.Sprintf("%x", x.MatchID.Bytes), Mode: string(x.Mode), StartedAt: x.StartedAt.Time, EndedAt: x.EndedAt.Time, WinnerUserID: fmt.Sprint(x.Coalesce), Outcome: x.Column6, Ranked: x.Column7.Bool, RatingDelta: int(x.FinalRankedDelta), TotalScore: int(x.TotalScore), OpponentUserID: x.UserID, OpponentDisplayName: fmt.Sprint(x.DisplayName)})
+		o = append(o, MatchHistorySummary{MatchID: fmt.Sprintf("%x", x.MatchID.Bytes), Mode: string(x.Mode), StartedAt: x.StartedAt.Time, EndedAt: x.EndedAt.Time, WinnerUserID: fmt.Sprint(x.WinnerUserID), Outcome: x.Outcome, Ranked: x.Ranked.Bool, RatingDelta: int(x.RankedDelta), TotalScore: int(x.TotalScore), OpponentUserID: x.OpponentUserID, OpponentDisplayName: fmt.Sprint(x.OpponentDisplayName)})
 	}
 	p := MatchHistoryPage{Matches: o}
 	if len(o) > l {
@@ -125,5 +125,5 @@ func (s *DB) PlayerParticipatedInMatch(a, b string) (bool, error) {
 	if e != nil {
 		return false, e
 	}
-	return s.db.PlayerParticipatedInMatch(context.Background(), q.PlayerParticipatedInMatchParams{UserID: u, MatchID: m})
+	return s.db.PlayerParticipatedInMatch(context.Background(), db.PlayerParticipatedInMatchParams{UserID: u, MatchID: m})
 }

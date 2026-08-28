@@ -625,7 +625,7 @@ export function useHomeModel(options?: {
         throw new Error("Please sign in again.");
       }
       await deleteAccountMutation.mutateAsync({ accessToken: session.accessToken });
-      authGateway.clear();
+      await authGateway.clear();
     } catch (error) {
       sessionController.setAuthPending({
         authLoading: false,

@@ -8,6 +8,7 @@ import {
 } from "./lib/auth-client";
 import { decodeAccessTokenExpiry } from "./lib/token-expiry";
 import type { AuthSessionSnapshot } from "./session";
+import { dismissAllModals, hasMountedModals } from "../../components/ui/modal-dismissal";
 
 export type GuestVerification = () => Promise<string>;
 type AuthBroadcast = { source: string; type: "changed" | "logout" };
@@ -81,10 +82,13 @@ export class AuthGateway {
     this.channel?.postMessage({ source: this.source, type } satisfies AuthBroadcast);
   }
 
-  private receiveBroadcast(message: AuthBroadcast) {
+  private async receiveBroadcast(message: AuthBroadcast) {
     if (!message || message.source === this.source) return;
     ++this.generation;
-    if (message.type === "logout") return void this.commit(null, true);
+    if (message.type === "logout") {
+      if (hasMountedModals()) await dismissAllModals();
+      return void this.commit(null, true);
+    }
     this.commit(null, false);
     void this.bootstrap({ force: true }).catch(() => undefined);
   }
@@ -230,6 +234,7 @@ export class AuthGateway {
 
   async logout() {
     ++this.generation;
+    if (hasMountedModals()) await dismissAllModals();
     this.commit(null);
     await this.withCookieLock(async () => {
       await requestLogout(this.config);
@@ -241,7 +246,8 @@ export class AuthGateway {
     this.announce("logout");
   }
 
-  clear() {
+  async clear() {
+    if (hasMountedModals()) await dismissAllModals();
     this.applyPayload(null);
   }
 }

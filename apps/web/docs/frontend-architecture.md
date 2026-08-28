@@ -158,7 +158,7 @@ Use these existing components before creating new visual recipes. Keep this inde
 - `Tabs`: keyboard-operable compact selector for switching between small view sets; use `appearance="segmented"` for mutually exclusive compact choices.
 - `Toolbar`: horizontal action container for grouped controls.
 - `Tooltip` and `TooltipProvider`: hover/focus explanation for icon-only or unfamiliar controls.
-- `AppModalShell` / `Modal` / `Dialog`: standard focus-managed responsive modal shell. Prefer `AlertDialog` for destructive confirmation.
+- `AppModalShell` / `Modal` / `Dialog`: standard focus-managed responsive modal shell. Prefer `AlertDialog` for destructive confirmation. Each shell owns its independent exit lifecycle and registers it with the shared modal-dismissal coordinator. Session-ending operations await all mounted modal exits before publishing the anonymous auth state, so modals animate out before their owning authenticated UI unmounts.
 - `AppActivityBanner`: app-shell-owned presentation for background activities such as matchmaking and party membership; routes supply typed activity descriptors instead of embedding activity UI in page panels.
 - `PageShell`: generic page wrapper for non-lobby pages.
 - `AppShell` / `AppBackground`: shared application frame and backdrop; use `backgroundBlurred` for scene-wide focus treatments.

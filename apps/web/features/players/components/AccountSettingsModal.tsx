@@ -1,7 +1,7 @@
 import { LogOut, Trash2 } from "lucide-react";
 import { Spinner } from "../../../components/ui/Spinner";
 import { useState } from "react";
-import AppModalShell, { useModalClose } from "../../../components/ui/AppModalShell";
+import AppModalShell from "../../../components/ui/AppModalShell";
 import { Button } from "../../../components/ui/button";
 import { DangerZoneDisclosure, SettingsGroup } from "../../../components/ui/compositions";
 import { Field } from "../../../components/ui/Field";
@@ -12,11 +12,9 @@ import { useAccountSettings } from "../hooks/use-account-settings";
 export function AccountSettingsModal({
   onClose,
   profilePath,
-  onSignedOut,
 }: {
   onClose: () => void;
   profilePath: string;
-  onSignedOut?: () => void;
 }) {
   return (
     <AppModalShell
@@ -24,24 +22,15 @@ export function AccountSettingsModal({
       onClose={onClose}
       maxWidthClassName="max-w-xl"
     >
-      <AccountSettings profilePath={profilePath} onSignedOut={onSignedOut} />
+      <AccountSettings profilePath={profilePath} />
     </AppModalShell>
   );
 }
 
-export function AccountSettings({
-  profilePath,
-  onSignedOut,
-}: {
-  profilePath: string;
-  onSignedOut?: () => void;
-}) {
+export function AccountSettings({ profilePath }: { profilePath: string }) {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const state = useAccountSettings(profilePath);
   const { account, accountQuery, deleteMutation, unlinkMutation } = state;
-  const modalClose = useModalClose();
-  // Prefer the shell's animated dismiss; fall back when not inside a modal.
-  const dismiss = modalClose ?? onSignedOut;
 
   return (
     <>
@@ -97,7 +86,7 @@ export function AccountSettings({
             <Notice tone="danger">{state.error}</Notice>
           ) : null}
 
-          <Button type="button" variant="secondary" onClick={() => void state.signOut().then(dismiss)} className="min-h-11 w-full rounded-xl"><LogOut className="h-4 w-4" />Sign out</Button>
+          <Button type="button" variant="secondary" onClick={() => void state.signOut()} className="min-h-11 w-full rounded-xl"><LogOut className="h-4 w-4" />Sign out</Button>
 
           <section aria-labelledby="danger-zone-heading">
             <h3 id="danger-zone-heading" className="mb-2 px-1 text-label font-strong text-content-secondary">Danger zone</h3>

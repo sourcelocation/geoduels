@@ -60,10 +60,7 @@ export default function HotkeySettings({ onClose }: { onClose: () => void }) {
           <SocialPrivacySettings />
         </section>
       ) : tab === "Account" ? (
-        <AccountSettings
-          profilePath={typeof window === "undefined" ? "/" : window.location.pathname}
-          onSignedOut={onClose}
-        />
+        <AccountSettings profilePath={typeof window === "undefined" ? "/" : window.location.pathname} />
       ) : tab === "Audio" ? (
         <section>
           <InsetList>

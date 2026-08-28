@@ -59,7 +59,7 @@ export function useAccountSettings(profilePath: string) {
     mutationFn: () =>
       requestDeleteAccount(config, account?.accessToken || ""),
     onSuccess: async () => {
-      authGateway.clear();
+      await authGateway.clear();
       await exit();
     },
     onError: fail("Failed to delete account"),

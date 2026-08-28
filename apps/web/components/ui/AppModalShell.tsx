@@ -1,17 +1,8 @@
-import { type ReactNode, createContext, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
 import { IconButton } from "./button";
-
-/**
- * Set by the nearest modal shell so nested content can trigger the shell's
- * animated dismiss (Escape/backdrop/X path). Null outside a modal shell.
- */
-export const ModalCloseContext = createContext<(() => void) | null>(null);
-
-export function useModalClose() {
-  return useContext(ModalCloseContext);
-}
+import { registerModalDismissRequest } from "./modal-dismissal";
 
 type AppModalShellProps = {
   title: string;
@@ -45,14 +36,28 @@ export default function AppModalShell({
   const previousFocus = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   const closingRef = useRef(false);
+  const closePromiseRef = useRef<Promise<void> | null>(null);
+  const resolveCloseRef = useRef<(() => void) | null>(null);
   const [closing, setClosing] = useState(false);
   onCloseRef.current = onClose;
 
   const requestClose = useCallback(() => {
-    if (!onCloseRef.current || closingRef.current) return;
+    if (closePromiseRef.current) return closePromiseRef.current;
+    closePromiseRef.current = new Promise<void>((resolve) => {
+      resolveCloseRef.current = resolve;
+    });
     closingRef.current = true;
     setClosing(true);
+    return closePromiseRef.current;
   }, []);
+
+  useEffect(() => {
+    const unregister = registerModalDismissRequest(requestClose);
+    return () => {
+      unregister();
+      resolveCloseRef.current?.();
+    };
+  }, [requestClose]);
 
   useEffect(() => {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -74,7 +79,6 @@ export default function AppModalShell({
   }, [requestClose]);
 
   return (
-    <ModalCloseContext.Provider value={onClose ? requestClose : null}>
     <motion.div
       variants={{ open: { opacity: 1 }, closed: { opacity: 0 } }}
       initial="closed"
@@ -84,6 +88,8 @@ export default function AppModalShell({
       onAnimationComplete={(definition) => {
         if (definition !== "closed" || !closingRef.current) return;
         closingRef.current = false;
+        resolveCloseRef.current?.();
+        resolveCloseRef.current = null;
         onCloseRef.current?.();
       }}
         className={`fixed inset-0 ${zIndexClassName} flex justify-center bg-scrim backdrop-blur-md ${
@@ -132,6 +138,5 @@ export default function AppModalShell({
         <div className={contentClassName}>{children}</div>
       </motion.div>
     </motion.div>
-    </ModalCloseContext.Provider>
   );
 }

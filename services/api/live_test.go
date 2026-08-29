@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
 	"geoduels/pkg/persistence"
+	socialdomain "geoduels/pkg/social"
 )
 
 type liveSocialStore struct {
@@ -22,13 +24,13 @@ type liveSocialStore struct {
 	friends []persistence.CompactPlayer
 }
 
-func (s *liveSocialStore) GetSocialAccount(string) (bool, bool, bool, error) {
+func (s *liveSocialStore) GetSocialAccount(context.Context, string) (bool, bool, bool, error) {
 	return false, true, true, nil
 }
-func (s *liveSocialStore) GetSocialSettings(string) (persistence.SocialSettings, error) {
+func (s *liveSocialStore) GetSocialSettings(context.Context, string) (persistence.SocialSettings, error) {
 	return persistence.SocialSettings{PresenceVisible: true}, nil
 }
-func (s *liveSocialStore) ListFriends(userID string, _ int) ([]persistence.CompactPlayer, error) {
+func (s *liveSocialStore) ListFriends(_ context.Context, userID string, _ int) ([]persistence.CompactPlayer, error) {
 	if userID == "viewer-1" {
 		return s.friends, nil
 	}
@@ -47,7 +49,7 @@ func TestUserLiveSendsHelloAndPresencePatch(t *testing.T) {
 	store := &liveSocialStore{friends: []persistence.CompactPlayer{{UserID: "friend-1"}}}
 	coordStore := coordinator.NewStore(rdb, time.Minute, time.Hour, time.Hour, time.Second)
 	a := &api{
-		social:        store,
+		social:        socialdomain.NewService(store),
 		coord:         coordStore,
 		redis:         rdb,
 		appAuthSecret: secret,

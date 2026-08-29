@@ -16,6 +16,7 @@ import (
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
 	"geoduels/pkg/persistence"
+	socialdomain "geoduels/pkg/social"
 )
 
 type matchAccessTestStore struct {
@@ -112,7 +113,7 @@ func TestPublicFinalMatchSnapshotIsAvailableToAnyViewer(t *testing.T) {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
 
-	a := &api{accounts: &matchAccessTestStore{snapshot: raw}, sessions: &matchAccessTestStore{snapshot: raw}, profiles: &matchAccessTestStore{snapshot: raw}, preferenceStore: &matchAccessTestStore{snapshot: raw}, badges: &matchAccessTestStore{snapshot: raw}, leaderboardStore: &matchAccessTestStore{snapshot: raw}, matchStore: &matchAccessTestStore{snapshot: raw}, moderation: &matchAccessTestStore{snapshot: raw}, admin: &matchAccessTestStore{snapshot: raw}, content: &matchAccessTestStore{snapshot: raw}, seasons: &matchAccessTestStore{snapshot: raw}, gameplayMaps: &matchAccessTestStore{snapshot: raw}, runtimeStore: &matchAccessTestStore{snapshot: raw}, chatStore: &matchAccessTestStore{snapshot: raw}, parties: &matchAccessTestStore{snapshot: raw}, social: &matchAccessTestStore{snapshot: raw}}
+	a := &api{accounts: &matchAccessTestStore{snapshot: raw}, sessions: &matchAccessTestStore{snapshot: raw}, profiles: &matchAccessTestStore{snapshot: raw}, preferenceStore: &matchAccessTestStore{snapshot: raw}, badges: &matchAccessTestStore{snapshot: raw}, leaderboardStore: &matchAccessTestStore{snapshot: raw}, matchStore: &matchAccessTestStore{snapshot: raw}, moderation: &matchAccessTestStore{snapshot: raw}, admin: &matchAccessTestStore{snapshot: raw}, content: &matchAccessTestStore{snapshot: raw}, seasons: &matchAccessTestStore{snapshot: raw}, gameplayMaps: &matchAccessTestStore{snapshot: raw}, runtimeStore: &matchAccessTestStore{snapshot: raw}, chatStore: &matchAccessTestStore{snapshot: raw}, parties: &matchAccessTestStore{snapshot: raw}, social: socialdomain.NewService(&matchAccessTestStore{snapshot: raw})}
 	snapshot, found, err := a.getPublicFinalMatchSnapshot(testMatchID)
 	if err != nil {
 		t.Fatalf("get snapshot: %v", err)
@@ -137,7 +138,7 @@ func TestMatchRouteReturnsPublicHistoryWithoutAuth(t *testing.T) {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
 
-	a := &api{accounts: &matchAccessTestStore{snapshot: raw}, sessions: &matchAccessTestStore{snapshot: raw}, profiles: &matchAccessTestStore{snapshot: raw}, preferenceStore: &matchAccessTestStore{snapshot: raw}, badges: &matchAccessTestStore{snapshot: raw}, leaderboardStore: &matchAccessTestStore{snapshot: raw}, matchStore: &matchAccessTestStore{snapshot: raw}, moderation: &matchAccessTestStore{snapshot: raw}, admin: &matchAccessTestStore{snapshot: raw}, content: &matchAccessTestStore{snapshot: raw}, seasons: &matchAccessTestStore{snapshot: raw}, gameplayMaps: &matchAccessTestStore{snapshot: raw}, runtimeStore: &matchAccessTestStore{snapshot: raw}, chatStore: &matchAccessTestStore{snapshot: raw}, parties: &matchAccessTestStore{snapshot: raw}, social: &matchAccessTestStore{snapshot: raw}}
+	a := &api{accounts: &matchAccessTestStore{snapshot: raw}, sessions: &matchAccessTestStore{snapshot: raw}, profiles: &matchAccessTestStore{snapshot: raw}, preferenceStore: &matchAccessTestStore{snapshot: raw}, badges: &matchAccessTestStore{snapshot: raw}, leaderboardStore: &matchAccessTestStore{snapshot: raw}, matchStore: &matchAccessTestStore{snapshot: raw}, moderation: &matchAccessTestStore{snapshot: raw}, admin: &matchAccessTestStore{snapshot: raw}, content: &matchAccessTestStore{snapshot: raw}, seasons: &matchAccessTestStore{snapshot: raw}, gameplayMaps: &matchAccessTestStore{snapshot: raw}, runtimeStore: &matchAccessTestStore{snapshot: raw}, chatStore: &matchAccessTestStore{snapshot: raw}, parties: &matchAccessTestStore{snapshot: raw}, social: socialdomain.NewService(&matchAccessTestStore{snapshot: raw})}
 	req := httptest.NewRequest(http.MethodGet, "/v1/matches/"+matchID+"/route", nil)
 	req = mux.SetURLVars(req, map[string]string{"id": matchID})
 	rec := httptest.NewRecorder()
@@ -200,7 +201,7 @@ func TestMatchSessionAllowsGuestAssignedToLiveMatch(t *testing.T) {
 	}
 
 	a := &api{
-		accounts: &matchAccessTestStore{}, sessions: &matchAccessTestStore{}, profiles: &matchAccessTestStore{}, preferenceStore: &matchAccessTestStore{}, badges: &matchAccessTestStore{}, leaderboardStore: &matchAccessTestStore{}, matchStore: &matchAccessTestStore{}, moderation: &matchAccessTestStore{}, admin: &matchAccessTestStore{}, content: &matchAccessTestStore{}, seasons: &matchAccessTestStore{}, gameplayMaps: &matchAccessTestStore{}, runtimeStore: &matchAccessTestStore{}, chatStore: &matchAccessTestStore{}, parties: &matchAccessTestStore{}, social: &matchAccessTestStore{},
+		accounts: &matchAccessTestStore{}, sessions: &matchAccessTestStore{}, profiles: &matchAccessTestStore{}, preferenceStore: &matchAccessTestStore{}, badges: &matchAccessTestStore{}, leaderboardStore: &matchAccessTestStore{}, matchStore: &matchAccessTestStore{}, moderation: &matchAccessTestStore{}, admin: &matchAccessTestStore{}, content: &matchAccessTestStore{}, seasons: &matchAccessTestStore{}, gameplayMaps: &matchAccessTestStore{}, runtimeStore: &matchAccessTestStore{}, chatStore: &matchAccessTestStore{}, parties: &matchAccessTestStore{}, social: socialdomain.NewService(&matchAccessTestStore{}),
 		coord:          coordStore,
 		appAuthSecret:  appSecret,
 		ticketAuth:     ticketSecret,

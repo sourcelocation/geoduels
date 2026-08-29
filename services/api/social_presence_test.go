@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	socialdomain "geoduels/pkg/social"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +20,7 @@ type lastSeenTestStore struct {
 	wrote  chan struct{}
 }
 
-func (s *lastSeenTestStore) TouchLastSeen(_ string, seenAt time.Time) error {
+func (s *lastSeenTestStore) TouchLastSeen(_ context.Context, _ string, seenAt time.Time) error {
 	s.mu.Lock()
 	s.writes = append(s.writes, seenAt)
 	s.mu.Unlock()
@@ -63,7 +65,7 @@ func TestUnchangedPresenceRenewsRedisStateTTL(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 	store := &liveSocialStore{}
-	a := &api{social: store, redis: rdb, coord: coordinator.NewStore(rdb, time.Minute, time.Hour, time.Hour, time.Second)}
+	a := &api{social: socialdomain.NewService(store), redis: rdb, coord: coordinator.NewStore(rdb, time.Minute, time.Hour, time.Hour, time.Second)}
 	a.live = newLiveHub(a)
 
 	state := presenceState{Status: "online", LastSeenAt: time.Now().UTC()}

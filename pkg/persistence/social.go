@@ -13,70 +13,51 @@ import (
 
 	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
+	"geoduels/pkg/social"
 )
 
 var (
-	ErrSocialNotFound = errors.New("social resource not found")
-	ErrSocialBlocked  = errors.New("social action unavailable")
-	ErrSocialLimit    = errors.New("social limit reached")
+	ErrSocialNotFound = social.ErrNotFound
+	ErrSocialBlocked  = social.ErrBlocked
+	ErrSocialLimit    = social.ErrLimit
 )
 
 const friendCodeAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
 const PartyInviteResendAfter = 30 * time.Second
 
-type SocialRepository interface {
-	GetSocialAccount(userID string) (isGuest, requestsEnabled, invitesEnabled bool, err error)
-	GetSocialSettings(userID string) (SocialSettings, error)
-	UpdateSocialSettings(userID string, settings SocialSettings) (SocialSettings, error)
-	Relationship(userID, targetID string) (RelationshipState, string, error)
-	ListFriends(userID string, limit int) ([]CompactPlayer, error)
-	ListFriendRequests(userID string, direction string, limit int) ([]FriendRequest, error)
-	SearchSocialPlayers(userID, query string, limit int) ([]CompactPlayer, error)
-	ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error)
-	SendFriendRequest(userID, targetID string) (FriendRequest, error)
-	RespondFriendRequest(userID, requestID, response string) error
-	RemoveFriend(userID, targetID string) error
-	SetUserBlock(userID, targetID string, blocked bool) error
-	CreateFriendCode(userID string, ttl time.Duration) (FriendCode, error)
-	ResolveFriendCode(userID, code string) (CompactPlayer, error)
-	CreatePartyInvitation(partyID, inviterID, recipientID string, ttl time.Duration) (PartyInvitation, error)
-	ListPartyInviteStatus(inviterID, partyID string) (map[string]CompactPartyInvite, error)
-	RespondPartyInvitation(userID, invitationID, response string) (PartyInvitation, error)
-	ListPartyInvitations(userID string, limit int) ([]PartyInvitation, error)
-	TouchLastSeen(userID string, seenAt time.Time) error
-}
+type SocialRepository = social.Store
 
-func (s *DB) GetSocialSettings(userID string) (SocialSettings, error) {
+func (s *DB) GetSocialSettings(ctx context.Context, userID string) (SocialSettings, error) {
 	id, err := profileUUID(userID)
 	if err != nil {
 		return SocialSettings{}, err
 	}
-	row, err := s.db.GetSocialSettings(context.Background(), id)
+	row, err := s.db.GetSocialSettings(ctx, id)
 	settings := SocialSettings{Discoverable: row.SocialDiscoverable, PresenceVisible: row.SocialPresenceVisible, RequestsEnabled: row.SocialRequestsEnabled, PartyInvitesEnabled: row.SocialPartyInvitesEnabled}
 	return settings, err
 }
 
-func (s *DB) UpdateSocialSettings(userID string, settings SocialSettings) (SocialSettings, error) {
+func (s *DB) UpdateSocialSettings(ctx context.Context, userID string, settings SocialSettings) (SocialSettings, error) {
 	id, err := profileUUID(userID)
 	if err != nil {
 		return settings, err
 	}
-	row, err := s.db.UpdateSocialSettings(context.Background(), db.UpdateSocialSettingsParams{ID: id, SocialDiscoverable: settings.Discoverable, SocialPresenceVisible: settings.PresenceVisible, SocialRequestsEnabled: settings.RequestsEnabled, SocialPartyInvitesEnabled: settings.PartyInvitesEnabled})
+	row, err := s.db.UpdateSocialSettings(ctx, db.UpdateSocialSettingsParams{ID: id, SocialDiscoverable: settings.Discoverable, SocialPresenceVisible: settings.PresenceVisible, SocialRequestsEnabled: settings.RequestsEnabled, SocialPartyInvitesEnabled: settings.PartyInvitesEnabled})
 	settings = SocialSettings{Discoverable: row.SocialDiscoverable, PresenceVisible: row.SocialPresenceVisible, RequestsEnabled: row.SocialRequestsEnabled, PartyInvitesEnabled: row.SocialPartyInvitesEnabled}
 	return settings, err
 }
 
-func (s *DB) GetSocialAccount(userID string) (bool, bool, bool, error) {
+func (s *DB) GetSocialAccount(ctx context.Context, userID string) (bool, bool, bool, error) {
 	id, err := profileUUID(userID)
 	if err != nil {
 		return false, false, false, err
 	}
-	row, err := s.db.GetSocialAccount(context.Background(), id)
+	row, err := s.db.GetSocialAccount(ctx, id)
 	return string(row.AccountType) == "guest", row.SocialRequestsEnabled, row.SocialPartyInvitesEnabled, err
 }
 
-func (s *DB) Relationship(userID, targetID string) (RelationshipState, string, error) {
+func (s *DB) Relationship(ctx context.Context, userID, targetID string) (RelationshipState, string, error) {
 	if userID == targetID {
 		return RelationshipNone, "", nil
 	}
@@ -88,7 +69,7 @@ func (s *DB) Relationship(userID, targetID string) (RelationshipState, string, e
 	if err != nil {
 		return RelationshipNone, "", err
 	}
-	row, err := db.New(s.pool).Relationship(context.Background(), db.RelationshipParams{BlockerUserID: viewerUUID, BlockedUserID: targetUUID})
+	row, err := db.New(s.pool).Relationship(ctx, db.RelationshipParams{BlockerUserID: viewerUUID, BlockedUserID: targetUUID})
 	if err != nil {
 		return RelationshipNone, "", err
 	}
@@ -111,13 +92,12 @@ func (s *DB) Relationship(userID, targetID string) (RelationshipState, string, e
 	return RelationshipNone, "", nil
 }
 
-func (s *DB) ListFriends(userID string, limit int) ([]CompactPlayer, error) {
+func (s *DB) ListFriends(ctx context.Context, userID string, limit int) ([]CompactPlayer, error) {
 	limit = boundedSocialLimit(limit, 100, 500)
 	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
 	seasonID, err := s.activeSeasonID(ctx)
 	if err != nil {
 		return nil, err
@@ -139,13 +119,12 @@ func (s *DB) ListFriends(userID string, limit int) ([]CompactPlayer, error) {
 	return out, nil
 }
 
-func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRequest, error) {
+func (s *DB) ListFriendRequests(ctx context.Context, userID, direction string, limit int) ([]FriendRequest, error) {
 	limit = boundedSocialLimit(limit, 20, 100)
 	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
 	seasonID, err := s.activeSeasonID(ctx)
 	if err != nil {
 		return nil, err
@@ -184,7 +163,7 @@ func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRe
 	return out, nil
 }
 
-func (s *DB) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlayer, error) {
+func (s *DB) SearchSocialPlayers(ctx context.Context, userID, query string, limit int) ([]CompactPlayer, error) {
 	query = strings.TrimSpace(query)
 	if len([]rune(query)) < 2 {
 		return []CompactPlayer{}, nil
@@ -194,7 +173,6 @@ func (s *DB) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlay
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
 	seasonID, err := s.activeSeasonID(ctx)
 	if err != nil {
 		return nil, err
@@ -210,19 +188,18 @@ func (s *DB) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlay
 			value := row.LastSeenAt.Time
 			p.LastSeenAt = &value
 		}
-		p.Relationship, p.RequestID, _ = s.Relationship(userID, p.UserID)
+		p.Relationship, p.RequestID, _ = s.Relationship(ctx, userID, p.UserID)
 		out = append(out, p)
 	}
 	return out, nil
 }
 
-func (s *DB) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error) {
+func (s *DB) ListRecentPlayers(ctx context.Context, userID string, limit int) ([]CompactPlayer, error) {
 	limit = boundedSocialLimit(limit, 3, 3)
 	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
 	seasonID, err := s.activeSeasonID(ctx)
 	if err != nil {
 		return nil, err
@@ -248,11 +225,11 @@ func (s *DB) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error
 	return out, nil
 }
 
-func (s *DB) SendFriendRequest(userID, targetID string) (FriendRequest, error) {
+func (s *DB) SendFriendRequest(ctx context.Context, userID, targetID string) (FriendRequest, error) {
 	if userID == targetID {
 		return FriendRequest{}, ErrSocialBlocked
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -325,8 +302,8 @@ func acceptFriendRequestTx(ctx context.Context, tx pgx.Tx, requestID, recipientI
 	return q.InsertFriendship(ctx, db.InsertFriendshipParams{UserA: senderID, UserB: recipientUUID, CreatedFromRequestID: requestUUID})
 }
 
-func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+func (s *DB) RespondFriendRequest(ctx context.Context, userID, requestID, response string) error {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -371,7 +348,7 @@ func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
 	return tx.Commit(ctx)
 }
 
-func (s *DB) RemoveFriend(userID, targetID string) error {
+func (s *DB) RemoveFriend(ctx context.Context, userID, targetID string) error {
 	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return err
@@ -380,14 +357,13 @@ func (s *DB) RemoveFriend(userID, targetID string) error {
 	if err != nil {
 		return err
 	}
-	return db.New(s.pool).RemoveFriend(context.Background(), db.RemoveFriendParams{UserA: userUUID, UserB: targetUUID})
+	return db.New(s.pool).RemoveFriend(ctx, db.RemoveFriendParams{UserA: userUUID, UserB: targetUUID})
 }
 
-func (s *DB) SetUserBlock(userID, targetID string, blocked bool) error {
+func (s *DB) SetUserBlock(ctx context.Context, userID, targetID string, blocked bool) error {
 	if userID == targetID {
 		return ErrSocialBlocked
 	}
-	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -417,11 +393,10 @@ func (s *DB) SetUserBlock(userID, targetID string, blocked bool) error {
 	return tx.Commit(ctx)
 }
 
-func (s *DB) CreateFriendCode(userID string, ttl time.Duration) (FriendCode, error) {
+func (s *DB) CreateFriendCode(ctx context.Context, userID string, ttl time.Duration) (FriendCode, error) {
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
-	ctx := context.Background()
 	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return FriendCode{}, err
@@ -448,13 +423,12 @@ func (s *DB) CreateFriendCode(userID string, ttl time.Duration) (FriendCode, err
 	return FriendCode{}, errors.New("could not allocate friend code")
 }
 
-func (s *DB) ResolveFriendCode(userID, code string) (CompactPlayer, error) {
+func (s *DB) ResolveFriendCode(ctx context.Context, userID, code string) (CompactPlayer, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return CompactPlayer{}, ErrSocialNotFound
 	}
-	ctx := context.Background()
 	seasonID, err := s.activeSeasonID(ctx)
 	if err != nil {
 		return CompactPlayer{}, ErrSocialNotFound
@@ -468,7 +442,7 @@ func (s *DB) ResolveFriendCode(userID, code string) (CompactPlayer, error) {
 		value := row.LastSeenAt.Time
 		p.LastSeenAt = &value
 	}
-	p.Relationship, p.RequestID, _ = s.Relationship(userID, p.UserID)
+	p.Relationship, p.RequestID, _ = s.Relationship(ctx, userID, p.UserID)
 	return p, nil
 }
 
@@ -484,11 +458,10 @@ func randomFriendCode() (string, error) {
 	return string(buf), nil
 }
 
-func (s *DB) CreatePartyInvitation(partyID, inviterID, recipientID string, ttl time.Duration) (PartyInvitation, error) {
+func (s *DB) CreatePartyInvitation(ctx context.Context, partyID, inviterID, recipientID string, ttl time.Duration) (PartyInvitation, error) {
 	if ttl <= 0 {
 		ttl = 20 * time.Minute
 	}
-	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return PartyInvitation{}, err
@@ -552,7 +525,7 @@ func (s *DB) CreatePartyInvitation(partyID, inviterID, recipientID string, ttl t
 	return invitation, nil
 }
 
-func (s *DB) ListPartyInviteStatus(inviterID, partyID string) (map[string]CompactPartyInvite, error) {
+func (s *DB) ListPartyInviteStatus(ctx context.Context, inviterID, partyID string) (map[string]CompactPartyInvite, error) {
 	out := map[string]CompactPartyInvite{}
 	partyUUID, err := profileUUID(partyID)
 	if err != nil {
@@ -562,7 +535,7 @@ func (s *DB) ListPartyInviteStatus(inviterID, partyID string) (map[string]Compac
 	if err != nil {
 		return out, nil
 	}
-	rows, err := db.New(s.pool).ListOutgoingPartyInvitations(context.Background(), db.ListOutgoingPartyInvitationsParams{
+	rows, err := db.New(s.pool).ListOutgoingPartyInvitations(ctx, db.ListOutgoingPartyInvitationsParams{
 		InviterUserID: inviterUUID, PartyID: partyUUID,
 	})
 	if err != nil {
@@ -574,13 +547,13 @@ func (s *DB) ListPartyInviteStatus(inviterID, partyID string) (map[string]Compac
 	return out, nil
 }
 
-func (s *DB) ListPartyInvitations(userID string, limit int) ([]PartyInvitation, error) {
+func (s *DB) ListPartyInvitations(ctx context.Context, userID string, limit int) ([]PartyInvitation, error) {
 	limit = boundedSocialLimit(limit, 10, 50)
 	userUUID, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.New(s.pool).ListPartyInvitations(context.Background(), db.ListPartyInvitationsParams{RecipientUserID: userUUID, Limit: int32(limit)})
+	rows, err := db.New(s.pool).ListPartyInvitations(ctx, db.ListPartyInvitationsParams{RecipientUserID: userUUID, Limit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -593,7 +566,7 @@ func (s *DB) ListPartyInvitations(userID string, limit int) ([]PartyInvitation, 
 	return out, nil
 }
 
-func (s *DB) RespondPartyInvitation(userID, invitationID, response string) (PartyInvitation, error) {
+func (s *DB) RespondPartyInvitation(ctx context.Context, userID, invitationID, response string) (PartyInvitation, error) {
 	status := "declined"
 	if response == "accept" {
 		status = "accepted"
@@ -607,20 +580,20 @@ func (s *DB) RespondPartyInvitation(userID, invitationID, response string) (Part
 		return PartyInvitation{}, ErrSocialNotFound
 	}
 	q := db.New(s.pool)
-	row, err := q.RespondPartyInvitation(context.Background(), db.RespondPartyInvitationParams{ID: invitationUUID, RecipientUserID: userUUID, Status: db.GdSocialRequestStatus(status)})
+	row, err := q.RespondPartyInvitation(ctx, db.RespondPartyInvitationParams{ID: invitationUUID, RecipientUserID: userUUID, Status: db.GdSocialRequestStatus(status)})
 	if err != nil {
 		return PartyInvitation{}, ErrSocialNotFound
 	}
-	_ = q.MarkPartyInvitationNotificationRead(context.Background(), db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, InvitationID: ingestText(invitationID)})
+	_ = q.MarkPartyInvitationNotificationRead(ctx, db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, InvitationID: ingestText(invitationID)})
 	return PartyInvitation{ID: uuidVal(row.InvitationID), PartyID: uuidVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
 }
 
-func (s *DB) TouchLastSeen(userID string, seenAt time.Time) error {
+func (s *DB) TouchLastSeen(ctx context.Context, userID string, seenAt time.Time) error {
 	id, err := profileUUID(userID)
 	if err != nil {
 		return err
 	}
-	return s.db.TouchLastSeen(context.Background(), db.TouchLastSeenParams{ID: id, LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: true}})
+	return s.db.TouchLastSeen(ctx, db.TouchLastSeenParams{ID: id, LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: true}})
 }
 
 func boundedSocialLimit(limit, fallback, maximum int) int {

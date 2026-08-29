@@ -1,12 +1,12 @@
 package main
 
 import (
+	socialdomain "geoduels/pkg/social"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
-
 )
 
 type guestCleanupTestStore struct {
@@ -36,7 +36,7 @@ func TestCleanupGuestAccountsDeletesUntilBatchNotFull(t *testing.T) {
 
 	store := &guestCleanupTestStore{deleted: []int{1000, 25}}
 	a := &api{
-		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store),
 		redis:                 rdb,
 		guestAccountTTL:       24 * time.Hour,
 		guestCleanupInterval:  time.Hour,

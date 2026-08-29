@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"geoduels/pkg/persistence"
+	socialdomain "geoduels/pkg/social"
 )
 
 type oauthIntentTestStore struct {
@@ -22,7 +23,7 @@ type oauthIntentTestStore struct {
 
 func TestOAuthSigninAllowsExistingBannedAccount(t *testing.T) {
 	store := &oauthIntentTestStore{providerExists: true, providerBanned: true}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 
 	identity, err := a.resolveOAuthIdentity(httptest.NewRequest("GET", "/", nil), oauthStateClaims{Intent: oauthIntentSignIn}, "discord", "discord-sub", "player@example.com", "Player", "")
 	if err != nil {
@@ -39,7 +40,7 @@ func TestOAuthBannedIdentityCannotCreateOrLinkAccount(t *testing.T) {
 		{Intent: oauthIntentLink, LinkSub: "user-1"},
 	} {
 		store := &oauthIntentTestStore{providerBanned: true}
-		a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+		a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 		if _, err := a.resolveOAuthIdentity(httptest.NewRequest("GET", "/", nil), state, "discord", "discord-sub", "player@example.com", "Player", ""); err == nil || err.Error() != "provider identity banned" {
 			t.Fatalf("intent %q err=%v, want provider identity banned", state.Intent, err)
 		}
@@ -90,7 +91,7 @@ func (s *oauthIntentTestStore) GetIdentity(sub string) (persistence.Identity, er
 
 func TestOAuthSigninIgnoresLinkSubject(t *testing.T) {
 	store := &oauthIntentTestStore{providerExists: true}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 
 	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
@@ -114,7 +115,7 @@ func TestOAuthSigninIgnoresLinkSubject(t *testing.T) {
 
 func TestOAuthLinkRequiresExplicitIntent(t *testing.T) {
 	store := &oauthIntentTestStore{}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 
 	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
@@ -141,7 +142,7 @@ func TestOAuthGuestUpgradeSignsIntoExistingProviderAccount(t *testing.T) {
 		providerExists: true,
 		identity:       persistence.Identity{Sub: "guest-1", AccountType: "guest"},
 	}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 
 	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
@@ -171,7 +172,7 @@ func TestOAuthGuestUpgradeMergesNewProviderIntoGuest(t *testing.T) {
 		providerExists: false,
 		identity:       persistence.Identity{Sub: "guest-1", AccountType: "guest"},
 	}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 
 	identity, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),
@@ -197,7 +198,7 @@ func TestOAuthGuestUpgradeRequiresGuestAccount(t *testing.T) {
 	store := &oauthIntentTestStore{
 		identity: persistence.Identity{Sub: "user-1", AccountType: "registered"},
 	}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store)}
 
 	_, err := a.resolveOAuthIdentity(
 		httptest.NewRequest("GET", "/", nil),

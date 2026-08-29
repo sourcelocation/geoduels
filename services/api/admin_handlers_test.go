@@ -12,6 +12,7 @@ import (
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/persistence"
+	socialdomain "geoduels/pkg/social"
 )
 
 type adminModerationTestStore struct {
@@ -52,7 +53,7 @@ func TestAdminCanListAndGrantBadges(t *testing.T) {
 		identity:        Identity{Sub: "admin-1", IsAdmin: true},
 		grantableBadges: []persistence.AdminBadgeDefinition{{ID: "event-winner-2026", Label: "2026 Event Winner", MaxLevel: 1}},
 	}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store), appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/v1/admin/badges", nil)
 	listReq.Header.Set("Authorization", "Bearer "+token)
@@ -81,7 +82,7 @@ func TestNonAdminCannotGrantBadges(t *testing.T) {
 		t.Fatalf("issue token: %v", err)
 	}
 	store := &adminModerationTestStore{identity: Identity{Sub: "player-1"}}
-	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
+	a := &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store), appAuthSecret: secret, adminBootstrapEmails: map[string]struct{}{}}
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/badges/grant", strings.NewReader(`{"nickname":"MapMaster","badgeId":"event-winner-2026"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
@@ -126,7 +127,7 @@ func TestModeratorCanBanPlayer(t *testing.T) {
 		},
 	}
 	a := &api{
-		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store),
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}
@@ -165,7 +166,7 @@ func TestModeratorCanCheatingBanFromModeratorRoute(t *testing.T) {
 		},
 	}
 	a := &api{
-		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store),
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}
@@ -201,7 +202,7 @@ func TestModeratorCanUnbanFromModeratorRoute(t *testing.T) {
 		},
 	}
 	a := &api{
-		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store),
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}
@@ -234,7 +235,7 @@ func TestNonModeratorCannotBanPlayer(t *testing.T) {
 		identity: Identity{Sub: "player-1"},
 	}
 	a := &api{
-		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store),
 		appAuthSecret:        secret,
 		adminBootstrapEmails: map[string]struct{}{},
 	}

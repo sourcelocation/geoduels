@@ -13,6 +13,7 @@ import (
 	"geoduels/pkg/auth"
 	"geoduels/pkg/persistence"
 	preferencesdomain "geoduels/pkg/preferences"
+	socialdomain "geoduels/pkg/social"
 )
 
 type preferencesTestStore struct {
@@ -45,7 +46,7 @@ func preferenceRequest(t *testing.T, method, body string, store *preferencesTest
 	}
 	request := httptest.NewRequest(method, "/v1/me/preferences", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
-	return &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store, preferences: preferencesdomain.NewService(preferenceTestAdapter{store: store}), appAuthSecret: secret}, request, httptest.NewRecorder()
+	return &api{accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store), preferences: preferencesdomain.NewService(preferenceTestAdapter{store: store}), appAuthSecret: secret}, request, httptest.NewRecorder()
 }
 
 type preferenceTestAdapter struct{ store *preferencesTestStore }

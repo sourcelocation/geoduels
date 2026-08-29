@@ -75,7 +75,7 @@ func (a *api) userLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.social != nil {
-		isGuest, _, _, err := a.social.GetSocialAccount(claims.Sub)
+		isGuest, _, _, err := a.social.GetSocialAccount(r.Context(), claims.Sub)
 		if err != nil || isGuest {
 			http.Error(w, "registration_required", http.StatusForbidden)
 			return
@@ -317,7 +317,7 @@ func (h *liveHub) notePresence(ctx context.Context, userID string) {
 		activity = "in_match"
 	}
 	if h.api.social != nil {
-		if settings, err := h.api.social.GetSocialSettings(userID); err == nil && !settings.PresenceVisible {
+		if settings, err := h.api.social.GetSocialSettings(ctx, userID); err == nil && !settings.PresenceVisible {
 			return
 		}
 	}
@@ -383,7 +383,8 @@ func (h *liveHub) fanoutPresence(userID string, patch contracts.LivePresencePatc
 	if h.api.social == nil {
 		return
 	}
-	friends, err := h.api.social.ListFriends(userID, 100)
+	// Presence fanout is an autonomous hub operation, not an HTTP request.
+	friends, err := h.api.social.ListFriends(context.Background(), userID, 100)
 	if err != nil {
 		return
 	}

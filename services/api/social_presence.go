@@ -5,13 +5,13 @@ import (
 	"log"
 	"time"
 
-	"geoduels/pkg/persistence"
+	"geoduels/pkg/social"
 )
 
 const lastSeenWriteInterval = 5 * time.Minute
 
 type lastSeenWriter interface {
-	TouchLastSeen(userID string, seenAt time.Time) error
+	TouchLastSeen(ctx context.Context, userID string, seenAt time.Time) error
 }
 
 func (a *api) touchViewerPresence(ctx context.Context, userID string) {
@@ -30,9 +30,7 @@ func (a *api) touchViewerPresence(ctx context.Context, userID string) {
 func (a *api) scheduleLastSeenWrite(ctx context.Context, userID string, seenAt time.Time) {
 	writer := a.lastSeen
 	if writer == nil {
-		if store, ok := a.social.(*persistence.DB); ok {
-			writer = store
-		}
+		writer = a.db
 	}
 	if writer == nil {
 		return
@@ -44,7 +42,9 @@ func (a *api) scheduleLastSeenWrite(ctx context.Context, userID string, seenAt t
 		}
 	}
 	go func() {
-		if err := writer.TouchLastSeen(userID, seenAt); err != nil {
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if err := writer.TouchLastSeen(writeCtx, userID, seenAt); err != nil {
 			log.Printf("last seen write failed for %s: %v", userID, err)
 			if a.redis != nil {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -59,7 +59,7 @@ func lastSeenWriteKey(userID string) string {
 	return "rt:presence:last-seen-write:" + userID
 }
 
-func (a *api) applySocialPresence(players []persistence.CompactPlayer) {
+func (a *api) applySocialPresence(ctx context.Context, players []social.CompactPlayer) {
 	if len(players) == 0 {
 		return
 	}
@@ -72,7 +72,7 @@ func (a *api) applySocialPresence(players []persistence.CompactPlayer) {
 	}
 	present := map[string]bool{}
 	if a.coord != nil && len(ids) > 0 {
-		if next, err := a.coord.PresentUsers(context.Background(), ids); err == nil {
+		if next, err := a.coord.PresentUsers(ctx, ids); err == nil {
 			present = next
 		}
 	}
@@ -86,7 +86,7 @@ func (a *api) applySocialPresence(players []persistence.CompactPlayer) {
 		}
 		players[i].PresenceStatus = "online"
 		if a.coord != nil {
-			if assigned, ok, err := a.coord.GetAssignmentByUser(context.Background(), players[i].UserID); err == nil && ok && assigned.MatchID != "" {
+			if assigned, ok, err := a.coord.GetAssignmentByUser(ctx, players[i].UserID); err == nil && ok && assigned.MatchID != "" {
 				players[i].Activity = "in_match"
 			}
 		}

@@ -22,6 +22,7 @@ import (
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
 	preferencesdomain "geoduels/pkg/preferences"
+	socialdomain "geoduels/pkg/social"
 )
 
 type api struct {
@@ -42,7 +43,7 @@ type api struct {
 	runtimeStore            persistence.RuntimeRepository
 	chatStore               persistence.ChatRepository
 	parties                 persistence.PartyRepository
-	social                  persistence.SocialRepository
+	social                  *socialdomain.Service
 	preferences             *preferencesdomain.Service
 	leaderboardService      *leaderboard.Service
 	notificationService     *notifications.Service
@@ -175,7 +176,7 @@ func newAPI() (*api, error) {
 		runtimeStore:            store,
 		chatStore:               store,
 		parties:                 store,
-		social:                  store,
+		social:                  socialdomain.NewService(store),
 		lastSeen:                store,
 		preferences:             newPreferencesService(store),
 		leaderboardService:      newLeaderboardService(store),

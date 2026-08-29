@@ -4,6 +4,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"geoduels/pkg/persistence"
+	socialdomain "geoduels/pkg/social"
 )
 
 // Handler files depend on these persistence DTOs, errors, and narrow
@@ -20,8 +21,6 @@ type (
 	DiscordIntegrationSettings     = persistence.DiscordIntegrationSettings
 	AdminPlayerSummary             = persistence.AdminPlayerSummary
 	UserNotification               = persistence.UserNotification
-	SocialSettings                 = persistence.SocialSettings
-	SocialRepository               = persistence.SocialRepository
 	MapCatalog                     = persistence.MapCatalog
 	MapCreatorAdminRepository      = persistence.MapCreatorAdminRepository
 	OfficialMapImportInput         = persistence.OfficialMapImportInput
@@ -41,8 +40,8 @@ var (
 	ErrBadgeNicknameRequired      = persistence.ErrBadgeNicknameRequired
 	ErrBadgeUnavailable           = persistence.ErrBadgeUnavailable
 	ErrBadgeUserNotFound          = persistence.ErrBadgeUserNotFound
-	ErrSocialNotFound             = persistence.ErrSocialNotFound
-	ErrSocialLimit                = persistence.ErrSocialLimit
-	ErrSocialBlocked              = persistence.ErrSocialBlocked
+	ErrSocialNotFound             = socialdomain.ErrNotFound
+	ErrSocialLimit                = socialdomain.ErrLimit
+	ErrSocialBlocked              = socialdomain.ErrBlocked
 	ErrPreferenceRevisionConflict = persistence.ErrPreferenceRevisionConflict
 )

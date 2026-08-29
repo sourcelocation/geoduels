@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,23 +14,24 @@ import (
 	"geoduels/pkg/auth"
 	"geoduels/pkg/coordinator"
 	"geoduels/pkg/persistence"
+	socialdomain "geoduels/pkg/social"
 )
 
 type friendsPageTestStore struct{ testRepositories }
 
-func (s *friendsPageTestStore) GetSocialAccount(string) (bool, bool, bool, error) {
+func (s *friendsPageTestStore) GetSocialAccount(context.Context, string) (bool, bool, bool, error) {
 	return false, true, true, nil
 }
-func (s *friendsPageTestStore) ListFriends(string, int) ([]persistence.CompactPlayer, error) {
+func (s *friendsPageTestStore) ListFriends(_ context.Context, _ string, _ int) ([]persistence.CompactPlayer, error) {
 	return []persistence.CompactPlayer{{UserID: "friend-1", DisplayName: "Friend"}}, nil
 }
-func (s *friendsPageTestStore) ListFriendRequests(_ string, direction string, _ int) ([]persistence.FriendRequest, error) {
+func (s *friendsPageTestStore) ListFriendRequests(_ context.Context, _ string, direction string, _ int) ([]persistence.FriendRequest, error) {
 	return []persistence.FriendRequest{{ID: direction + "-1", Direction: direction}}, nil
 }
-func (s *friendsPageTestStore) ListRecentPlayers(string, int) ([]persistence.CompactPlayer, error) {
+func (s *friendsPageTestStore) ListRecentPlayers(_ context.Context, _ string, _ int) ([]persistence.CompactPlayer, error) {
 	return []persistence.CompactPlayer{{UserID: "recent-1", DisplayName: "Recent"}}, nil
 }
-func (s *friendsPageTestStore) ListPartyInviteStatus(_, partyID string) (map[string]persistence.CompactPartyInvite, error) {
+func (s *friendsPageTestStore) ListPartyInviteStatus(_ context.Context, _ string, partyID string) (map[string]persistence.CompactPartyInvite, error) {
 	if partyID != "party-1" {
 		return map[string]persistence.CompactPartyInvite{}, nil
 	}
@@ -49,7 +51,7 @@ func TestFriendsPageReturnsOneCohesiveReadModel(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/v1/me/friends-page", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
-	a := &api{social: store, appAuthSecret: secret}
+	a := &api{social: socialdomain.NewService(store), appAuthSecret: secret}
 
 	a.friendsPage(response, request)
 
@@ -82,7 +84,7 @@ func TestFriendsPageAttachesPartyInviteStatus(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/v1/me/friends-page?partyId=party-1", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
-	a := &api{social: store, appAuthSecret: secret}
+	a := &api{social: socialdomain.NewService(store), appAuthSecret: secret}
 
 	a.friendsPage(response, request)
 
@@ -115,7 +117,7 @@ func TestApplySocialPresenceUsesCoordinatorOnlineSet(t *testing.T) {
 		{UserID: "hidden-friend"},
 	}
 	a := &api{coord: coordStore}
-	a.applySocialPresence(players)
+	a.applySocialPresence(t.Context(), players)
 	if players[0].PresenceStatus != "online" {
 		t.Fatalf("online friend status = %q", players[0].PresenceStatus)
 	}

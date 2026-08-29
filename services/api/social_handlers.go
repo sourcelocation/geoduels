@@ -6,51 +6,30 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 
 	"geoduels/pkg/contracts"
-	"geoduels/pkg/persistence"
-	"geoduels/pkg/socialpolicy"
+	"geoduels/pkg/social"
 )
 
 func (a *api) friendsPage(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
-	var (
-		friends  []persistence.CompactPlayer
-		incoming []persistence.FriendRequest
-		outgoing []persistence.FriendRequest
-		recent   []persistence.CompactPlayer
-		errs     [4]error
-		wg       sync.WaitGroup
-	)
-	wg.Add(4)
-	go func() { defer wg.Done(); friends, errs[0] = store.ListFriends(userID, 100) }()
-	go func() { defer wg.Done(); incoming, errs[1] = store.ListFriendRequests(userID, "incoming", 20) }()
-	go func() { defer wg.Done(); outgoing, errs[2] = store.ListFriendRequests(userID, "outgoing", 20) }()
-	go func() { defer wg.Done(); recent, errs[3] = store.ListRecentPlayers(userID, 3) }()
-	wg.Wait()
-	if err := errors.Join(errs[:]...); err != nil {
+	result, err := service.FriendsPage(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("partyId")))
+	if err != nil {
 		writeSocialError(w, http.StatusInternalServerError, "friends_page_unavailable")
 		return
 	}
-	if partyID := strings.TrimSpace(r.URL.Query().Get("partyId")); partyID != "" {
-		statuses, err := store.ListPartyInviteStatus(userID, partyID)
-		if err != nil {
-			writeSocialError(w, http.StatusInternalServerError, "friends_page_unavailable")
-			return
-		}
-		attachPartyInvites(friends, statuses)
-	}
+	friends, incoming, outgoing, recent := result.Friends, result.Incoming, result.Outgoing, result.Recent
+	attachPartyInvites(friends, result.PartyInvites)
 	a.touchViewerPresence(r.Context(), userID)
-	a.applySocialPresence(friends)
-	a.applySocialPresence(recent)
+	a.applySocialPresence(r.Context(), friends)
+	a.applySocialPresence(r.Context(), recent)
 	writeJSON(w, map[string]any{
 		"friends":       friends,
 		"requests":      map[string]any{"incoming": incoming, "outgoing": outgoing},
@@ -58,7 +37,7 @@ func (a *api) friendsPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func attachPartyInvites(players []persistence.CompactPlayer, statuses map[string]persistence.CompactPartyInvite) {
+func attachPartyInvites(players []social.CompactPlayer, statuses map[string]social.CompactPartyInvite) {
 	if len(statuses) == 0 {
 		return
 	}
@@ -70,36 +49,33 @@ func attachPartyInvites(players []persistence.CompactPlayer, statuses map[string
 	}
 }
 
-func (a *api) socialStore() (SocialRepository, bool) {
+func (a *api) socialService() (*social.Service, bool) {
 	return a.social, a.social != nil
 }
 
-func (a *api) socialActor(r *http.Request) (string, SocialRepository, bool) {
+func (a *api) socialActor(r *http.Request) (string, *social.Service, bool) {
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		return "", nil, false
 	}
-	store, ok := a.socialStore()
+	service, ok := a.socialService()
 	if !ok {
 		return "", nil, false
 	}
-	isGuest, _, _, err := store.GetSocialAccount(claims.Sub)
-	if err != nil || socialpolicy.Authorize(socialpolicy.Account{
-		IsGuest: isGuest, ActionEnabled: true, TargetExists: true,
-	}) != nil {
+	if err := service.Authorize(r.Context(), claims.Sub); err != nil {
 		return "", nil, false
 	}
-	return claims.Sub, store, true
+	return claims.Sub, service, true
 }
 
 func (a *api) socialSettings(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
 	if r.Method == http.MethodGet {
-		settings, err := store.GetSocialSettings(userID)
+		settings, err := service.GetSocialSettings(r.Context(), userID)
 		if err != nil {
 			writeSocialStoreError(w, err)
 			return
@@ -107,12 +83,12 @@ func (a *api) socialSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, settings)
 		return
 	}
-	var settings SocialSettings
+	var settings social.SocialSettings
 	if json.NewDecoder(r.Body).Decode(&settings) != nil {
 		writeSocialError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	settings, err := store.UpdateSocialSettings(userID, settings)
+	settings, err := service.UpdateSocialSettings(r.Context(), userID, settings)
 	if err != nil {
 		writeSocialStoreError(w, err)
 		return
@@ -121,7 +97,7 @@ func (a *api) socialSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) sendFriendRequest(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -137,7 +113,7 @@ func (a *api) sendFriendRequest(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	item, err := store.SendFriendRequest(userID, strings.TrimSpace(body.UserID))
+	item, err := service.SendFriendRequest(r.Context(), userID, strings.TrimSpace(body.UserID))
 	if err != nil {
 		writeSocialStoreError(w, err)
 		return
@@ -148,7 +124,7 @@ func (a *api) sendFriendRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) respondFriendRequest(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -159,7 +135,7 @@ func (a *api) respondFriendRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestID := mux.Vars(r)["id"]
-	if err := store.RespondFriendRequest(userID, requestID, action); err != nil {
+	if err := service.RespondFriendRequest(r.Context(), userID, requestID, action); err != nil {
 		writeSocialStoreError(w, err)
 		return
 	}
@@ -168,13 +144,13 @@ func (a *api) respondFriendRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) removeFriend(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
 	targetID := mux.Vars(r)["userId"]
-	if err := store.RemoveFriend(userID, targetID); err != nil {
+	if err := service.RemoveFriend(r.Context(), userID, targetID); err != nil {
 		writeSocialStoreError(w, err)
 		return
 	}
@@ -183,13 +159,13 @@ func (a *api) removeFriend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) userBlock(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
 	targetID := mux.Vars(r)["userId"]
-	if err := store.SetUserBlock(userID, targetID, r.Method == http.MethodPost); err != nil {
+	if err := service.SetUserBlock(r.Context(), userID, targetID, r.Method == http.MethodPost); err != nil {
 		writeSocialStoreError(w, err)
 		return
 	}
@@ -198,7 +174,7 @@ func (a *api) userBlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) socialPlayerSearch(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -207,17 +183,17 @@ func (a *api) socialPlayerSearch(w http.ResponseWriter, r *http.Request) {
 		writeSocialRateLimited(w, retry)
 		return
 	}
-	players, err := store.SearchSocialPlayers(userID, r.URL.Query().Get("q"), queryLimit(r, 10))
+	players, err := service.SearchSocialPlayers(r.Context(), userID, r.URL.Query().Get("q"), queryLimit(r, 10))
 	if err != nil {
 		writeSocialError(w, http.StatusInternalServerError, "search_unavailable")
 		return
 	}
-	a.applySocialPresence(players)
+	a.applySocialPresence(r.Context(), players)
 	writeJSON(w, map[string]any{"players": players})
 }
 
 func (a *api) playerRelationship(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -227,7 +203,7 @@ func (a *api) playerRelationship(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusNotFound, "player_not_found")
 		return
 	}
-	state, requestID, err := store.Relationship(userID, profile.UserID)
+	state, requestID, err := service.Relationship(r.Context(), userID, profile.UserID)
 	if err != nil {
 		writeSocialError(w, http.StatusInternalServerError, "relationship_unavailable")
 		return
@@ -236,12 +212,12 @@ func (a *api) playerRelationship(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) createFriendCode(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
-	code, err := store.CreateFriendCode(userID, 7*24*time.Hour)
+	code, err := service.CreateFriendCode(r.Context(), userID, 7*24*time.Hour)
 	if err != nil {
 		writeSocialStoreError(w, err)
 		return
@@ -250,7 +226,7 @@ func (a *api) createFriendCode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) resolveFriendCode(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -259,7 +235,7 @@ func (a *api) resolveFriendCode(w http.ResponseWriter, r *http.Request) {
 		writeSocialRateLimited(w, retry)
 		return
 	}
-	player, err := store.ResolveFriendCode(userID, mux.Vars(r)["code"])
+	player, err := service.ResolveFriendCode(r.Context(), userID, mux.Vars(r)["code"])
 	if err != nil {
 		writeSocialStoreError(w, err)
 		return
@@ -268,14 +244,14 @@ func (a *api) resolveFriendCode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) sendFriendCodeRequest(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
-	player, err := store.ResolveFriendCode(userID, mux.Vars(r)["code"])
+	player, err := service.ResolveFriendCode(r.Context(), userID, mux.Vars(r)["code"])
 	if err == nil {
-		_, err = store.SendFriendRequest(userID, player.UserID)
+		_, err = service.SendFriendRequest(r.Context(), userID, player.UserID)
 	}
 	if err != nil {
 		writeSocialStoreError(w, err)
@@ -286,13 +262,13 @@ func (a *api) sendFriendCodeRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) partyInvitations(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
 	}
 	if r.Method == http.MethodGet {
-		items, err := store.ListPartyInvitations(userID, queryLimit(r, 10))
+		items, err := service.ListPartyInvitations(r.Context(), userID, queryLimit(r, 10))
 		if err != nil {
 			writeSocialStoreError(w, err)
 			return
@@ -311,7 +287,7 @@ func (a *api) partyInvitations(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	item, err := store.CreatePartyInvitation(mux.Vars(r)["id"], userID, body.UserID, 20*time.Minute)
+	item, err := service.CreatePartyInvitation(r.Context(), mux.Vars(r)["id"], userID, body.UserID, 20*time.Minute)
 	if err != nil {
 		writeSocialStoreError(w, err)
 		return
@@ -321,7 +297,7 @@ func (a *api) partyInvitations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) createPartyAndInvite(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -342,7 +318,7 @@ func (a *api) createPartyAndInvite(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusInternalServerError, "party_unavailable")
 		return
 	}
-	invitation, err := store.CreatePartyInvitation(party.ID, userID, body.UserID, 20*time.Minute)
+	invitation, err := service.CreatePartyInvitation(r.Context(), party.ID, userID, body.UserID, 20*time.Minute)
 	if err != nil {
 		_, _ = a.parties.LeaveParty(party.ID, userID)
 		writeSocialStoreError(w, err)
@@ -356,7 +332,7 @@ func (a *api) createPartyAndInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) respondPartyInvitation(w http.ResponseWriter, r *http.Request) {
-	userID, store, ok := a.socialActor(r)
+	userID, service, ok := a.socialActor(r)
 	if !ok {
 		writeSocialError(w, http.StatusUnauthorized, "registration_required")
 		return
@@ -366,7 +342,7 @@ func (a *api) respondPartyInvitation(w http.ResponseWriter, r *http.Request) {
 		writeSocialError(w, http.StatusBadRequest, "invalid_action")
 		return
 	}
-	item, err := store.RespondPartyInvitation(userID, mux.Vars(r)["id"], action)
+	item, err := service.RespondPartyInvitation(r.Context(), userID, mux.Vars(r)["id"], action)
 	if err != nil {
 		writeSocialStoreError(w, err)
 		return

@@ -1,6 +1,7 @@
 package main
 
 import (
+	socialdomain "geoduels/pkg/social"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,7 +23,7 @@ func (s *supportTestStore) CreateDonationRef(userID string) (string, error) {
 
 func TestCreateSupportDonationRequiresConfiguredTestLinkInTestMode(t *testing.T) {
 	api := &api{
-		accounts: &supportTestStore{}, sessions: &supportTestStore{}, profiles: &supportTestStore{}, preferenceStore: &supportTestStore{}, badges: &supportTestStore{}, leaderboardStore: &supportTestStore{}, matchStore: &supportTestStore{}, moderation: &supportTestStore{}, admin: &supportTestStore{}, content: &supportTestStore{}, seasons: &supportTestStore{}, gameplayMaps: &supportTestStore{}, runtimeStore: &supportTestStore{}, chatStore: &supportTestStore{}, parties: &supportTestStore{}, social: &supportTestStore{},
+		accounts: &supportTestStore{}, sessions: &supportTestStore{}, profiles: &supportTestStore{}, preferenceStore: &supportTestStore{}, badges: &supportTestStore{}, leaderboardStore: &supportTestStore{}, matchStore: &supportTestStore{}, moderation: &supportTestStore{}, admin: &supportTestStore{}, content: &supportTestStore{}, seasons: &supportTestStore{}, gameplayMaps: &supportTestStore{}, runtimeStore: &supportTestStore{}, chatStore: &supportTestStore{}, parties: &supportTestStore{}, social: socialdomain.NewService(&supportTestStore{}),
 		appAuthSecret:  []byte("01234567890123456789012345678901"),
 		accessTokenTTL: 15 * time.Minute,
 		stripeMode:     "test",
@@ -48,7 +49,7 @@ func TestCreateSupportDonationRequiresConfiguredTestLinkInTestMode(t *testing.T)
 func TestCreateSupportDonationUsesTestPaymentLinkInTestMode(t *testing.T) {
 	store := &supportTestStore{}
 	api := &api{
-		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: store,
+		accounts: store, sessions: store, profiles: store, preferenceStore: store, badges: store, leaderboardStore: store, matchStore: store, moderation: store, admin: store, content: store, seasons: store, gameplayMaps: store, runtimeStore: store, chatStore: store, parties: store, social: socialdomain.NewService(store),
 		appAuthSecret:         []byte("01234567890123456789012345678901"),
 		accessTokenTTL:        15 * time.Minute,
 		stripeMode:            "test",

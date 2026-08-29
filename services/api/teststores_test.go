@@ -1,6 +1,7 @@
 package main
 
 import "geoduels/pkg/persistence"
+import socialdomain "geoduels/pkg/social"
 
 // testRepositories is the aggregate narrow-repository surface used by API test
 // doubles. Fakes embed it so any subset of fields can be populated; calls to
@@ -22,7 +23,7 @@ type testRepositories interface {
 	persistence.RuntimeRepository
 	persistence.ChatRepository
 	persistence.PartyRepository
-	persistence.SocialRepository
+	socialdomain.Store
 }
 
 // withTestRepositories populates every repository field of an api under test.
@@ -43,6 +44,6 @@ func withTestRepositories(store testRepositories) func(*api) {
 		a.runtimeStore = store
 		a.chatStore = store
 		a.parties = store
-		a.social = store
+		a.social = socialdomain.NewService(store)
 	}
 }

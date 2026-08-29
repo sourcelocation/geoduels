@@ -39,14 +39,26 @@ afterEach(() => {
 });
 
 describe("AuthGateway transitions", () => {
-  it("applies live notification deltas onto bootstrap activity", async () => {
+  it("removes a read live notification from bootstrap activity", async () => {
     vi.mocked(requestBootstrap).mockResolvedValueOnce(boot(registered("one")));
     const gateway = new AuthGateway(createRuntimeConfigFixture());
     await gateway.bootstrap();
     gateway.applyNotification({ id: 7, type: "friend_request_received", payload: {}, createdAt: "2026-08-28T00:00:00Z" });
     expect(gateway.getBootstrapPayload()?.activity.notifications[0]?.id).toBe(7);
     gateway.applyNotificationRead(7);
-    expect(gateway.getBootstrapPayload()?.activity.notifications[0]?.readAt).toBeTruthy();
+    expect(gateway.getBootstrapPayload()?.activity.notifications).toEqual([]);
+  });
+
+  it("clears bootstrap activity notifications after a live read-all event", async () => {
+    vi.mocked(requestBootstrap).mockResolvedValueOnce(boot(registered("one")));
+    const gateway = new AuthGateway(createRuntimeConfigFixture());
+    await gateway.bootstrap();
+    gateway.applyNotification({ id: 7, type: "mmr_refund", payload: {}, createdAt: "2026-08-28T00:00:00Z" });
+    gateway.applyNotification({ id: 8, type: "badge_unlocked", payload: {}, createdAt: "2026-08-28T00:01:00Z" });
+
+    gateway.applyNotificationReadAll();
+
+    expect(gateway.getBootstrapPayload()?.activity.notifications).toEqual([]);
   });
 
   it("retains anonymous shell bootstrap state", async () => {

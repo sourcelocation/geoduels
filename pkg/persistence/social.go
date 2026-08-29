@@ -117,7 +117,12 @@ func (s *DB) ListFriends(userID string, limit int) ([]CompactPlayer, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.New(s.pool).ListFriends(context.Background(), db.ListFriendsParams{UserIDLow: id, Limit: int32(limit)})
+	ctx := context.Background()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.New(s.pool).ListFriends(ctx, db.ListFriendsParams{UserIDLow: id, SeasonID: seasonID, RowLimit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -140,10 +145,15 @@ func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRe
 	if err != nil {
 		return nil, err
 	}
+	ctx := context.Background()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := db.New(s.pool)
 	out := []FriendRequest{}
 	if direction == "outgoing" {
-		rows, err := q.ListOutgoingFriendRequests(context.Background(), db.ListOutgoingFriendRequestsParams{SenderUserID: id, Limit: int32(limit)})
+		rows, err := q.ListOutgoingFriendRequests(ctx, db.ListOutgoingFriendRequestsParams{SeasonID: seasonID, SenderUserID: id, RowLimit: int32(limit)})
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +167,7 @@ func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRe
 			out = append(out, item)
 		}
 	} else {
-		rows, err := q.ListIncomingFriendRequests(context.Background(), db.ListIncomingFriendRequestsParams{RecipientUserID: id, Limit: int32(limit)})
+		rows, err := q.ListIncomingFriendRequests(ctx, db.ListIncomingFriendRequestsParams{SeasonID: seasonID, RecipientUserID: id, RowLimit: int32(limit)})
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +194,12 @@ func (s *DB) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlay
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.New(s.pool).SearchSocialPlayers(context.Background(), db.SearchSocialPlayersParams{ID: id, Lower: query, Limit: int32(limit)})
+	ctx := context.Background()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.New(s.pool).SearchSocialPlayers(ctx, db.SearchSocialPlayersParams{SeasonID: seasonID, SelfUserID: id, Query: query, RowLimit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +222,12 @@ func (s *DB) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.New(s.pool).ListRecentPlayers(context.Background(), db.ListRecentPlayersParams{SelfUserID: id, RowLimit: int32(limit)})
+	ctx := context.Background()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.New(s.pool).ListRecentPlayers(ctx, db.ListRecentPlayersParams{SeasonID: seasonID, SelfUserID: id, RowLimit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +454,12 @@ func (s *DB) ResolveFriendCode(userID, code string) (CompactPlayer, error) {
 	if err != nil {
 		return CompactPlayer{}, ErrSocialNotFound
 	}
-	row, err := db.New(s.pool).ResolveFriendCode(context.Background(), db.ResolveFriendCodeParams{Code: code, ID: userUUID})
+	ctx := context.Background()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return CompactPlayer{}, ErrSocialNotFound
+	}
+	row, err := db.New(s.pool).ResolveFriendCode(ctx, db.ResolveFriendCodeParams{SeasonID: seasonID, Code: code, SelfUserID: userUUID})
 	if err != nil {
 		return CompactPlayer{}, ErrSocialNotFound
 	}

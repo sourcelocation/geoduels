@@ -29,3 +29,20 @@ func TestPartyInvitationUpsertHasUniqueConflictTarget(t *testing.T) {
 		t.Fatal("party invitation upsert requires a unique pending (party_id, recipient_user_id) index")
 	}
 }
+
+func TestSocialRankJoinsRequireSeason(t *testing.T) {
+	query, err := os.ReadFile("../../db/queries/social.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sql := string(query)
+	rankJoins := strings.Count(sql, "left join ranks r")
+	seasonScopedRankJoins := strings.Count(sql, "and r.season_id=sqlc.arg(season_id)")
+	if rankJoins == 0 {
+		t.Fatal("social queries must include rank joins")
+	}
+	if seasonScopedRankJoins != rankJoins {
+		t.Fatalf("all social rank joins must select exactly one season: got %d scoped joins for %d rank joins", seasonScopedRankJoins, rankJoins)
+	}
+}

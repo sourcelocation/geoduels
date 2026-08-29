@@ -132,13 +132,12 @@ export class AuthGateway {
   applyNotificationRead(notificationId: number) {
     const current = this.bootstrapPayload;
     if (!current) return;
-    const readAt = new Date().toISOString();
     this.bootstrapPayload = {
       ...current,
       activity: {
         ...current.activity,
-        notifications: current.activity.notifications.map((item) =>
-          item.id === notificationId ? { ...item, readAt } : item,
+        notifications: current.activity.notifications.filter(
+          (item) => item.id !== notificationId,
         ),
       },
     };
@@ -149,12 +148,11 @@ export class AuthGateway {
   applyNotificationReadAll() {
     const current = this.bootstrapPayload;
     if (!current) return;
-    const readAt = new Date().toISOString();
     this.bootstrapPayload = {
       ...current,
       activity: {
         ...current.activity,
-        notifications: current.activity.notifications.map((item) => ({ ...item, readAt })),
+        notifications: [],
       },
     };
     this.bootstrapEpoch += 1;

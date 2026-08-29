@@ -90,28 +90,3 @@ func TestUpdateUserPreferencesRejectsStaleRevision(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
 	}
 }
-
-func TestGetUserPreferences(t *testing.T) {
-	store := &preferencesTestStore{value: persistence.UserPreferences{
-		SchemaVersion: 1,
-		Preferences:   json.RawMessage(`{"version":1,"audioMuted":true}`),
-		Revision:      7,
-	}}
-	a, request, response := preferenceRequest(t, http.MethodGet, "", store)
-
-	a.userPreferences(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	var got struct {
-		Preferences json.RawMessage `json:"preferences"`
-		Revision    int64           `json:"revision"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Revision != 7 || string(got.Preferences) != `{"version":1,"audioMuted":true}` {
-		t.Fatalf("response = %+v", got)
-	}
-}

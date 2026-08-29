@@ -6,9 +6,7 @@ import type { AuthSessionSnapshot } from "../../auth/session";
 import { selectActiveChatConversationId } from "../../chat/lib/chat-scope";
 import {
   requestDeleteAccount,
-  requestMe,
   requestMatchReport,
-  requestUserNotifications,
   requestSupportDonation,
   requestUpdateSelectedBadge,
   requestUpdateNickname,
@@ -24,10 +22,7 @@ import { deriveHomeModel } from "./derive-home-model";
 import type { HomeModel } from "./types";
 import type { ChatEmote } from "../../chat/model/types";
 import { useLobbyData } from "./useLobbyData";
-import {
-  fetchResumableSession,
-  type MatchConfig,
-} from "../../matchmaking/lib/queue-client";
+import { type MatchConfig } from "../../matchmaking/lib/queue-client";
 import { useHotkey } from "../../hotkeys/hooks/use-hotkey";
 import { getAuthGateway } from "../../auth/auth-gateway";
 
@@ -85,6 +80,7 @@ export function useHomeModel(options?: {
   const onPartyLeft = options?.onPartyLeft;
   const isMatchRoute = routeContext === "match";
   const queryClient = useQueryClient();
+  const bootstrap = authGateway.getBootstrapPayload();
 
   const auth = useSyncExternalStore(
     sessionController.subscribe,
@@ -125,36 +121,16 @@ export function useHomeModel(options?: {
 
   const notificationsQuery = useQuery({
     queryKey: ["notifications", auth.userId || "anonymous"],
-    enabled: !isMatchRoute && backgroundDataEnabled && !!auth.userId && !!auth.accessToken && !auth.nicknameRequired,
-    queryFn: async () => {
-      const session = await sessionController.ensureFreshSession(60_000, {
-        allowNicknameRequired: false,
-      });
-      if (!session?.accessToken) {
-        return { notifications: [] };
-      }
-      return requestUserNotifications(config, session.accessToken);
-    },
-    refetchInterval: 60_000,
-    refetchOnMount: false,
-    staleTime: 60_000,
+    enabled: false,
+    queryFn: async () => ({ notifications: bootstrap?.activity.notifications || [] }),
+    initialData: { notifications: bootstrap?.activity.notifications || [] },
   });
-
-  const resumableSessionQuery = useQuery({
-    queryKey: ["session-resumable", auth.userId || "anonymous"],
-    enabled: !isMatchRoute && backgroundDataEnabled && !partyInviteCode && !!auth.userId && !auth.nicknameRequired,
-    queryFn: async ({ signal }) => {
-      const session = await sessionController.ensureFreshSession(60_000, {
-        allowNicknameRequired: false,
-      });
-      if (!session?.accessToken) {
-        return { status: "none" as const };
-      }
-      return fetchResumableSession(config, session.accessToken, signal);
-    },
-    refetchOnMount: false,
-    staleTime: 60_000,
-  });
+  useEffect(() => {
+    queryClient.setQueryData(
+      ["notifications", auth.userId || "anonymous"],
+      { notifications: bootstrap?.activity.notifications || [] },
+    );
+  }, [auth.userId, bootstrap, queryClient]);
 
   const updateNicknameMutation = useMutation({
     mutationFn: ({
@@ -323,11 +299,11 @@ export function useHomeModel(options?: {
 
   useEffect(() => {
     if (!match.lastFinalizedMatchId) return;
-    void queryClient.invalidateQueries({ queryKey: ["me"] });
+    void authGateway.bootstrap({ force: true });
     void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
     void queryClient.invalidateQueries({ queryKey: ["maps"] });
     void queryClient.invalidateQueries({ queryKey: ["map-details"] });
-  }, [match.lastFinalizedMatchId, queryClient]);
+  }, [authGateway, match.lastFinalizedMatchId, queryClient]);
 
   useEffect(() => {
     const snapshot = match.snapshot;
@@ -375,10 +351,9 @@ export function useHomeModel(options?: {
     chatController,
   ]);
 
-  const homeResumeMatchId =
-    resumableSessionQuery.data?.status === "match"
-      ? resumableSessionQuery.data.matchId
-      : "";
+  const homeResumeMatchId = !partyInviteCode
+    ? bootstrap?.activity.activeMatch?.matchId || ""
+    : "";
   const notifications = notificationsQuery.data?.notifications || [];
 
   const baseView = deriveHomeModel({
@@ -528,6 +503,7 @@ export function useHomeModel(options?: {
         isAdmin: typeof data.user?.isAdmin === "boolean" ? data.user.isAdmin : current.isAdmin,
         isModerator: typeof data.user?.isModerator === "boolean" ? data.user.isModerator : current.isModerator,
       });
+      await authGateway.bootstrap({ force: true });
     } catch (error) {
       sessionController.setAuthPending({
         nicknameSaving: false,
@@ -594,6 +570,7 @@ export function useHomeModel(options?: {
         nicknameSaving: false,
         nicknameError: "",
       });
+      await authGateway.bootstrap({ force: true });
       return true;
     } catch (error) {
       sessionController.setAuthPending({
@@ -712,6 +689,7 @@ export function useHomeModel(options?: {
       badgeId,
     });
     sessionController.applyBadgeSelection(payload);
+    await authGateway.bootstrap({ force: true });
     if (badgeId) {
       sfxController.play("select");
     }
@@ -730,10 +708,7 @@ export function useHomeModel(options?: {
     if (!auth.accessToken) return;
     await markUserNotificationRead(config, auth.accessToken, notificationId);
     if (notification?.type === "badge_unlocked") {
-      const resp = await requestMe(config, auth.accessToken);
-      if (resp.ok) {
-        sessionController.applyProfileSnapshot(await resp.json());
-      }
+      await authGateway.bootstrap({ force: true });
     }
   };
 

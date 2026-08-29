@@ -241,6 +241,30 @@ func (s *Store) CountPresentUsers(ctx context.Context) (int, error) {
 	return int(total), err
 }
 
+func (s *Store) PresentUsers(ctx context.Context, userIDs []string) (map[string]bool, error) {
+	present := make(map[string]bool, len(userIDs))
+	if s == nil || s.rdb == nil || len(userIDs) == 0 {
+		return present, nil
+	}
+	cutoff := float64(time.Now().Add(-presenceTTL).UnixMilli())
+	pipe := s.rdb.Pipeline()
+	cmds := make([]*redis.FloatCmd, len(userIDs))
+	for i, userID := range userIDs {
+		cmds[i] = pipe.ZScore(ctx, presenceKey(), userID)
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, err
+	}
+	for i, userID := range userIDs {
+		score, err := cmds[i].Result()
+		if err != nil || score < cutoff {
+			continue
+		}
+		present[userID] = true
+	}
+	return present, nil
+}
+
 func (s *Store) getAssignment(ctx context.Context, key string) (Assignment, bool, error) {
 	if key == "" {
 		return Assignment{}, false, nil

@@ -84,7 +84,7 @@ func (s *DB) gameplayMapSettings(ctx context.Context, q db.DBTX) (contracts.Game
 		}
 		return contracts.GameplayMapSettings{}, err
 	}
-	return decodeGameplayMapSettings(raw), nil
+	return decodeGameplayMapSettings(string(raw)), nil
 }
 
 func (s *DB) SetMapOfficial(adminUserID, mapID string, official bool) (contracts.CustomMap, error) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,10 +31,10 @@ func (s *DB) GetFinalMatchSnapshot(id string) ([]byte, bool, error) {
 		return nil, false, e
 	}
 	if len(r.ReplayZstd) == 0 {
-		if r.ReplayJson == "" {
+		if len(r.ReplayJson) == 0 {
 			return nil, false, nil
 		}
-		return []byte(r.ReplayJson), true, nil
+		return r.ReplayJson, true, nil
 	}
 	raw, e := decompressReplay(r.ReplayZstd, int(r.ReplayCodec), int(r.ReplayUncompressedBytes))
 	if e != nil {
@@ -102,7 +101,7 @@ func (s *DB) ListPlayerMatchHistoryPage(id string, l int, b time.Time, bid strin
 	}
 	o := make([]MatchHistorySummary, 0, len(rs))
 	for _, x := range rs {
-		o = append(o, MatchHistorySummary{MatchID: fmt.Sprintf("%x", x.MatchID.Bytes), Mode: string(x.Mode), StartedAt: x.StartedAt.Time, EndedAt: x.EndedAt.Time, WinnerUserID: fmt.Sprint(x.WinnerUserID), Outcome: x.Outcome, Ranked: x.Ranked.Bool, RatingDelta: int(x.RankedDelta), TotalScore: int(x.TotalScore), OpponentUserID: x.OpponentUserID, OpponentDisplayName: fmt.Sprint(x.OpponentDisplayName)})
+		o = append(o, MatchHistorySummary{MatchID: uuidVal(x.MatchID), Mode: string(x.Mode), StartedAt: x.StartedAt.Time, EndedAt: x.EndedAt.Time, WinnerUserID: uuidVal(x.WinnerUserID), Outcome: x.Outcome, Ranked: x.Ranked.Bool, RatingDelta: int(x.RankedDelta), TotalScore: int(x.TotalScore), OpponentUserID: uuidVal(x.OpponentUserID), OpponentDisplayName: textVal(x.OpponentDisplayName)})
 	}
 	p := MatchHistoryPage{Matches: o}
 	if len(o) > l {

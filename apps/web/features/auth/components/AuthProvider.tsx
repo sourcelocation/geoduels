@@ -1,16 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { getRuntimeConfig } from "../../../lib/runtime-config";
 import {
   requestDiscordStart,
   requestGoogleStart,
-  requestMe,
   type OAuthIntent,
 } from "../lib/auth-client";
 import { clearAuthCallbackParams, readAuthCallback } from "../lib/auth-callback";
-import type { AuthSessionPayload } from "../lib/auth-client";
+import type { AppBootstrapPayload, AuthSessionPayload } from "../lib/auth-client";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 import { getAuthGateway } from "../auth-gateway";
+import { UserLiveProvider } from "./UserLiveProvider";
 import AppModalShell from "../../../components/ui/AppModalShell";
 import { Button } from "../../../components/ui/button";
 
@@ -34,6 +33,7 @@ export type AuthState = {
   canPlayRanked: boolean;
   canUseSocial: boolean;
   canManageMaps: boolean;
+  bootstrap: AppBootstrapPayload | null;
 };
 
 export type AuthActions = {
@@ -64,6 +64,7 @@ const anonymousState: AuthState = {
   canPlayRanked: false,
   canUseSocial: false,
   canManageMaps: false,
+  bootstrap: null,
 };
 
 const AuthContext = createContext<AuthState>(anonymousState);
@@ -99,19 +100,21 @@ export function deriveAuthState(
   session: AuthSessionPayload | null | undefined,
   isFetched: boolean,
   profile?: Record<string, unknown> | null,
+  bootstrap: AppBootstrapPayload | null = null,
 ): AuthState {
-  if (!isFetched) return { ...anonymousState, status: "bootstrapping" };
+  if (!isFetched) return { ...anonymousState, status: "bootstrapping", bootstrap };
   const token = session?.accessToken || "";
-  if (!session?.user?.id || !token) return anonymousState;
+  if (!session?.user?.id || !token) return { ...anonymousState, bootstrap };
   const user = session.user;
   const isGuest = !!user.isGuest;
   const isRegistered = !isGuest;
+  const viewer = bootstrap?.viewer;
   const canPlay = session.canPlay !== false && !session.nicknameRequired && !session.authMigrationRequired;
   const displayName =
-    stringValue(profile, "display_name") ||
+    viewer?.displayName || stringValue(profile, "display_name") ||
     user.display_name || user.email || (isGuest ? "Guest" : "Player");
-  const avatarUrl = stringValue(profile, "avatar_url") || user.avatar_url || "";
-  const profileMmr = profileValue(profile, "mmr");
+  const avatarUrl = viewer?.avatarUrl || stringValue(profile, "avatar_url") || user.avatar_url || "";
+  const profileMmr = viewer?.mmr ?? profileValue(profile, "mmr");
   return {
     status: isGuest ? "guest" : "registered",
     session,
@@ -119,17 +122,18 @@ export function deriveAuthState(
     userId: user.id || "",
     isGuest,
     isRegistered,
-    isAdmin: !!(profileValue(profile, "isAdmin") ?? user.isAdmin),
-    isModerator: !!(profileValue(profile, "isModerator") ?? user.isModerator),
+    isAdmin: !!(viewer?.isAdmin ?? profileValue(profile, "isAdmin") ?? user.isAdmin),
+    isModerator: !!(viewer?.isModerator ?? profileValue(profile, "isModerator") ?? user.isModerator),
     displayName,
     avatarUrl,
     email: user.email || stringValue(profile, "email"),
     mmr: typeof profileMmr === "number" ? profileMmr : undefined,
-    selectedBadge: (profileValue(profile, "selectedBadge") as PlayerBadgeInfo | null | undefined) || null,
+    selectedBadge: (viewer?.selectedBadge as PlayerBadgeInfo | null | undefined) || (profileValue(profile, "selectedBadge") as PlayerBadgeInfo | null | undefined) || null,
     canPlayUnranked: canPlay,
     canPlayRanked: isRegistered && canPlay,
     canUseSocial: isRegistered,
     canManageMaps: isRegistered,
+    bootstrap,
   };
 }
 
@@ -138,29 +142,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const gateway = getAuthGateway(config);
   const session = useSyncExternalStore(gateway.subscribe.bind(gateway), gateway.getPayload.bind(gateway), gateway.getPayload.bind(gateway));
   const restored = useSyncExternalStore(gateway.subscribe.bind(gateway), gateway.isRestored.bind(gateway), gateway.isRestored.bind(gateway));
-  const token = session?.accessToken || "";
-  const registered = !!session?.user?.id && !session.user.isGuest;
-  const profileQuery = useQuery({
-    queryKey: ["auth", "profile", session?.user?.id || "anonymous"],
-    enabled: restored && registered && !!token,
-    queryFn: async () => {
-      const response = await requestMe(config, token);
-      if (!response.ok) return null;
-      return response.json() as Promise<Record<string, unknown>>;
-    },
-    staleTime: 60_000,
-  });
+  useSyncExternalStore(gateway.subscribe.bind(gateway), gateway.getBootstrapEpoch.bind(gateway), gateway.getBootstrapEpoch.bind(gateway));
+  const bootstrap = restored ? gateway.getBootstrapPayload() : null;
 
   useEffect(() => { void gateway.bootstrap().catch(() => undefined); }, [gateway]);
 
   const value = useMemo(
-    () => deriveAuthState(session, restored, profileQuery.data),
-    [profileQuery.data, restored, session],
+    () => deriveAuthState(session, restored, null, bootstrap),
+    [bootstrap, restored, session],
   );
 
   return (
     <AuthStateProvider value={value}>
-      <AuthGlobalUi>{children}</AuthGlobalUi>
+      <UserLiveProvider>
+        <AuthGlobalUi>{children}</AuthGlobalUi>
+      </UserLiveProvider>
     </AuthStateProvider>
   );
 }

@@ -4,7 +4,6 @@ import type {
   CompactPlayer,
   FriendRequest,
   PartyInvitation,
-  SocialSummary,
   SocialSettings,
 } from "../types";
 
@@ -27,25 +26,27 @@ async function socialFetch<T>(
   return response.json();
 }
 
+export type FriendsPage = {
+  friends: CompactPlayer[];
+  requests: { incoming: FriendRequest[]; outgoing: FriendRequest[] };
+  recentPlayers: CompactPlayer[];
+};
+
 export const socialClient = {
-  friends: (config: RuntimeConfig, token: string) =>
-    socialFetch<{ friends: CompactPlayer[] }>(config, token, "/v1/me/friends"),
-  requests: (config: RuntimeConfig, token: string, direction: "incoming" | "outgoing") =>
-    socialFetch<{ requests: FriendRequest[] }>(
+  friendsPage: (config: RuntimeConfig, token: string, partyId?: string) =>
+    socialFetch<FriendsPage>(
       config,
       token,
-      `/v1/me/friend-requests?direction=${direction}`,
+      partyId
+        ? `/v1/me/friends-page?partyId=${encodeURIComponent(partyId)}`
+        : "/v1/me/friends-page",
     ),
-  recent: (config: RuntimeConfig, token: string) =>
-    socialFetch<{ players: CompactPlayer[] }>(config, token, "/v1/me/recent-players"),
   search: (config: RuntimeConfig, token: string, query: string) =>
     socialFetch<{ players: CompactPlayer[] }>(
       config,
       token,
       `/v1/player-search?q=${encodeURIComponent(query)}`,
     ),
-  summary: (config: RuntimeConfig, token: string) =>
-    socialFetch<SocialSummary>(config, token, "/v1/me/social-summary"),
   settings: (config: RuntimeConfig, token: string) =>
     socialFetch<SocialSettings>(config, token, "/v1/me/social-settings"),
   updateSettings: (config: RuntimeConfig, token: string, settings: SocialSettings) =>

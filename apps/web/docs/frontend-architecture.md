@@ -155,7 +155,7 @@ Use these existing components before creating new visual recipes. Keep this inde
 - `HorizontalScroller`: native horizontal scrolling with hidden browser chrome, accessible overflow controls, and scroll snapping for repeated card collections.
 - `TableShell`, `Table`, `TableHead`: operational table primitives.
 - `Metric`: compact label/value metric for operational dashboards.
-- `Tabs`: keyboard-operable compact selector for switching between small view sets; use `appearance="segmented"` for mutually exclusive compact choices.
+- `Tabs`: keyboard-operable compact selector for switching between small view sets; use `appearance="segmented"` for mutually exclusive compact choices and `appearance="segmented-icons"` for tooltip-backed icon-only choices with concise accessible labels.
 - `Toolbar`: horizontal action container for grouped controls.
 - `Tooltip` and `TooltipProvider`: hover/focus explanation for icon-only or unfamiliar controls.
 - `AppModalShell` / `Modal` / `Dialog`: standard focus-managed responsive modal shell. Prefer `AlertDialog` for destructive confirmation. Each shell owns its independent exit lifecycle and registers it with the shared modal-dismissal coordinator. Session-ending operations await all mounted modal exits before publishing the anonymous auth state, so modals animate out before their owning authenticated UI unmounts.

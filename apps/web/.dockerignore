@@ -7,5 +7,6 @@ coverage
 test-results
 playwright-report
 e2e
+assets
 *.log
 *.tsbuildinfo

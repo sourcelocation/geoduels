@@ -188,8 +188,9 @@ func (s *DB) ingestCustomMap(userID, mapID, displayName, description, visibility
 			if parseErr != nil {
 				err = parseErr
 			} else {
-				var owner string
-				owner, err = q.LockMapOwner(ctx, mapUUID)
+				var ownerUUID pgtype.UUID
+				ownerUUID, err = q.LockMapOwner(ctx, mapUUID)
+				owner := uuidVal(ownerUUID)
 				if err == nil && owner != userID {
 					err = errors.New("map is not owned by this account")
 				}
@@ -353,8 +354,8 @@ func (s *DB) SetMapFavorite(userID, mapID string, favorite bool) (contracts.Cust
 			}
 		}
 	}
-	if changed && visibility.OwnerUserID != "" {
-		if _, err := refreshMapCreatorTrust(ctx, tx, visibility.OwnerUserID); err != nil {
+	if changed && visibility.OwnerUserID.Valid {
+		if _, err := refreshMapCreatorTrust(ctx, tx, uuidVal(visibility.OwnerUserID)); err != nil {
 			return contracts.CustomMap{}, err
 		}
 	}

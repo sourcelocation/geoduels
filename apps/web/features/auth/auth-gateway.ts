@@ -3,7 +3,8 @@ import {
   requestGuestSession,
   requestLogout,
   requestRefreshSession,
-  requestSession,
+  requestBootstrap,
+  type AppBootstrapPayload,
   type AuthSessionPayload,
 } from "./lib/auth-client";
 import { decodeAccessTokenExpiry } from "./lib/token-expiry";
@@ -18,6 +19,8 @@ const AUTH_CHANNEL = "geoduels-auth";
 /** The sole browser owner allowed to commit authentication state. */
 export class AuthGateway {
   private payload: AuthSessionPayload | null = null;
+  private bootstrapPayload: AppBootstrapPayload | null = null;
+  private bootstrapEpoch = 0;
   private restored = false;
   private generation = 0;
   private restorePromise: Promise<AuthSessionSnapshot | null> | null = null;
@@ -58,6 +61,14 @@ export class AuthGateway {
     return this.payload;
   }
 
+  getBootstrapPayload() {
+    return this.bootstrapPayload;
+  }
+
+  getBootstrapEpoch() {
+    return this.bootstrapEpoch;
+  }
+
   isRestored() {
     return this.restored;
   }
@@ -71,8 +82,9 @@ export class AuthGateway {
     this.listeners.forEach((listener) => listener(snapshot));
   }
 
-  private commit(payload: AuthSessionPayload | null, restored = true) {
+  private commit(payload: AuthSessionPayload | null, restored = true, preserveBootstrap = false) {
     this.payload = payload;
+    if (!payload && !preserveBootstrap) this.bootstrapPayload = null;
     this.restored = restored;
     this.publish();
     return this.getSnapshot();
@@ -103,6 +115,58 @@ export class AuthGateway {
   applyPayload(payload: AuthSessionPayload | null) {
     ++this.generation;
     return this.commit(payload);
+  }
+
+  applyNotification(notification: NonNullable<AppBootstrapPayload["activity"]["notifications"][number]>) {
+    const current = this.bootstrapPayload;
+    if (!current) return;
+    const rest = current.activity.notifications.filter((item) => item.id !== notification.id);
+    this.bootstrapPayload = {
+      ...current,
+      activity: { ...current.activity, notifications: [notification, ...rest].slice(0, 10) },
+    };
+    this.bootstrapEpoch += 1;
+    this.publish();
+  }
+
+  applyNotificationRead(notificationId: number) {
+    const current = this.bootstrapPayload;
+    if (!current) return;
+    const readAt = new Date().toISOString();
+    this.bootstrapPayload = {
+      ...current,
+      activity: {
+        ...current.activity,
+        notifications: current.activity.notifications.map((item) =>
+          item.id === notificationId ? { ...item, readAt } : item,
+        ),
+      },
+    };
+    this.bootstrapEpoch += 1;
+    this.publish();
+  }
+
+  applyNotificationReadAll() {
+    const current = this.bootstrapPayload;
+    if (!current) return;
+    const readAt = new Date().toISOString();
+    this.bootstrapPayload = {
+      ...current,
+      activity: {
+        ...current.activity,
+        notifications: current.activity.notifications.map((item) => ({ ...item, readAt })),
+      },
+    };
+    this.bootstrapEpoch += 1;
+    this.publish();
+  }
+
+  applyGlobal(global: AppBootstrapPayload["global"]) {
+    const current = this.bootstrapPayload;
+    if (!current) return;
+    this.bootstrapPayload = { ...current, global };
+    this.bootstrapEpoch += 1;
+    this.publish();
   }
 
   applySnapshot(
@@ -144,9 +208,13 @@ export class AuthGateway {
 
     const generation = this.generation;
     this.restoreGeneration = generation;
-    const promise = requestSession(this.config)
-      .then((payload) => {
-        if (generation === this.generation) this.commit(payload);
+    const promise = requestBootstrap(this.config)
+      .then((bootstrapPayload) => {
+        if (generation === this.generation) {
+          this.bootstrapPayload = bootstrapPayload;
+          this.bootstrapEpoch += 1;
+          this.commit(bootstrapPayload.auth, true, true);
+        }
         return this.getSnapshot();
       })
       .catch((error) => {

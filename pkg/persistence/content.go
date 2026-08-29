@@ -25,7 +25,7 @@ func (s *DB) GetLobbyChangelog(defaultContent LobbyChangelogContent) (LobbyChang
 			UpdatedAt: post.UpdatedAt,
 		}, nil
 	}
-	var raw string
+	var raw []byte
 	raw, err = s.db.GetSetting(ctx, "lobby_changelog")
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -34,7 +34,7 @@ func (s *DB) GetLobbyChangelog(defaultContent LobbyChangelogContent) (LobbyChang
 		return LobbyChangelogContent{}, err
 	}
 	var content LobbyChangelogContent
-	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+	if err := json.Unmarshal(raw, &content); err != nil {
 		return defaultContent, nil
 	}
 	if strings.TrimSpace(content.Eyebrow) == "" {
@@ -106,7 +106,7 @@ func (s *DB) UpdateChangelogPost(id int64, input ChangelogPostInput) (ChangelogP
 func (s *DB) GetModerationSettings() (ModerationSettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var raw string
+	var raw []byte
 	raw, err := s.db.GetSetting(ctx, "moderation_settings")
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -115,7 +115,7 @@ func (s *DB) GetModerationSettings() (ModerationSettings, error) {
 		return ModerationSettings{}, err
 	}
 	var settings ModerationSettings
-	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+	if err := json.Unmarshal(raw, &settings); err != nil {
 		return ModerationSettings{}, nil
 	}
 	settings.DiscordWebhookURL = strings.TrimSpace(settings.DiscordWebhookURL)
@@ -136,7 +136,7 @@ func (s *DB) SetModerationSettings(settings ModerationSettings) error {
 func (s *DB) GetDiscordIntegrationSettings() (DiscordIntegrationSettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var raw string
+	var raw []byte
 	raw, err := s.db.GetSetting(ctx, "discord_integration")
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -145,7 +145,7 @@ func (s *DB) GetDiscordIntegrationSettings() (DiscordIntegrationSettings, error)
 		return DiscordIntegrationSettings{}, err
 	}
 	var settings DiscordIntegrationSettings
-	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+	if err := json.Unmarshal(raw, &settings); err != nil {
 		return normalizeDiscordIntegrationSettings(DiscordIntegrationSettings{}), nil
 	}
 	return normalizeDiscordIntegrationSettings(settings), nil

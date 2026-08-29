@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +23,8 @@ var (
 
 const friendCodeAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
+const PartyInviteResendAfter = 30 * time.Second
+
 type SocialRepository interface {
 	GetSocialAccount(userID string) (isGuest, requestsEnabled, invitesEnabled bool, err error)
 	GetSocialSettings(userID string) (SocialSettings, error)
@@ -40,11 +41,10 @@ type SocialRepository interface {
 	CreateFriendCode(userID string, ttl time.Duration) (FriendCode, error)
 	ResolveFriendCode(userID, code string) (CompactPlayer, error)
 	CreatePartyInvitation(partyID, inviterID, recipientID string, ttl time.Duration) (PartyInvitation, error)
+	ListPartyInviteStatus(inviterID, partyID string) (map[string]CompactPartyInvite, error)
 	RespondPartyInvitation(userID, invitationID, response string) (PartyInvitation, error)
 	ListPartyInvitations(userID string, limit int) ([]PartyInvitation, error)
 	TouchLastSeen(userID string, seenAt time.Time) error
-	AppendUserEvent(userID, eventType string, payload any) (int64, error)
-	ListUserEvents(userID string, after int64, limit int) ([]UserEvent, error)
 }
 
 func (s *DB) GetSocialSettings(userID string) (SocialSettings, error) {
@@ -101,11 +101,12 @@ func (s *DB) Relationship(userID, targetID string) (RelationshipState, string, e
 	if row.Friends {
 		return RelationshipFriends, "", nil
 	}
-	if row.RequestID != "" {
-		if row.SenderID == userID {
-			return RelationshipOutgoing, row.RequestID, nil
+	if row.RequestID.Valid {
+		requestID := uuidVal(row.RequestID)
+		if uuidVal(row.SenderID) == userID {
+			return RelationshipOutgoing, requestID, nil
 		}
-		return RelationshipIncoming, row.RequestID, nil
+		return RelationshipIncoming, requestID, nil
 	}
 	return RelationshipNone, "", nil
 }
@@ -122,7 +123,7 @@ func (s *DB) ListFriends(userID string, limit int) ([]CompactPlayer, error) {
 	}
 	out := make([]CompactPlayer, 0, len(rows))
 	for _, row := range rows {
-		p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+		p := CompactPlayer{UserID: uuidVal(row.UserID), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
 		if row.LastSeenAt.Valid {
 			value := row.LastSeenAt.Time
 			p.LastSeenAt = &value
@@ -147,8 +148,8 @@ func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRe
 			return nil, err
 		}
 		for _, row := range rows {
-			item := FriendRequest{ID: row.RequestID, Direction: direction, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
-			item.Player = CompactPlayer{UserID: row.UserID, DisplayName: fmt.Sprint(row.DisplayName), AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), RequestID: row.RequestID, Relationship: RelationshipOutgoing}
+			item := FriendRequest{ID: uuidVal(row.RequestID), Direction: direction, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+			item.Player = CompactPlayer{UserID: uuidVal(row.UserID), DisplayName: fmt.Sprint(row.DisplayName), AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), RequestID: uuidVal(row.RequestID), Relationship: RelationshipOutgoing}
 			if row.LastSeenAt.Valid {
 				value := row.LastSeenAt.Time
 				item.Player.LastSeenAt = &value
@@ -161,8 +162,8 @@ func (s *DB) ListFriendRequests(userID, direction string, limit int) ([]FriendRe
 			return nil, err
 		}
 		for _, row := range rows {
-			item := FriendRequest{ID: row.RequestID, Direction: direction, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
-			item.Player = CompactPlayer{UserID: row.UserID, DisplayName: fmt.Sprint(row.DisplayName), AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), RequestID: row.RequestID, Relationship: RelationshipIncoming}
+			item := FriendRequest{ID: uuidVal(row.RequestID), Direction: direction, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+			item.Player = CompactPlayer{UserID: uuidVal(row.UserID), DisplayName: fmt.Sprint(row.DisplayName), AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), RequestID: uuidVal(row.RequestID), Relationship: RelationshipIncoming}
 			if row.LastSeenAt.Valid {
 				value := row.LastSeenAt.Time
 				item.Player.LastSeenAt = &value
@@ -189,7 +190,7 @@ func (s *DB) SearchSocialPlayers(userID, query string, limit int) ([]CompactPlay
 	}
 	out := make([]CompactPlayer, 0, len(rows))
 	for _, row := range rows {
-		p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+		p := CompactPlayer{UserID: uuidVal(row.UserID), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
 		if row.LastSeenAt.Valid {
 			value := row.LastSeenAt.Time
 			p.LastSeenAt = &value
@@ -212,7 +213,7 @@ func (s *DB) ListRecentPlayers(userID string, limit int) ([]CompactPlayer, error
 	}
 	out := make([]CompactPlayer, 0, len(rows))
 	for _, row := range rows {
-		p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+		p := CompactPlayer{UserID: uuidVal(row.UserID), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
 		if row.LastSeenAt.Valid {
 			value := row.LastSeenAt.Time
 			p.LastSeenAt = &value
@@ -260,12 +261,11 @@ func (s *DB) SendFriendRequest(userID, targetID string) (FriendRequest, error) {
 	}
 	crossedID, err := q.FindCrossedFriendRequest(ctx, db.FindCrossedFriendRequestParams{RecipientUserID: userUUID, SenderUserID: targetUUID})
 	if err == nil {
-		if err := acceptFriendRequestTx(ctx, tx, crossedID, userID); err != nil {
+		crossedIDString := uuidVal(crossedID)
+		if err := acceptFriendRequestTx(ctx, tx, crossedIDString, userID); err != nil {
 			return FriendRequest{}, err
 		}
-		_ = appendUserEventTx(ctx, tx, targetID, "friendship.created", map[string]any{"userId": userID})
-		_ = appendUserEventTx(ctx, tx, userID, "friendship.created", map[string]any{"userId": targetID})
-		return FriendRequest{ID: crossedID, Direction: "incoming"}, tx.Commit(ctx)
+		return FriendRequest{ID: crossedIDString, Direction: "incoming"}, tx.Commit(ctx)
 	}
 	id := entityid.New()
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
@@ -278,11 +278,10 @@ func (s *DB) SendFriendRequest(userID, targetID string) (FriendRequest, error) {
 	if err != nil {
 		return FriendRequest{}, err
 	}
-	id, createdAt, expiresAt = row.ID, row.CreatedAt.Time, row.ExpiresAt.Time
+	id, createdAt, expiresAt = uuidVal(row.ID), row.CreatedAt.Time, row.ExpiresAt.Time
 	var notificationID int64
 	_ = upsertUserNotification(ctx, tx, targetID, "friend_request_received", "friend_request:"+id,
 		map[string]any{"requestId": id, "actorUserId": userID}, &notificationID)
-	_ = appendUserEventTx(ctx, tx, targetID, "friend_request.created", map[string]any{"requestId": id})
 	if err := tx.Commit(ctx); err != nil {
 		return FriendRequest{}, err
 	}
@@ -303,11 +302,7 @@ func acceptFriendRequestTx(ctx context.Context, tx pgx.Tx, requestID, recipientI
 	if err != nil {
 		return ErrSocialNotFound
 	}
-	senderUUID, err := profileUUID(senderID)
-	if err != nil {
-		return err
-	}
-	return q.InsertFriendship(ctx, db.InsertFriendshipParams{UserA: senderUUID, UserB: recipientUUID, CreatedFromRequestID: requestUUID})
+	return q.InsertFriendship(ctx, db.InsertFriendshipParams{UserA: senderID, UserB: recipientUUID, CreatedFromRequestID: requestUUID})
 }
 
 func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
@@ -329,18 +324,18 @@ func (s *DB) RespondFriendRequest(userID, requestID, response string) error {
 	q := db.New(tx)
 	var otherID string
 	if response == "accept" {
-		otherID, err = q.FriendRequestSender(ctx, db.FriendRequestSenderParams{ID: requestUUID, RecipientUserID: userUUID})
+		otherUUID, lookupErr := q.FriendRequestSender(ctx, db.FriendRequestSenderParams{ID: requestUUID, RecipientUserID: userUUID})
+		err = lookupErr
 		if err != nil {
 			return ErrSocialNotFound
 		}
+		otherID = uuidVal(otherUUID)
 		if err := acceptFriendRequestTx(ctx, tx, requestID, userID); err != nil {
 			return err
 		}
 		var notificationID int64
 		_ = upsertUserNotification(ctx, tx, otherID, "friendship_accepted", "friendship_accepted:"+requestID,
 			map[string]any{"actorUserId": userID}, &notificationID)
-		_ = appendUserEventTx(ctx, tx, otherID, "friendship.created", map[string]any{"userId": userID})
-		_ = appendUserEventTx(ctx, tx, userID, "friendship.created", map[string]any{"userId": otherID})
 	} else {
 		var affected int64
 		if response == "cancel" {
@@ -443,7 +438,7 @@ func (s *DB) ResolveFriendCode(userID, code string) (CompactPlayer, error) {
 	if err != nil {
 		return CompactPlayer{}, ErrSocialNotFound
 	}
-	p := CompactPlayer{UserID: row.UserID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
+	p := CompactPlayer{UserID: uuidVal(row.UserID), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr)}
 	if row.LastSeenAt.Valid {
 		value := row.LastSeenAt.Time
 		p.LastSeenAt = &value
@@ -491,25 +486,67 @@ func (s *DB) CreatePartyInvitation(partyID, inviterID, recipientID string, ttl t
 	if err != nil {
 		return PartyInvitation{}, ErrSocialBlocked
 	}
+	invitation := PartyInvitation{PartyID: partyID, InviteCode: eligibility.InviteCode, Mode: string(eligibility.Mode), MemberCount: int(eligibility.MemberCount)}
+	existing, err := q.GetPendingPartyInvitation(ctx, db.GetPendingPartyInvitationParams{PartyID: partyUUID, RecipientUserID: recipientUUID})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return PartyInvitation{}, err
+	}
+	if err == nil && time.Since(existing.CreatedAt.Time) < PartyInviteResendAfter {
+		invitation.ID = uuidVal(existing.ID)
+		invitation.CreatedAt = existing.CreatedAt.Time
+		invitation.ExpiresAt = existing.ExpiresAt.Time
+		if err := tx.Commit(ctx); err != nil {
+			return PartyInvitation{}, err
+		}
+		return invitation, nil
+	}
 	id := entityid.New()
-	expiresAt := time.Now().Add(ttl)
+	now := time.Now()
+	expiresAt := now.Add(ttl)
 	invitationUUID, err := profileUUID(id)
 	if err != nil {
 		return PartyInvitation{}, err
 	}
-	row, err := q.UpsertPartyInvitation(ctx, db.UpsertPartyInvitationParams{ID: invitationUUID, PartyID: partyUUID, InviterUserID: inviterUUID, RecipientUserID: recipientUUID, ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true}})
+	row, err := q.UpsertPartyInvitation(ctx, db.UpsertPartyInvitationParams{
+		ID: invitationUUID, PartyID: partyUUID, InviterUserID: inviterUUID, RecipientUserID: recipientUUID,
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true}, CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+	})
 	if err != nil {
 		return PartyInvitation{}, err
 	}
-	id, expiresAt = row.ID, row.ExpiresAt.Time
+	id, expiresAt = uuidVal(row.ID), row.ExpiresAt.Time
 	var notificationID int64
 	_ = upsertUserNotification(ctx, tx, recipientID, "party_invitation_received", "party_invitation:"+id,
 		map[string]any{"invitationId": id, "actorUserId": inviterID}, &notificationID)
-	_ = appendUserEventTx(ctx, tx, recipientID, "party_invitation.created", map[string]any{"invitationId": id})
 	if err := tx.Commit(ctx); err != nil {
 		return PartyInvitation{}, err
 	}
-	return PartyInvitation{ID: id, PartyID: partyID, InviteCode: eligibility.InviteCode, Mode: string(eligibility.Mode), MemberCount: int(eligibility.MemberCount), ExpiresAt: expiresAt}, nil
+	invitation.ID = id
+	invitation.CreatedAt = row.CreatedAt.Time
+	invitation.ExpiresAt = expiresAt
+	return invitation, nil
+}
+
+func (s *DB) ListPartyInviteStatus(inviterID, partyID string) (map[string]CompactPartyInvite, error) {
+	out := map[string]CompactPartyInvite{}
+	partyUUID, err := profileUUID(partyID)
+	if err != nil {
+		return out, nil
+	}
+	inviterUUID, err := profileUUID(inviterID)
+	if err != nil {
+		return out, nil
+	}
+	rows, err := db.New(s.pool).ListOutgoingPartyInvitations(context.Background(), db.ListOutgoingPartyInvitationsParams{
+		InviterUserID: inviterUUID, PartyID: partyUUID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[uuidVal(row.RecipientUserID)] = CompactPartyInvite{ID: uuidVal(row.ID), CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+	}
+	return out, nil
 }
 
 func (s *DB) ListPartyInvitations(userID string, limit int) ([]PartyInvitation, error) {
@@ -524,8 +561,8 @@ func (s *DB) ListPartyInvitations(userID string, limit int) ([]PartyInvitation, 
 	}
 	out := make([]PartyInvitation, 0, len(rows))
 	for _, row := range rows {
-		item := PartyInvitation{ID: row.InvitationID, PartyID: row.PartyID, InviteCode: row.InviteCode, Mode: string(row.Mode), MemberCount: int(row.MemberCount), CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
-		item.Inviter = CompactPlayer{UserID: row.InviterID, DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl}
+		item := PartyInvitation{ID: uuidVal(row.InvitationID), PartyID: uuidVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), MemberCount: int(row.MemberCount), CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}
+		item.Inviter = CompactPlayer{UserID: uuidVal(row.InviterID), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl}
 		out = append(out, item)
 	}
 	return out, nil
@@ -550,7 +587,7 @@ func (s *DB) RespondPartyInvitation(userID, invitationID, response string) (Part
 		return PartyInvitation{}, ErrSocialNotFound
 	}
 	_ = q.MarkPartyInvitationNotificationRead(context.Background(), db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, InvitationID: ingestText(invitationID)})
-	return PartyInvitation{ID: row.PiID, PartyID: row.PID, InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
+	return PartyInvitation{ID: uuidVal(row.InvitationID), PartyID: uuidVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
 }
 
 func (s *DB) TouchLastSeen(userID string, seenAt time.Time) error {
@@ -559,60 +596,6 @@ func (s *DB) TouchLastSeen(userID string, seenAt time.Time) error {
 		return err
 	}
 	return s.db.TouchLastSeen(context.Background(), db.TouchLastSeenParams{ID: id, LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: true}})
-}
-
-func (s *DB) AppendUserEvent(userID, eventType string, payload any) (int64, error) {
-	ctx := context.Background()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-	sequence := int64(0)
-	if err := appendUserEventTxScan(ctx, tx, userID, eventType, payload, &sequence); err != nil {
-		return 0, err
-	}
-	return sequence, tx.Commit(ctx)
-}
-
-func appendUserEventTx(ctx context.Context, tx pgx.Tx, userID, eventType string, payload any) error {
-	return appendUserEventTxScan(ctx, tx, userID, eventType, payload, new(int64))
-}
-
-func appendUserEventTxScan(ctx context.Context, tx pgx.Tx, userID, eventType string, payload any, sequence *int64) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	userUUID, err := profileUUID(userID)
-	if err != nil {
-		return err
-	}
-	q := db.New(tx)
-	value, err := q.NextUserEventSequence(ctx, userUUID)
-	if err != nil {
-		return err
-	}
-	*sequence = value
-	return q.InsertUserEvent(ctx, db.InsertUserEventParams{UserID: userUUID, EventSequence: value, EventType: db.GdUserEventType(eventType), PayloadJson: body})
-}
-
-func (s *DB) ListUserEvents(userID string, after int64, limit int) ([]UserEvent, error) {
-	limit = boundedSocialLimit(limit, 100, 500)
-	userUUID, err := profileUUID(userID)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := db.New(s.pool).ListUserEvents(context.Background(), db.ListUserEventsParams{UserID: userUUID, Sequence: after, Limit: int32(limit)})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]UserEvent, 0, len(rows))
-	for _, row := range rows {
-		event := UserEvent{Sequence: row.Sequence, Type: string(row.Type), Payload: []byte(row.Payload), OccurredAt: row.CreatedAt.Time}
-		out = append(out, event)
-	}
-	return out, nil
 }
 
 func boundedSocialLimit(limit, fallback, maximum int) int {

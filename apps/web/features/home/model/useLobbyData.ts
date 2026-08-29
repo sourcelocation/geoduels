@@ -8,9 +8,8 @@ import type {
 import {
   requestLeaderboard,
   requestLobbyChangelog,
-  requestMe,
 } from "../../auth/lib/auth-client";
-import { useGlobalRealtime } from "../../social/components/SocialRealtimeProvider";
+import { getAuthGateway } from "../../auth/auth-gateway";
 
 type Params = {
   config: RuntimeConfig;
@@ -26,44 +25,7 @@ export function useLobbyData({
   enabled,
 }: Params) {
   const [leaderboardEnabled, setLeaderboardEnabled] = useState(false);
-  const globalRealtime = useGlobalRealtime();
-
-  const profileQuery = useQuery({
-    queryKey: ["me", auth.userId, auth.accessToken],
-    enabled:
-      enabled &&
-      !!auth.userId &&
-      !!auth.accessToken &&
-      !auth.nicknameRequired,
-    queryFn: async () => {
-      const session = await sessionController.ensureFreshSession();
-      if (!session) {
-        sessionController.clearAuthSession(
-          "Session expired. Please sign in again.",
-        );
-        throw new Error("Session expired. Please sign in again.");
-      }
-      let resp = await requestMe(config, session.accessToken);
-      if (resp.status === 401 || resp.status === 403) {
-        const refreshed = await sessionController.ensureFreshSession(60_000, {
-          forceRefresh: true,
-        });
-        if (!refreshed) {
-          sessionController.clearAuthSession(
-            "Session expired. Please sign in again.",
-          );
-          throw new Error("Session expired. Please sign in again.");
-        }
-        resp = await requestMe(config, refreshed.accessToken);
-      }
-      if (!resp.ok) {
-        throw new Error("Failed to load profile");
-      }
-      return resp.json();
-    },
-    refetchOnMount: "always",
-    staleTime: 60_000,
-  });
+  const globalState = getAuthGateway(config).getBootstrapPayload()?.global;
 
   const leaderboardQuery = useQuery({
     queryKey: ["leaderboard", auth.userId, auth.accessToken],
@@ -91,21 +53,23 @@ export function useLobbyData({
   });
 
   useEffect(() => {
-    if (!profileQuery.data) return;
-    sessionController.applyProfileSnapshot(profileQuery.data);
-  }, [profileQuery.data, sessionController]);
-
-  useEffect(() => {
     if (!leaderboardQuery.data) return;
     sessionController.applyLeaderboardSummary(leaderboardQuery.data);
   }, [leaderboardQuery.data, sessionController]);
 
   return {
     onlinePlayers:
-      typeof globalRealtime.onlinePlayers === "number"
-        ? globalRealtime.onlinePlayers
+      typeof globalState?.onlinePlayers === "number"
+        ? globalState.onlinePlayers
         : null,
-    maintenance: globalRealtime.maintenance,
+    maintenance: globalState ? {
+      phase: globalState.maintenance.phase,
+      startsAt: globalState.maintenance.startsAt || "",
+      endsAt: globalState.maintenance.endsAt || "",
+      queuePaused: !!globalState.maintenance.queuePaused,
+      playPaused: !!globalState.maintenance.playPaused,
+      message: globalState.maintenance.message || "",
+    } : null,
     leaderboardLoading:
       leaderboardQuery.isLoading || leaderboardQuery.isFetching,
     changelogEyebrow:

@@ -88,6 +88,8 @@ type api struct {
 	adminBootstrapEmails    map[string]struct{}
 	metrics                 *observability.APIMetrics
 	globalStatus            *globalStatusHub
+	live                    *liveHub
+	lastSeen                lastSeenWriter
 	draining                atomic.Bool
 }
 
@@ -174,6 +176,7 @@ func newAPI() (*api, error) {
 		chatStore:               store,
 		parties:                 store,
 		social:                  store,
+		lastSeen:                store,
 		preferences:             newPreferencesService(store),
 		leaderboardService:      newLeaderboardService(store),
 		notificationService:     notifications.NewService(store),
@@ -221,6 +224,8 @@ func newAPI() (*api, error) {
 	}
 	instance.globalStatus = newGlobalStatusHub(instance)
 	instance.globalStatus.start()
+	instance.live = newLiveHub(instance)
+	instance.live.start()
 	return instance, nil
 }
 
@@ -234,31 +239,26 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/auth/google/callback", a.googleOAuthCallback).Methods(http.MethodGet)
 	r.HandleFunc("/v1/auth/discord/start", a.discordOAuthStart).Methods(http.MethodPost)
 	r.HandleFunc("/v1/auth/discord/callback", a.discordOAuthCallback).Methods(http.MethodGet)
-	r.HandleFunc("/v1/auth/session", a.session).Methods(http.MethodGet)
+	r.HandleFunc("/v1/bootstrap", a.bootstrap).Methods(http.MethodGet)
 	r.HandleFunc("/v1/auth/refresh", a.refresh).Methods(http.MethodPost)
 	r.HandleFunc("/v1/auth/logout", a.logout).Methods(http.MethodPost)
 	r.HandleFunc("/v1/auth/logout-all", a.logoutAll).Methods(http.MethodPost)
 	r.HandleFunc("/v1/status", a.publicGlobalStatus).Methods(http.MethodGet)
 	r.HandleFunc("/v1/admin/bootstrap", a.adminBootstrap).Methods(http.MethodPost)
-	r.HandleFunc("/v1/me", a.me).Methods(http.MethodGet)
 	r.Handle("/v1/me/badge", a.active(a.updateSelectedBadge)).Methods(http.MethodPatch)
 	r.Handle("/v1/me/nickname", a.active(a.updateNickname)).Methods(http.MethodPut, http.MethodPatch)
-	r.HandleFunc("/v1/me/preferences", a.userPreferences).Methods(http.MethodGet)
 	r.Handle("/v1/me/preferences", a.active(a.updateUserPreferences)).Methods(http.MethodPatch)
 	r.HandleFunc("/v1/me", a.deleteAccount).Methods(http.MethodDelete)
 	r.HandleFunc("/v1/me/auth-providers/{provider}", a.unlinkAuthProvider).Methods(http.MethodDelete)
+	r.HandleFunc("/v1/me/live", a.userLive).Methods(http.MethodGet)
 	r.HandleFunc("/v1/me/notifications", a.userNotifications).Methods(http.MethodGet)
 	r.HandleFunc("/v1/me/notifications/read-all", a.markAllUserNotificationsRead).Methods(http.MethodPost)
 	r.HandleFunc("/v1/me/notifications/{id}/read", a.markUserNotificationRead).Methods(http.MethodPost)
-	r.HandleFunc("/v1/me/social-summary", a.socialSummary).Methods(http.MethodGet)
 	r.HandleFunc("/v1/me/social-settings", a.socialSettings).Methods(http.MethodGet)
 	r.Handle("/v1/me/social-settings", a.active(a.socialSettings)).Methods(http.MethodPatch)
-	r.HandleFunc("/v1/me/friends", a.friends).Methods(http.MethodGet)
-	r.HandleFunc("/v1/me/friend-requests", a.friendRequests).Methods(http.MethodGet)
-	r.HandleFunc("/v1/me/recent-players", a.recentPlayers).Methods(http.MethodGet)
+	r.HandleFunc("/v1/me/friends-page", a.friendsPage).Methods(http.MethodGet)
 	r.Handle("/v1/me/friend-code", a.active(a.createFriendCode)).Methods(http.MethodPost)
 	r.HandleFunc("/v1/me/party-invitations", a.partyInvitations).Methods(http.MethodGet)
-	r.HandleFunc("/v1/me/events/ws", a.userEventsWS).Methods(http.MethodGet)
 	r.Handle("/v1/friend-requests", a.active(a.sendFriendRequest)).Methods(http.MethodPost)
 	r.Handle("/v1/friend-requests/{id}/{action}", a.active(a.respondFriendRequest)).Methods(http.MethodPost)
 	r.Handle("/v1/friends/{userId}", a.active(a.removeFriend)).Methods(http.MethodDelete)
@@ -284,7 +284,6 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/matches/{id}/route", a.matchRoute).Methods(http.MethodGet)
 	r.Handle("/v1/matches/{id}/session", a.active(a.matchSession)).Methods(http.MethodGet)
 	r.Handle("/v1/matches/{id}/reports", a.active(a.createMatchReport)).Methods(http.MethodPost)
-	r.HandleFunc("/v1/session/resumable", a.sessionResumable).Methods(http.MethodGet)
 	r.Handle("/v1/sessions", a.active(a.startSession)).Methods(http.MethodPost)
 	r.Handle("/v1/singleplayer/session", a.active(a.startSingleplayerSession)).Methods(http.MethodPost)
 	r.HandleFunc("/v1/maps", a.listMaps).Methods(http.MethodGet)

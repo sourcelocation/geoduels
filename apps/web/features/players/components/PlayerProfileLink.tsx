@@ -31,6 +31,7 @@ export default function PlayerProfileLink({
   return (
     <Link
       href={`/players/${encodeURIComponent(publicNickname)}`}
+      prefetch={false}
       className={className}
       onClick={handleClick}
       title={title || "View player profile"}

@@ -238,6 +238,8 @@ export default function LobbyScreen({
       switchPartyTeam={switchPartyTeam}
       transferPartyOwner={transferPartyOwner}
       userId={userId}
+      accessToken={accessToken}
+      isGuest={isGuest}
     />
   ) : null;
 
@@ -318,6 +320,7 @@ export default function LobbyScreen({
       accessToken={accessToken}
       isGuest={isGuest}
       partyId={party.snapshot?.id}
+      memberUserIds={party.snapshot?.members.map((member) => member.userId)}
       partyCard={invitePartyCard}
     />
   );

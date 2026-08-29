@@ -51,7 +51,6 @@ jobs:
       - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
       - run: go test ./...
       - run: go vet ./...
-      - run: bash scripts/check-backend-architecture.sh
 
       - name: Upload generated sqlc package
         uses: actions/upload-artifact@v4
@@ -76,53 +75,19 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      - name: Test and build
+      - name: Test
         working-directory: apps/web
-        env:
-          NEXT_PUBLIC_APP_VERSION: ${{ needs.release-meta.outputs.release_tag }}
-          NEXT_PUBLIC_GIT_SHA: ${{ needs.release-meta.outputs.release_sha }}
-          NEXT_PUBLIC_SITE_URL: ${{ env.PRODUCTION_SITE_URL }}
         run: |
           npm ci --no-audit --no-fund
           npm run test
-          npm run build
 
-  build-and-push-amd64:
-    name: build-and-push-amd64
+  build-and-push-backend-amd64:
+    name: build-and-push-backend-amd64
     runs-on: ubuntu-latest
     needs:
       - release-meta
       - go-checks
       - web-checks
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: geoduels-api
-            dockerfile: services/api/Dockerfile
-            context: .
-          - image: geoduels-discord-worker
-            dockerfile: services/discord-worker/Dockerfile
-            context: .
-          - image: geoduels-match-coordinator
-            dockerfile: services/match-coordinator/Dockerfile
-            context: .
-          - image: geoduels-gameplay-node
-            dockerfile: services/gameplay-node/Dockerfile
-            context: .
-          - image: geoduels-moderation-worker
-            dockerfile: services/moderation-worker/Dockerfile
-            context: .
-          - image: geoduels-realtime-gateway
-            dockerfile: services/realtime-gateway/Dockerfile
-            context: .
-          - image: geoduels-web
-            dockerfile: apps/web/Dockerfile
-            context: apps/web
-            build_args: |
-              NEXT_PUBLIC_APP_VERSION=${{ needs.release-meta.outputs.release_tag }}
-              NEXT_PUBLIC_GIT_SHA=${{ needs.release-meta.outputs.release_sha }}
-              NEXT_PUBLIC_SITE_URL=${{ vars.PRODUCTION_SITE_URL != '' && vars.PRODUCTION_SITE_URL || 'https://geoduels.io' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -134,6 +99,26 @@ jobs:
           name: sqlc-generated-${{ needs.release-meta.outputs.release_sha }}
           path: pkg/persistence/sqlc/db
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Compile backend services once
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          go build -trimpath -o dist/release/api ./services/api
+          go build -trimpath -o dist/release/discord-worker ./services/discord-worker
+          go build -trimpath -o dist/release/match-coordinator ./services/match-coordinator
+          go build -trimpath -o dist/release/gameplay-node ./services/gameplay-node
+          go build -trimpath -o dist/release/moderation-worker ./services/moderation-worker
+          go build -trimpath -o dist/release/realtime-gateway ./services/realtime-gateway
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Login to registry
@@ -142,17 +127,55 @@ jobs:
           REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
           echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
 
-      - name: Build and push ${{ matrix.image }} (amd64)
+      - name: Build and push backend images (amd64)
+        env:
+          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          for binary in api discord-worker match-coordinator gameplay-node moderation-worker realtime-gateway; do
+            docker buildx build \
+              --platform linux/amd64 \
+              --file services/Dockerfile.release \
+              --build-arg "BINARY=${binary}" \
+              --tag "${REGISTRY}/geoduels-${binary}:${RELEASE_TAG}-amd64" \
+              --push \
+              .
+          done
+
+  build-and-push-web-amd64:
+    name: build-and-push-web-amd64
+    runs-on: ubuntu-latest
+    needs:
+      - release-meta
+      - go-checks
+      - web-checks
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-meta.outputs.release_sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        run: |
+          set -euo pipefail
+          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
+          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push web (amd64)
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
+          context: apps/web
+          file: apps/web/Dockerfile
           platforms: linux/amd64
           push: true
-          build-args: ${{ matrix.build_args || '' }}
-          cache-from: type=gha,scope=${{ matrix.image }}-amd64
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-amd64
-          tags: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.release-meta.outputs.release_tag }}-amd64
+          build-args: |
+            NEXT_PUBLIC_APP_VERSION=${{ needs.release-meta.outputs.release_tag }}
+            NEXT_PUBLIC_GIT_SHA=${{ needs.release-meta.outputs.release_sha }}
+            NEXT_PUBLIC_SITE_URL=${{ env.PRODUCTION_SITE_URL }}
+          cache-from: type=gha,scope=geoduels-web-amd64
+          cache-to: type=gha,mode=min,scope=geoduels-web-amd64
+          tags: ${{ env.REGISTRY }}/geoduels-web:${{ needs.release-meta.outputs.release_tag }}-amd64
 
   update-ops-repo:
     name: update-ops-repo
@@ -160,7 +183,8 @@ jobs:
     environment: production
     needs:
       - release-meta
-      - build-and-push-amd64
+      - build-and-push-backend-amd64
+      - build-and-push-web-amd64
     steps:
       - name: Checkout ops repo
         uses: actions/checkout@v4

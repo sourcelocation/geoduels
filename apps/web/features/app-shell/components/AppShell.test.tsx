@@ -164,6 +164,7 @@ describe("AppShell", () => {
     canPlayRanked: false,
     canUseSocial: false,
     canManageMaps: false,
+    bootstrap: null,
     ...overrides,
   });
 

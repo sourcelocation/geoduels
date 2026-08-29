@@ -43,6 +43,7 @@ function renderLobbyScreen(
 ) {
   const props: React.ComponentProps<typeof LobbyScreen> = {
     userId: "self",
+    accessToken: "token",
     userEmail: "self@example.com",
     displayName: "Self",
     userAvatar: "",
@@ -457,10 +458,11 @@ describe("LobbyScreen", () => {
     });
 
     expect(screen.getByRole("heading", { level: 1, name: "Duel" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Invite ABCD12" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Invite friends" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy ABCD12" })).not.toBeInTheDocument();
   });
 
-  it("replaces the tabbed lobby content when an invite lobby is active", () => {
+  it("replaces the tabbed lobby content when an invite lobby is active", async () => {
     renderLobbyScreen({
       contentRoute: "party",
       party: {
@@ -488,7 +490,8 @@ describe("LobbyScreen", () => {
       },
     });
 
-    expect(screen.getByRole("button", { name: "Invite ABCD12" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Invite friends" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy ABCD12" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Leave" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Private Party" })).not.toBeInTheDocument();
     expect(
@@ -501,6 +504,29 @@ describe("LobbyScreen", () => {
       screen.queryByRole("button", { name: "TOP" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Tutorial")).not.toBeInTheDocument();
+
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          friends: [
+            {
+              userId: "friend-1",
+              displayName: "Ada",
+              relationship: "friends",
+              presenceStatus: "online",
+            },
+          ],
+          requests: { incoming: [], outgoing: [] },
+          recentPlayers: [],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    fireEvent.click(screen.getByRole("button", { name: "Invite friends" }));
+    expect(await screen.findByRole("heading", { name: "Invite friends" })).toBeInTheDocument();
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Invite Ada to party" })).toBeInTheDocument();
   });
 
   it("keeps mobile party teams and controls in one scrollable flow", () => {

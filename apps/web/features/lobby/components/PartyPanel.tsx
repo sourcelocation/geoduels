@@ -1,5 +1,5 @@
-import { forwardRef } from "react";
-import { ArrowLeftRight, Copy, Crown, LogOut, Map as MapIcon, Play, UserMinus } from "lucide-react";
+import { forwardRef, useState } from "react";
+import { ArrowLeftRight, Copy, Crown, LogOut, Map as MapIcon, Play, UserMinus, UserPlus } from "lucide-react";
 import { Spinner } from "../../../components/ui/Spinner";
 import { motion } from "framer-motion";
 import { toPublicEntityId } from "../../../lib/entity-id";
@@ -22,6 +22,7 @@ import {
   LobbySection,
   LobbySelect,
 } from "./lobby-primitives";
+import { InviteFriendsModal } from "../../social/components/InviteFriendsModal";
 
 type PartyView = {
   status: PartyRuntimeStatus;
@@ -43,6 +44,8 @@ type PartyPanelProps = {
   transferPartyOwner: (userId: string) => Promise<void>;
   startParty: () => Promise<void>;
   switchPartyTeam: (teamId: PartyTeamId) => Promise<void>;
+  accessToken?: string;
+  isGuest?: boolean;
 };
 
 const panelMotion = {
@@ -63,7 +66,11 @@ export const PartyPanel = forwardRef<HTMLDivElement, PartyPanelProps>(function P
   switchPartyTeam,
   transferPartyOwner,
   userId,
+  accessToken = "",
+  isGuest = false,
 }, ref) {
+  const [inviteFriendsOpen, setInviteFriendsOpen] = useState(false);
+  const canInviteFriends = !!accessToken && !isGuest && !!party.snapshot?.id;
   const {
     activeMatchId,
     canStart,
@@ -89,12 +96,22 @@ export const PartyPanel = forwardRef<HTMLDivElement, PartyPanelProps>(function P
       className="pointer-events-auto relative flex h-auto w-full max-w-[1180px] flex-col gap-4 md:h-full md:min-h-0"
     >
       <PartyActions
+        canInviteFriends={canInviteFriends}
         inviteCopied={inviteCopied}
         matchInProgress={matchInProgress}
         onCopyInvite={copyInvite}
+        onInviteFriends={() => setInviteFriendsOpen(true)}
         onLeave={() => void leaveParty()}
         party={party}
       />
+      {inviteFriendsOpen && party.snapshot && accessToken ? (
+        <InviteFriendsModal
+          accessToken={accessToken}
+          partyId={party.snapshot.id}
+          memberUserIds={members.map((member) => member.userId)}
+          onClose={() => setInviteFriendsOpen(false)}
+        />
+      ) : null}
 
       <div className="flex flex-none items-stretch justify-center pt-12 md:min-h-0 md:flex-1">
         <div className="flex w-full max-w-[900px] flex-col md:min-h-0">
@@ -181,15 +198,19 @@ export const PartyPanel = forwardRef<HTMLDivElement, PartyPanelProps>(function P
 });
 
 function PartyActions({
+  canInviteFriends,
   inviteCopied,
   matchInProgress,
   onCopyInvite,
+  onInviteFriends,
   onLeave,
   party,
 }: {
+  canInviteFriends: boolean;
   inviteCopied: boolean;
   matchInProgress: boolean;
   onCopyInvite: () => void;
+  onInviteFriends: () => void;
   onLeave: () => void;
   party: PartyView;
 }) {
@@ -206,10 +227,16 @@ function PartyActions({
             Leave
           </Button>
         ) : null}
+        {canInviteFriends ? (
+          <Button type="button" variant="secondary" onClick={onInviteFriends}>
+            <UserPlus size={16} />
+            Invite friends
+          </Button>
+        ) : null}
         {party.inviteCode ? (
           <Button type="button" variant="secondary" onClick={onCopyInvite}>
             <Copy className="text-status-success" size={16} />
-            {inviteCopied ? "Copied" : `Invite ${party.inviteCode}`}
+            {inviteCopied ? "Copied" : `Copy ${party.inviteCode}`}
           </Button>
         ) : null}
     </div>

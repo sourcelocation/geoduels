@@ -48,7 +48,15 @@ func (a notificationTxAdapter) reporters(ctx context.Context, subject string) ([
 	if err != nil {
 		return nil, err
 	}
-	return a.queries.ListReporters(ctx, u)
+	rows, err := a.queries.ListReporters(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, uuidVal(row))
+	}
+	return result, nil
 }
 func (a notificationTxAdapter) enqueue(ctx context.Context, typ, dedupe string, payload any) error {
 	body, err := json.Marshal(payload)

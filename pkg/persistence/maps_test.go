@@ -120,15 +120,29 @@ func TestMapSearchPatternCapsLongTermsByRune(t *testing.T) {
 	}
 }
 
-func TestMapCommentsQueryCastsUUIDsForStringScanning(t *testing.T) {
+func TestListMapsQueryUsesSingleCharacterSearchEscape(t *testing.T) {
+	body, err := os.ReadFile("../../db/queries/maps.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(body)
+	if strings.Contains(source, `escape '\\'`) {
+		t.Fatal("map search escape must be a single PostgreSQL character")
+	}
+	if count := strings.Count(source, `escape '\'`); count != 4 {
+		t.Fatalf("expected four map search escape clauses, got %d", count)
+	}
+}
+
+func TestMapCommentsQueryPreservesUUIDTypes(t *testing.T) {
 	body, err := os.ReadFile("../../db/queries/map_comments.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := string(body)
-	for _, expression := range []string{"c.id::text", "c.map_id::text", "c.user_id::text"} {
-		if !strings.Contains(source, expression) {
-			t.Fatalf("map comments query must cast %s before scanning into strings", expression)
+	for _, expression := range []string{"c.id::text AS id", "c.map_id::text AS map_id", "c.user_id::text AS user_id"} {
+		if strings.Contains(source, expression) {
+			t.Fatalf("map comments query must preserve UUID type instead of using %s", expression)
 		}
 	}
 	compact := strings.ReplaceAll(source, " ", "")

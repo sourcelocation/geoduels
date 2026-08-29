@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -76,7 +75,7 @@ func (s *DB) CreateMapComment(userID, mapID string, input contracts.MapCommentCr
 		if err != nil {
 			return contracts.MapComment{}, err
 		}
-		if strings.TrimSpace(parentParent) != "" {
+		if parentParent.Valid {
 			return contracts.MapComment{}, errors.New("only one reply level is supported")
 		}
 		var dup bool
@@ -227,8 +226,8 @@ func (s *DB) listMapComments(ctx context.Context, userID, mapID string) ([]contr
 	replies := map[string][]contracts.MapComment{}
 	for _, row := range rows {
 		var item contracts.MapComment
-		item.ID, item.MapID, item.UserID = row.ID, row.MapID, row.UserID
-		item.ParentID = fmt.Sprint(row.ParentID)
+		item.ID, item.MapID, item.UserID = uuidVal(row.ID), uuidVal(row.MapID), uuidVal(row.UserID)
+		item.ParentID = uuidVal(row.ParentID)
 		item.UserDisplayName = row.UserDisplayName
 		item.AvatarURL = row.AvatarUrl
 		item.Body = row.Body

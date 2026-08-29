@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 
 import { cn } from "../../../lib/cn";
 
-const backgroundImage = "/bg4.v4.webp";
-const backgroundPlaceholder = "/bg4.placeholder.v4.webp";
+const backgroundImage = "/bg5.v2.webp";
+const backgroundPlaceholder = "/bg5.placeholder.v2.webp";
 const backgroundOverlay = "var(--gd-background-overlay)";
 
 let backgroundLoaded = false;

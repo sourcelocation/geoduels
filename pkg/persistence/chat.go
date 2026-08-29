@@ -48,9 +48,15 @@ func (s *DB) RecordChatMessage(cid, scope, scopeID string, m ChatMessage) error 
 	if e := s.db.EnsureConversation(ctx, db.EnsureConversationParams{ConversationID: chatUUID(sid), ScopeKind: db.GdChatScope(scope), ScopeID: chatUUID(scopeID)}); e != nil {
 		return e
 	}
-	match, team := "", ""
+	match := pgtype.UUID{}
+	team := db.NullGdTeamID{}
 	if m.Audience == contracts.ChatAudienceTeam {
-		match, team = m.MatchID, m.TeamID
+		var err error
+		match, err = nullableSessionUUID(m.MatchID)
+		if err != nil {
+			return err
+		}
+		team = db.NullGdTeamID{GdTeamID: db.GdTeamID(m.TeamID), Valid: m.TeamID != ""}
 	}
 	return s.db.InsertMessage(ctx, db.InsertMessageParams{MessageID: chatUUID(m.ID), ConversationID: chatUUID(sid), TeamMatchID: match, SenderUserID: chatUUID(m.SenderUserID), SenderDisplayName: m.SenderDisplayName, Kind: db.GdChatKind(m.Kind), Body: chatText(m.Body), Emote: chatText(string(m.Emote)), Audience: db.GdChatAudience(m.Audience), TeamID: team, CreatedAt: pgtype.Timestamptz{Time: t, Valid: true}})
 }
@@ -76,7 +82,11 @@ func (s *DB) listChatMessages(id, u string, n int) ([]ChatMessage, error) {
 	}
 	out := make([]ChatMessage, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, ChatMessage{ID: r.ID.String(), ConversationID: chatStr(r.ConversationID), MatchID: chatStr(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: contracts.ChatMessageKind(r.Kind), Body: r.Body, Emote: contracts.ChatEmote(r.Emote), Audience: contracts.ChatAudience(r.Audience), TeamID: chatStr(r.TeamID), CreatedAt: r.CreatedAt.Time})
+		teamID := ""
+		if r.TeamID.Valid {
+			teamID = string(r.TeamID.GdTeamID)
+		}
+		out = append(out, ChatMessage{ID: r.ID.String(), ConversationID: chatStr(r.ConversationID), MatchID: uuidVal(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: contracts.ChatMessageKind(r.Kind), Body: r.Body, Emote: contracts.ChatEmote(r.Emote), Audience: contracts.ChatAudience(r.Audience), TeamID: teamID, CreatedAt: r.CreatedAt.Time})
 	}
 	return out, nil
 }
@@ -91,7 +101,7 @@ func (s *DB) ActivePartyChatTeam(p, u string) (string, string, bool, error) {
 		return "", "", false, e
 	}
 	t := chatStr(r.TeamID)
-	return r.MatchID, t, t != "", nil
+	return uuidVal(r.MatchID), t, t != "", nil
 }
 func (s *DB) ChatTeamForMatch(m, u string) (string, bool, error) {
 	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)

@@ -58,20 +58,20 @@ FROM jsonb_to_recordset(convert_from(sqlc.arg(players_json), 'UTF8')::jsonb) AS 
 ON CONFLICT (id) DO NOTHING;
 
 -- name: FindPartyIDByMatchID :one
-SELECT id::text AS party_id
+SELECT id AS party_id
 FROM parties
 WHERE active_match_id = $1 OR started_match_id = $1 OR last_match_id = $1
 LIMIT 1;
 
 -- name: GetMatchRoundPlanMapID :one
-SELECT map_id::text AS map_id
+SELECT map_id AS map_id
 FROM match_round_plans
 WHERE match_id = $1
 ORDER BY round_index
 LIMIT 1;
 
 -- name: GetMatchSourcePartyID :one
-SELECT COALESCE(source_party_id::text, '')::text AS source_party_id
+SELECT source_party_id AS source_party_id
 FROM match_sessions WHERE match_id = $1;
 
 -- name: LockDuelRatings :many
@@ -99,7 +99,7 @@ SELECT exists(
 
 -- name: MatchPlayerPersistedRatings :many
 SELECT
-    mp.user_id::text AS user_id,
+    mp.user_id AS user_id,
     COALESCE(mp.rating_after, mp.mmr) AS mmr,
     COALESCE(r.rd, mp.rating_rd, sqlc.arg(default_rd)::double precision) AS rd
 FROM match_players mp

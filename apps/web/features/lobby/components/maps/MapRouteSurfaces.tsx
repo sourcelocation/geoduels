@@ -378,7 +378,7 @@ export const MapRouteSurface = forwardRef<HTMLDivElement, MapRouteSurfaceProps>(
   }
 
   return (
-    <motion.div ref={ref} key="maps" {...tabPanelMotion} className="w-full max-w-[1120px] pointer-events-auto">
+    <motion.div ref={ref} key="maps" {...tabPanelMotion} className="w-full max-w-6xl pointer-events-auto">
       <MapsPanel
         canUploadCustomMaps={canUploadCustomMaps}
         hasMapSearch={hasMapSearch}

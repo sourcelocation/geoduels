@@ -10,8 +10,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountSettingsModal } from "./AccountSettingsModal";
 
 const mocks = vi.hoisted(() => ({
-  requestSession: vi.fn(),
-  requestMe: vi.fn(),
   requestUnlinkAuthProvider: vi.fn(),
   requestDeleteAccount: vi.fn(),
   requestLogout: vi.fn(),
@@ -34,6 +32,9 @@ const mocks = vi.hoisted(() => ({
     canPlayRanked: true,
     canUseSocial: true,
     canManageMaps: true,
+    bootstrap: {
+      viewer: { email: "atlas@example.com", accountType: "registered", linkedProviders: ["google", "discord"] },
+    },
   },
 }));
 
@@ -52,20 +53,6 @@ vi.mock("../../../lib/runtime-config", () => ({
 }));
 
 function renderModal() {
-  mocks.requestSession.mockResolvedValue({
-    accessToken: "access-token",
-    linkedProviders: ["google", "discord"],
-    user: { id: "player-1", email: "atlas@example.com" },
-  });
-  mocks.requestMe.mockResolvedValue(
-    new Response(
-      JSON.stringify({
-        email: "atlas@example.com",
-        isGuest: false,
-      }),
-      { status: 200 },
-    ),
-  );
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -95,11 +82,6 @@ describe("AccountSettingsModal", () => {
       screen.getByRole("dialog", { name: "Account settings" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("atlas@example.com")).toBeInTheDocument();
-    expect(mocks.requestSession).not.toHaveBeenCalled();
-    expect(mocks.requestMe).toHaveBeenCalledWith(
-      expect.any(Object),
-      "access-token",
-    );
   });
 
   it("supports provider unlinking", async () => {

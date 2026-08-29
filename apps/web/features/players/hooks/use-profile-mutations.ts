@@ -4,15 +4,15 @@ import {
   requestUpdateNickname,
   requestUpdateSelectedBadge,
 } from "../../auth/lib/auth-client";
+import { getAuthGateway } from "../../auth/auth-gateway";
 
 export function useProfileOwnerActions(accessToken: string) {
   const config = getRuntimeConfig();
   const queryClient = useQueryClient();
-  const refresh = () =>
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["player-profile"] }),
-      queryClient.invalidateQueries({ queryKey: ["auth", "profile"] }),
-    ]);
+  const refresh = () => Promise.all([
+    getAuthGateway(config).bootstrap({ force: true }),
+    queryClient.invalidateQueries({ queryKey: ["player-profile"] }),
+  ]);
 
   return {
     nicknameMutation: useMutation({

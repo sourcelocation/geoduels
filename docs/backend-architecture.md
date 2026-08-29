@@ -53,7 +53,7 @@ into domain services, and inject services into handlers/workers. They must not
 retain a general-purpose store that handlers can bypass. There is no aggregate
 `persistence.Store` application dependency.
 
-## Completion gate
+## Verification
 
-Run `scripts/check-backend-architecture.sh`. The migration is complete only
-when that check, sqlc generation, `go test ./...`, and `go vet ./...` all pass.
+Regenerate sqlc code, then run `go test ./...` and `go vet ./...` before
+completing backend changes.

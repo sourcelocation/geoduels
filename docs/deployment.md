@@ -21,7 +21,8 @@ The private ops repository owns:
 
 1. Merge application changes to `main`.
 2. Push a version tag such as `v1.2.3`.
-3. GitHub Actions builds and pushes versioned images.
+3. GitHub Actions compiles the backend services with one shared Go cache while
+   a dedicated runner builds the web image, then pushes the versioned images.
 4. The release workflow opens a PR in the private ops repository.
 5. Merge the ops PR.
 6. Flux reconciles production from the private ops repository.

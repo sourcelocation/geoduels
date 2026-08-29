@@ -114,7 +114,7 @@ func (s *DB) GetPublicPlayerProfileByNickname(nickname string) (PublicPlayerProf
 		if e != nil {
 			return e
 		}
-		p.UserID, p.DisplayName, p.AvatarURL, p.MMR, p.RatingRD, p.GamesPlayed, p.Wins, p.RankedGamesPlayed, p.RankedWins, selectedBadgeCode = row.UserID, row.DisplayName.String, row.AvatarUrl, int(row.Mmr), row.RatingRd, int(row.GamesPlayed), int(row.Wins), int(row.RankedGamesPlayed), int(row.RankedWins), row.SelectedBadgeCode
+		p.UserID, p.DisplayName, p.AvatarURL, p.MMR, p.RatingRD, p.GamesPlayed, p.Wins, p.RankedGamesPlayed, p.RankedWins, selectedBadgeCode = uuidVal(row.UserID), row.DisplayName.String, row.AvatarUrl, int(row.Mmr), row.RatingRd, int(row.GamesPlayed), int(row.Wins), int(row.RankedGamesPlayed), int(row.RankedWins), row.SelectedBadgeCode
 		return nil
 	}()
 	if err != nil {

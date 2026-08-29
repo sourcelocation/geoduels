@@ -27,9 +27,7 @@ func (s *DB) ListUserRoles() ([]UserRoleGrant, error) {
 		item.UserID = row.ID.String()
 		item.DisplayName, _ = row.DisplayName.(string)
 		item.Email, item.Role, item.GrantedBy, item.Reason = row.Email, row.Role, "", row.LastReason
-		if v, ok := row.ActorUserID.(string); ok {
-			item.GrantedBy = v
-		}
+		item.GrantedBy = uuidVal(row.ActorUserID)
 		if row.GrantedAt.Valid {
 			item.GrantedAt = row.GrantedAt.Time
 		}
@@ -145,12 +143,12 @@ func (s *DB) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, error
 		return nil, err
 	}
 	rows, err := s.db.SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
-		Mode:        db.GdMatchMode(modeDuel),
-		SeasonID:    seasonID,
-		DefaultMmr:  int32(initialMMR),
-		Search:      pattern,
-		RowLimit:    int32(limit),
-		CreatorID:   pgtype.UUID{},
+		Mode:       db.GdMatchMode(modeDuel),
+		SeasonID:   seasonID,
+		DefaultMmr: int32(initialMMR),
+		Search:     pattern,
+		RowLimit:   int32(limit),
+		CreatorID:  pgtype.UUID{},
 	})
 	if err != nil {
 		return nil, err
@@ -167,7 +165,7 @@ func (s *DB) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, error
 
 func adminPlayerSummaryFromRow(row db.SearchAdminPlayersRow) AdminPlayerSummary {
 	var item AdminPlayerSummary
-	item.UserID = row.UserID
+	item.UserID = uuidVal(row.UserID)
 	item.Email = row.Email
 	if row.DisplayName.Valid {
 		item.DisplayName = row.DisplayName.String
@@ -394,11 +392,8 @@ func (s *DB) PardonBannedPlayers(olderThan time.Duration, actorUserID string) (C
 		return CommunityPardonSummary{}, err
 	}
 	metadata, _ := json.Marshal(map[string]any{"release": "v2", "policy": "active ban older than 7 days"})
-	for _, userID := range userIDs {
-		uid, err := profileUUID(userID)
-		if err != nil {
-			return CommunityPardonSummary{}, err
-		}
+	for _, uid := range userIDs {
+		userID := uuidVal(uid)
 		if _, err := q.RevokeOAuthIdentityBans(ctx, uid); err != nil {
 			return CommunityPardonSummary{}, err
 		}

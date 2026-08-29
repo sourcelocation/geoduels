@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -69,17 +68,6 @@ func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.writeSessionResponse(w, r, identity); err != nil {
 		http.Error(w, "issue session failed", http.StatusInternalServerError)
-	}
-}
-
-func (a *api) session(w http.ResponseWriter, r *http.Request) {
-	if err := a.writeSessionFromCookie(w, r); err != nil {
-		if errors.Is(err, errMissingRefreshToken) || errors.Is(err, errUnavailableRefreshSession) {
-			http.Error(w, "missing session", http.StatusUnauthorized)
-			return
-		}
-		log.Printf("auth session bootstrap failed: %v", err)
-		http.Error(w, "session restoration failed", http.StatusInternalServerError)
 	}
 }
 
@@ -267,22 +255,6 @@ func (a *api) writeRotatedSessionResponse(w http.ResponseWriter, r *http.Request
 		return err
 	}
 	a.setRefreshCookie(w, r, nextRefreshToken)
-	return json.NewEncoder(w).Encode(payload)
-}
-
-func (a *api) writeSessionFromCookie(w http.ResponseWriter, r *http.Request) error {
-	rec, err := a.authSessionFromCookies(r)
-	if err != nil {
-		return fmt.Errorf("read refresh session: %w", err)
-	}
-	identity, err := a.accounts.GetIdentity(rec.UserID)
-	if err != nil {
-		return fmt.Errorf("load identity for user %s: %w", rec.UserID, err)
-	}
-	payload, err := a.issueAuthSessionPayload(identity, rec.ID)
-	if err != nil {
-		return fmt.Errorf("issue payload for user %s session %s: %w", rec.UserID, rec.ID, err)
-	}
 	return json.NewEncoder(w).Encode(payload)
 }
 

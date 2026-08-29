@@ -5,7 +5,6 @@ import { decodeAccessTokenExpiry } from "../lib/token-expiry";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 import {
   emptyAuthSession,
-  hasPlayableSession,
   type AuthSessionSnapshot,
 } from "../session";
 import type { AuthGateway } from "../auth-gateway";
@@ -31,12 +30,6 @@ type AuthPopupPayload = {
   canPlay?: boolean;
   suggestedNickname?: string;
   user?: SessionUser;
-};
-
-type SessionNetworkHandlers = {
-  bootstrapSession: (options?: { force?: boolean }) => Promise<AuthSessionSnapshot | null>;
-  refreshSession: () => Promise<AuthSessionSnapshot | null>;
-  getPlayableSession: () => Promise<AuthSessionSnapshot | null>;
 };
 
 type SessionPatch = Partial<
@@ -182,23 +175,14 @@ export class SessionController extends ObservableStore<SessionState> {
   private readonly config: RuntimeConfig;
   private state: SessionState = initialState;
   private session: AuthSessionSnapshot = emptyAuthSession();
-  private refreshPromise: Promise<AuthSessionSnapshot | null> | null = null;
-  private bootstrapPromise: Promise<AuthSessionSnapshot | null> | null = null;
-  private bootstrapCompleted = false;
-  private bootstrapResult: AuthSessionSnapshot | null = null;
   private mounted = true;
   private started = false;
-  private networkHandlers: SessionNetworkHandlers = {
-    bootstrapSession: async () => null,
-    refreshSession: async () => null,
-    getPlayableSession: async () => null,
-  };
   private readonly onResetSession: () => void;
-  private readonly authGateway?: AuthGateway;
+  private readonly authGateway: AuthGateway;
   private readonly unsubscribeGateway?: () => void;
   private readonly messageHandler: (event: MessageEvent) => void;
 
-  constructor(params: { config: RuntimeConfig; onResetSession: () => void; authGateway?: AuthGateway }) {
+  constructor(params: { config: RuntimeConfig; onResetSession: () => void; authGateway: AuthGateway }) {
     super();
     this.config = params.config;
     this.state = {
@@ -210,8 +194,7 @@ export class SessionController extends ObservableStore<SessionState> {
     };
     this.onResetSession = params.onResetSession;
     this.authGateway = params.authGateway;
-    if (this.authGateway) {
-      this.unsubscribeGateway = this.authGateway.subscribe((session) => {
+    this.unsubscribeGateway = this.authGateway.subscribe((session) => {
         if (!session) {
           if (this.state.userId) {
             this.clearAuthSession(
@@ -222,9 +205,8 @@ export class SessionController extends ObservableStore<SessionState> {
           return;
         }
         this.syncGatewaySession(session);
-      });
-      this.syncGatewaySession(this.authGateway.getSnapshot());
-    }
+    });
+    this.syncGatewaySession(this.authGateway.getSnapshot());
     this.messageHandler = (event: MessageEvent) => {
       const expectedOrigin = (() => {
         if (!this.config.apiURL.trim()) {
@@ -276,13 +258,6 @@ export class SessionController extends ObservableStore<SessionState> {
 
   getState() {
     return this.state;
-  }
-
-  setNetworkHandlers(handlers: Partial<SessionNetworkHandlers>) {
-    this.networkHandlers = {
-      ...this.networkHandlers,
-      ...handlers,
-    };
   }
 
   private patchState(patch: Partial<SessionState>) {
@@ -363,75 +338,25 @@ export class SessionController extends ObservableStore<SessionState> {
     // Clear the canonical source only after the local projection is empty. The
     // gateway listener then observes an already-cleared projection and cannot
     // recursively reset the gameplay runtime a second time.
-    if (!options?.skipGateway) this.authGateway?.clear();
+    if (!options?.skipGateway) this.authGateway.clear();
   };
 
   bootstrapSession = async (options?: { force?: boolean }): Promise<AuthSessionSnapshot | null> => {
-    if (this.authGateway) {
-      const session = await this.authGateway.bootstrap(options);
-      if (!session && this.state.userId) {
-        this.clearAuthSession(this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.");
-      }
-      this.syncGatewaySession(session);
-      return session;
+    const session = await this.authGateway.bootstrap(options);
+    if (!session && this.state.userId) {
+      this.clearAuthSession(this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.");
     }
-    if (this.bootstrapPromise) {
-      return this.bootstrapPromise;
-    }
-    if (this.bootstrapCompleted && !options?.force) {
-      return this.bootstrapResult;
-    }
-    this.bootstrapPromise = (async () => {
-      try {
-        const session = await this.networkHandlers.bootstrapSession(options);
-        this.bootstrapResult = session;
-        if (!session && this.state.isGuest) {
-          this.clearAuthSession(guestSessionExpiredMessage);
-        }
-        return session;
-      } catch {
-        this.bootstrapResult = null;
-        if (this.state.isGuest) {
-          this.clearAuthSession(guestSessionExpiredMessage);
-        }
-        return null;
-      } finally {
-        this.bootstrapCompleted = true;
-        this.bootstrapPromise = null;
-      }
-    })();
-    return this.bootstrapPromise;
+    this.syncGatewaySession(session);
+    return session;
   };
 
   refreshSession = async (): Promise<AuthSessionSnapshot | null> => {
-    if (this.authGateway) {
-      const session = await this.authGateway.refresh();
-      if (!session && this.state.userId) {
-        this.clearAuthSession(this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.");
-      }
-      this.syncGatewaySession(session);
-      return session;
+    const session = await this.authGateway.refresh();
+    if (!session && this.state.userId) {
+      this.clearAuthSession(this.state.isGuest ? guestSessionExpiredMessage : "Session expired. Please sign in again.");
     }
-    if (this.refreshPromise) {
-      return this.refreshPromise;
-    }
-    this.refreshPromise = (async () => {
-      try {
-        const session = await this.networkHandlers.refreshSession();
-        if (!session && this.state.isGuest) {
-          this.clearAuthSession(guestSessionExpiredMessage);
-        }
-        return session;
-      } catch {
-        if (this.state.isGuest) {
-          this.clearAuthSession(guestSessionExpiredMessage);
-        }
-        return null;
-      } finally {
-        this.refreshPromise = null;
-      }
-    })();
-    return this.refreshPromise;
+    this.syncGatewaySession(session);
+    return session;
   };
 
   private async applyLoginPayload(data: AuthPopupPayload) {
@@ -486,8 +411,7 @@ export class SessionController extends ObservableStore<SessionState> {
   };
 
   getSessionSnapshot = (): AuthSessionSnapshot | null => {
-    if (this.authGateway) return this.authGateway.getSnapshot();
-    return hasPlayableSession(this.session) ? this.session : null;
+    return this.authGateway.getSnapshot();
   };
 
   async ensureFreshSession(
@@ -496,60 +420,18 @@ export class SessionController extends ObservableStore<SessionState> {
   ): Promise<AuthSessionSnapshot | null> {
     const allowNicknameRequired = !!options?.allowNicknameRequired;
     const forceRefresh = !!options?.forceRefresh;
-    if (this.authGateway) {
-      const session = await this.authGateway.ensureFreshSession(minValidityMs, {
-        forceRefresh,
-        allowNicknameRequired,
-      });
-      this.syncGatewaySession(session);
-      return session;
-    }
-    if (!this.session.userId || !this.session.accessToken) {
-      return null;
-    }
-    if (!allowNicknameRequired && this.session.nicknameRequired) {
-      return null;
-    }
-
-    const expiresAt =
-      typeof this.session.expiresAt === "number" ? this.session.expiresAt : 0;
-    if (
-      !forceRefresh &&
-      expiresAt > 0 &&
-      Date.now() + minValidityMs < expiresAt
-    ) {
-      return this.session;
-    }
-
-    const refreshed = await this.refreshSession();
-    if (refreshed) {
-      return this.normalizeSessionSnapshot(refreshed);
-    }
-
-    if (!forceRefresh && expiresAt > 0 && Date.now() < expiresAt) {
-      return this.session;
-    }
-    return null;
+    const session = await this.authGateway.ensureFreshSession(minValidityMs, {
+      forceRefresh,
+      allowNicknameRequired,
+    });
+    this.syncGatewaySession(session);
+    return session;
   }
 
   getPlayableSession = async (): Promise<AuthSessionSnapshot | null> => {
-    if (this.authGateway) {
-      const session = await this.authGateway.ensurePlayableSession();
-      this.syncGatewaySession(session);
-      return session;
-    }
-    if (hasPlayableSession(this.session)) {
-      const fresh = await this.ensureFreshSession(60_000, {
-        forceRefresh: this.state.isGuest,
-      });
-      if (fresh && hasPlayableSession(fresh)) {
-        return fresh;
-      }
-    }
-    if (this.session.nicknameRequired) {
-      return null;
-    }
-    return this.networkHandlers.getPlayableSession();
+    const session = await this.authGateway.ensurePlayableSession();
+    this.syncGatewaySession(session);
+    return session;
   };
 
   setAuthPending(
@@ -562,7 +444,7 @@ export class SessionController extends ObservableStore<SessionState> {
   }
 
   applySessionSnapshot(session: AuthSessionSnapshot, patch: SessionPatch) {
-    this.authGateway?.applySnapshot(session, {
+    this.authGateway.applySnapshot(session, {
       isGuest: patch.isGuest,
       isAdmin: patch.isAdmin,
       isModerator: patch.isModerator,
@@ -586,7 +468,8 @@ export class SessionController extends ObservableStore<SessionState> {
 
   private syncGatewaySession(session: AuthSessionSnapshot | null) {
     if (!session) return;
-    const user = this.authGateway?.getPayload()?.user;
+    const user = this.authGateway.getPayload()?.user;
+    const viewer = this.authGateway.getBootstrapPayload()?.viewer;
     this.session = this.normalizeSessionSnapshot(session);
     this.patchState({
       userId: session.userId,
@@ -597,18 +480,25 @@ export class SessionController extends ObservableStore<SessionState> {
       linkedProviders: session.linkedProviders,
       canPlay: session.canPlay,
       nicknameInput: session.nicknameInput,
-      userEmail: user?.email || this.state.userEmail,
+      userEmail: viewer?.email || user?.email || this.state.userEmail,
       displayName:
-        user?.display_name || user?.email || this.state.displayName,
-      userAvatar: user?.avatar_url || this.state.userAvatar,
+        viewer?.displayName || user?.display_name || user?.email || this.state.displayName,
+      userAvatar: viewer?.avatarUrl || user?.avatar_url || this.state.userAvatar,
       isGuest:
-        typeof user?.isGuest === "boolean" ? user.isGuest : this.state.isGuest,
+        viewer?.accountType ? viewer.accountType === "guest" : typeof user?.isGuest === "boolean" ? user.isGuest : this.state.isGuest,
       isAdmin:
-        typeof user?.isAdmin === "boolean" ? user.isAdmin : this.state.isAdmin,
+        typeof viewer?.isAdmin === "boolean" ? viewer.isAdmin : typeof user?.isAdmin === "boolean" ? user.isAdmin : this.state.isAdmin,
       isModerator:
         typeof user?.isModerator === "boolean"
           ? user.isModerator
-          : this.state.isModerator,
+          : viewer?.isModerator ?? this.state.isModerator,
+      mmr: viewer?.mmr ?? this.state.mmr,
+      ratingRd: viewer?.ratingRd ?? this.state.ratingRd,
+      gamesPlayed: viewer?.gamesPlayed ?? this.state.gamesPlayed,
+      wins: viewer?.wins ?? this.state.wins,
+      rankedGamesPlayed: viewer?.rankedGamesPlayed ?? this.state.rankedGamesPlayed,
+      rankedWins: viewer?.rankedWins ?? this.state.rankedWins,
+      selectedBadge: viewer?.selectedBadge as PlayerBadgeInfo | null | undefined,
     });
   }
 

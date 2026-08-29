@@ -71,3 +71,24 @@ func TestGetNodeByRouteUsesDirectRouteRecord(t *testing.T) {
 		t.Fatalf("unexpected node record: %+v", rec)
 	}
 }
+
+func TestPresentUsersUsesCoordinatorPresenceSet(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewStore(rdb, 10*time.Second, 2*time.Hour, 24*time.Hour, 5*time.Second)
+	ctx := context.Background()
+	if err := store.TouchPresence(ctx, "online-user"); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	present, err := store.PresentUsers(ctx, []string{"online-user", "offline-user"})
+	if err != nil {
+		t.Fatalf("present users: %v", err)
+	}
+	if !present["online-user"] {
+		t.Fatal("expected online-user to be present")
+	}
+	if present["offline-user"] {
+		t.Fatal("did not expect offline-user to be present")
+	}
+}

@@ -1,10 +1,12 @@
 (() => {
   "use strict";
   if (window.top === window) return;
-  const VERSION = 1, EXTENSION_VERSION = "0.1.3", EXTENSION = "geoduels-extension", APP = "geoduels-app";
+  const VERSION = 1, EXTENSION_VERSION = "0.1.4", EXTENSION = "geoduels-extension", APP = "geoduels-app";
   const STYLE_ID = "geoduels-hidden-streetnames";
+  const CHROME_STYLE_ID = "geoduels-hidden-native-chrome";
   const instances = new Set();
   const initialPano = new URLSearchParams(location.search).get("pano");
+  let parentTrusted = false;
   let readySent = false;
   let config = readConfig() || { ruleset: "moving", streetNames: "shown" };
   function allowed(origin) {
@@ -15,7 +17,6 @@
       return false;
     }
   }
-  if (!allowed(document.referrer)) return;
   function normalizeRuleset(value) {
     return value === "no_move" || value === "nmpz" ? value : "moving";
   }
@@ -34,7 +35,23 @@
     }
   }
   function post(message) {
+    if (!parentTrusted) return;
     window.top.postMessage({ source: EXTENSION, version: VERSION, extensionVersion: EXTENSION_VERSION, ...message }, "*");
+  }
+  function ensureStyle(id, css) {
+    let style = document.getElementById(id);
+    if (!style) {
+      style = document.createElement("style");
+      style.id = id;
+      (document.head || document.documentElement).appendChild(style);
+    }
+    style.textContent = css;
+  }
+  function syncChromeStyle() {
+    ensureStyle(
+      CHROME_STYLE_ID,
+      ".gm-compass,.gm-bundled-control,button[aria-label='Zoom in'],button[aria-label='Zoom out'],button[title='Zoom in'],button[title='Zoom out']{display:none!important}",
+    );
   }
   function syncAddressStyle() {
     let style = document.getElementById(STYLE_ID);
@@ -42,17 +59,20 @@
       style?.remove();
       return;
     }
-    if (!style) {
-      style = document.createElement("style");
-      style.id = STYLE_ID;
-      (document.head || document.documentElement).appendChild(style);
-    }
-    style.textContent = ".gm-iv-address,.gm-iv-address-description,.gm-iv-address-link,.gm-iv-profile-url{display:none!important}";
+    ensureStyle(STYLE_ID, ".gm-iv-address,.gm-iv-address-description,.gm-iv-address-link,.gm-iv-profile-url{display:none!important}");
   }
   function options(extra) {
     const hidden = config.streetNames === "hidden";
     const noMove = config.ruleset === "no_move" || config.ruleset === "nmpz";
-    return { ...(extra || {}), addressControl: !hidden, showRoadLabels: !hidden, clickToGo: !noMove, linksControl: !noMove };
+    return {
+      ...(extra || {}),
+      addressControl: !hidden,
+      showRoadLabels: !hidden,
+      clickToGo: !noMove,
+      linksControl: !noMove,
+      panControl: false,
+      zoomControl: false,
+    };
   }
   function latLng(value) {
     if (!value) return null;
@@ -86,6 +106,7 @@
   function apply(panorama) {
     const state = panorama.__geoduels;
     state.original.setOptions?.call(panorama, options());
+    syncChromeStyle();
     syncAddressStyle();
     if (config.ruleset !== "no_move") return;
     rememberSpawn(panorama);
@@ -94,6 +115,7 @@
     if (state.spawnPosition && current && !samePosition(current, state.spawnPosition)) state.original.setPosition?.call(panorama, state.spawnPosition);
   }
   function protectedValue(key, value) {
+    if (key === "panControl" || key === "zoomControl") return false;
     if (config.streetNames === "hidden" && (key === "showRoadLabels" || key === "addressControl")) return false;
     if ((config.ruleset === "no_move" || config.ruleset === "nmpz") && (key === "clickToGo" || key === "linksControl")) return false;
     return value;
@@ -146,10 +168,6 @@
       },
     });
     wrapped.__geoduelsWrapped = true;
-    if (!readySent) {
-      readySent = true;
-      [0, 250, 1000].forEach((delay) => setTimeout(() => post({ type: "ready", capabilities: { heading: true, roadLabels: true } }), delay));
-    }
     return wrapped;
   }
   function hook(object, key, callback) {
@@ -178,16 +196,22 @@
       event.data?.version !== VERSION ||
       event.data?.type !== "configure"
     ) return;
+    parentTrusted = true;
     config = { ruleset: normalizeRuleset(event.data.ruleset), streetNames: normalizeStreetNames(event.data.streetNames) };
     syncAddressStyle();
     instances.forEach(apply);
     instances.forEach(reportHeading);
+    if (!readySent) {
+      readySent = true;
+      post({ type: "ready", capabilities: { heading: true, roadLabels: true } });
+    }
     post({ type: "configured", ...config });
   });
   ["keydown", "keyup"].forEach((type) => {
     window.addEventListener(type, blockMovementKey, true);
     document.addEventListener(type, blockMovementKey, true);
   });
+  syncChromeStyle();
   syncAddressStyle();
   hook(window, "google", hookGoogle);
 })();

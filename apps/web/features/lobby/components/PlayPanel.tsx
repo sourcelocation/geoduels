@@ -111,17 +111,17 @@ export const PlayPanel = forwardRef<HTMLDivElement, PlayPanelProps>(function Pla
         </div>
       </section>
 
-      <HorizontalScroller label="Trending Maps" itemClassName="w-72 sm:w-80" viewAllHref="/maps">
+      <HorizontalScroller label="Trending Maps" itemClassName="w-80" viewAllHref="/maps">
         {trendingMapsLoading ? (
-          <AppPanel className="flex h-44 w-72 items-center justify-center rounded-2xl sm:w-80">
+          <AppPanel className="flex h-44 w-80 items-center justify-center rounded-2xl">
             <CenteredSpinner label="Loading trending maps" />
           </AppPanel>
         ) : trendingMaps.length ? (
           trendingMaps.map((map) => (
-            <MapCard key={map.id} item={map} mode="link" thumbnailURL={(item) => mapThumbnailURL(item.thumbnailKey, item.thumbnailVariant)} />
+            <MapCard key={map.id} item={map} mode="link" showAuthor={false} thumbnailURL={(item) => mapThumbnailURL(item.thumbnailKey, item.thumbnailVariant)} />
           ))
         ) : (
-          <AppPanel className="flex h-44 w-72 items-center justify-center rounded-2xl p-5 text-center text-body-sm font-semibold text-content-secondary sm:w-80">
+          <AppPanel className="flex h-44 w-80 items-center justify-center rounded-2xl p-5 text-center text-body-sm font-semibold text-content-secondary">
             No trending maps yet.
           </AppPanel>
         )}

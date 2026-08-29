@@ -11,8 +11,8 @@ https://geoduels.io/
 ### Runtime topology
 
 - `apps/web` (Next.js): browser UI and gameplay shell.
-- `services/api` (Go): auth/session/profile, public player profiles, maps, parties, match history, moderation/admin, content, and support APIs (`/v1`).
-- `services/match-coordinator` (Go): matchmaking over websocket (`/queue`), party coordination/chat, assignment, presence, and maintenance status. Resumable-session lookup is exposed by the API at `/v1/session/resumable`.
+- `services/api` (Go): auth/session/profile, public player profiles, maps, parties, match history, moderation/admin, content, support APIs (`/v1`), and the registered-user live socket (`/v1/me/live`) for notifications and friend presence.
+- `services/match-coordinator` (Go): matchmaking over websocket (`/queue`), party coordination/chat, assignment, presence, and maintenance status. The API includes active-match state in `/v1/bootstrap`.
 - `services/realtime-gateway` (Go): websocket gatewaying (`/ws/{node}`) to the assigned gameplay node.
 - `services/gameplay-node` (Go): round engine and authoritative match state broadcast for assigned matches.
 - `services/moderation-worker` (Go): background moderation signal notifications and risk-engine work.
@@ -74,7 +74,10 @@ Development (`docker-compose.yml`) uses language runtime images for fast iterati
 
 The web app is typically run directly from `apps/web` with Node during local development.
 
-Production images are built from service Dockerfiles and pushed to registry:
+Production backend binaries are compiled together in CI so they share one Go
+build cache, then packaged with `services/Dockerfile.release`. The web image is
+built independently from `apps/web/Dockerfile` and pushed in parallel with the
+backend images:
 
 - `geoduels-api`
 - `geoduels-match-coordinator`
@@ -162,7 +165,8 @@ docker compose down
 Triggered by git tag push.
 
 - Run Go, web, and manifest checks
-- Build and push versioned production images
+- Compile all backend services once, then package and push their images
+- Build the web image once on a dedicated runner and push it in parallel
 - Open a PR against the private ops repository configured by `OPS_REPOSITORY`
 - Update production image tags and `NEXT_PUBLIC_APP_VERSION` in that ops repository
 - Deploy after that release PR is merged and Flux reconciles production

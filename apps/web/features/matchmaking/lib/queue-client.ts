@@ -169,31 +169,6 @@ export async function streamQueue(
   });
 }
 
-export type ResumableSessionResponse = { status: 'none'; matchId?: string; mode?: string } | { status: 'match'; matchId: string; mode?: string };
-
-export async function fetchResumableSession(
-  config: RuntimeConfig,
-  accessToken: string,
-  signal?: AbortSignal
-): Promise<ResumableSessionResponse> {
-  const resp = await apiFetch(config, '/v1/session/resumable', {
-    headers: authHeaders(accessToken),
-    signal
-  });
-  if (!resp.ok) {
-    return { status: 'none' };
-  }
-  const data = await resp.json();
-  const status = typeof data?.status === 'string' ? data.status : '';
-  if (status === 'match') {
-    return {
-      status,
-      matchId: typeof data?.matchId === 'string' ? data.matchId : '',
-      mode: typeof data?.mode === 'string' ? data.mode : ''
-    };
-  }
-  return { status: 'none' };
-}
 
 export type MatchSessionResponse =
   | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget }

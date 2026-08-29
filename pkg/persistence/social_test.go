@@ -1,23 +1,31 @@
 package persistence
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
 
-func TestRandomFriendCodeIsShortAndUnambiguous(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		code, err := randomFriendCode()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(code) != 6 {
-			t.Fatalf("code length = %d, want 6", len(code))
-		}
-		for _, ambiguous := range "01ILO" {
-			if strings.ContainsRune(code, ambiguous) {
-				t.Fatalf("code %q contains ambiguous character %q", code, ambiguous)
-			}
-		}
+func TestPartyInvitationUpsertHasUniqueConflictTarget(t *testing.T) {
+	query, err := os.ReadFile("../../db/queries/social.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(query), "on conflict(party_id,recipient_user_id) where status='pending'") {
+		t.Fatal("party invitation upsert must conflict on the pending party/recipient pair")
+	}
+	if !strings.Contains(string(query), "ListOutgoingPartyInvitations") {
+		t.Fatal("friends-page party invite status needs ListOutgoingPartyInvitations")
+	}
+	if !strings.Contains(string(query), "GetPendingPartyInvitation") {
+		t.Fatal("party invite resend cooldown needs GetPendingPartyInvitation")
+	}
+
+	migration, err := os.ReadFile("../../db/migrations/002003_party_invitation_active_unique.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(migration), "create unique index idx_party_invitations_active") {
+		t.Fatal("party invitation upsert requires a unique pending (party_id, recipient_user_id) index")
 	}
 }

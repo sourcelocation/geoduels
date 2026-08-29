@@ -29,6 +29,8 @@ export function useGeoDuelsExtension(
   const [configured, setConfigured] = useState(false);
   const [unsupportedVersion, setUnsupportedVersion] = useState<string | null>(null);
   const [timedOut, setTimedOut] = useState(false);
+  const [frameLoaded, setFrameLoaded] = useState(false);
+  const [handshakeAttempt, setHandshakeAttempt] = useState(0);
 
   const sendConfiguration = useCallback(() => {
     const target = streetViewFrameRef.current?.contentWindow;
@@ -43,7 +45,7 @@ export function useGeoDuelsExtension(
     target.postMessage(message, "https://www.google.com");
   }, [ruleset, streetNames, streetViewFrameRef]);
 
-  const retry = useCallback(() => {
+  const resetStatus = useCallback(() => {
     setCapabilities(null);
     setConfigured(false);
     setUnsupportedVersion(null);
@@ -51,8 +53,20 @@ export function useGeoDuelsExtension(
   }, []);
 
   useEffect(() => {
-    retry();
-  }, [streetViewSrc, ruleset, streetNames, retry]);
+    resetStatus();
+    setFrameLoaded(false);
+  }, [streetViewSrc, ruleset, streetNames, resetStatus]);
+
+  const onFrameLoad = useCallback(() => {
+    resetStatus();
+    setFrameLoaded(true);
+    setHandshakeAttempt((attempt) => attempt + 1);
+  }, [resetStatus]);
+
+  const retry = useCallback(() => {
+    resetStatus();
+    setFrameLoaded(false);
+  }, [resetStatus]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>) => {
@@ -121,7 +135,7 @@ export function useGeoDuelsExtension(
   // missed `ready` or a dropped `configure` self-correct, and a timeout
   // surfaces an actionable error instead of hanging indefinitely.
   useEffect(() => {
-    if (configured || unsupportedVersion) return;
+    if (!frameLoaded || configured || unsupportedVersion) return;
     let attempts = 0;
     const maxAttempts = 40; // ~12s at 300ms
     sendConfiguration();
@@ -135,7 +149,7 @@ export function useGeoDuelsExtension(
       sendConfiguration();
     }, 300);
     return () => window.clearInterval(interval);
-  }, [configured, unsupportedVersion, sendConfiguration]);
+  }, [configured, frameLoaded, handshakeAttempt, unsupportedVersion, sendConfiguration]);
 
   return {
     available: capabilities !== null,
@@ -144,6 +158,7 @@ export function useGeoDuelsExtension(
     configured,
     unsupportedVersion,
     timedOut,
+    onFrameLoad,
     retry,
   };
 }

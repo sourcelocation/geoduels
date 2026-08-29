@@ -496,7 +496,7 @@ func (s *DB) GetIdentity(sub string) (Identity, error) {
 		}
 		return Identity{}, err
 	}
-	out.Sub = r.UserID
+	out.Sub = uuidVal(r.UserID)
 	out.Email = r.Email
 	out.GoogleName = r.ProviderName
 	out.AvatarURL = r.AvatarUrl

@@ -23,19 +23,58 @@ export type AuthSessionPayload = {
   };
 };
 
+export type BootstrapViewer = {
+  id: string;
+  email?: string;
+  displayName: string;
+  avatarUrl?: string;
+  accountType: "guest" | "registered";
+  mmr: number;
+  ratingRd?: number;
+  gamesPlayed: number;
+  wins: number;
+  rankedGamesPlayed: number;
+  rankedWins: number;
+  isAdmin?: boolean;
+  isModerator?: boolean;
+  isBanned?: boolean;
+  banReason?: string;
+  linkedProviders?: string[];
+  selectedBadge?: unknown | null;
+};
+
+export type AppBootstrapPayload = {
+  version: 1;
+  auth: AuthSessionPayload | null;
+  viewer: BootstrapViewer | null;
+  preferences: { revision: number; value: unknown } | null;
+  activity: {
+    activeMatch: { status: "match"; matchId: string; mode?: string } | null;
+    notifications: UserNotification[];
+  };
+  global: {
+    onlinePlayers: number;
+    maintenance: {
+      phase: "normal" | "warning" | "active";
+      startsAt?: string;
+      endsAt?: string;
+      queuePaused?: boolean;
+      playPaused?: boolean;
+      message?: string;
+    };
+  };
+};
+
 export class AuthSessionError extends Error {
   constructor(public readonly status: number, message: string) { super(message); }
 }
 
-export async function requestSession(config: RuntimeConfig): Promise<AuthSessionPayload | null> {
-  const resp = await apiFetch(config, "/v1/auth/session", {
+export async function requestBootstrap(config: RuntimeConfig): Promise<AppBootstrapPayload> {
+  const resp = await apiFetch(config, "/v1/bootstrap", {
     credentials: "include",
   });
-  if (resp.status === 401) {
-    return null;
-  }
   if (!resp.ok) {
-    throw new AuthSessionError(resp.status, await readError(resp, "Session restore failed"));
+    throw new AuthSessionError(resp.status, await readError(resp, "Application bootstrap failed"));
   }
   return resp.json();
 }
@@ -70,13 +109,6 @@ export async function requestRefreshSession(config: RuntimeConfig): Promise<Auth
     throw new AuthSessionError(resp.status, await readError(resp, "Session refresh failed"));
   }
   return resp.json();
-}
-
-export async function requestMe(config: RuntimeConfig, accessToken: string) {
-  const resp = await apiFetch(config, "/v1/me", {
-    headers: authHeaders(accessToken),
-  });
-  return resp;
 }
 
 export type UserNotification = {

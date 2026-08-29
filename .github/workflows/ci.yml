@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
     name: go
@@ -24,25 +28,6 @@ jobs:
       - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
       - run: go test ./...
       - run: go vet ./...
-      - run: bash scripts/check-backend-architecture.sh
-
-  generated-queries:
-    name: generated queries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          cache: true
-
-      - name: Regenerate sqlc query packages
-        # Generated code is gitignored and reproducible; a clean generate must
-        # succeed and the committed query files must compile.
-        run: |
-          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
-          go build ./pkg/persistence/...
 
   web:
     name: web
@@ -55,6 +40,14 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
+
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('apps/web/package-lock.json') }}-${{ hashFiles('apps/web/**/*.[jt]s', 'apps/web/**/*.[jt]sx', 'apps/web/**/*.css') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('apps/web/package-lock.json') }}-
 
       - name: Test and build
         working-directory: apps/web

@@ -14,9 +14,6 @@ const createNextConfig = (phase) => ({
   // otherwise mutate `.next`, which can leave dev serving deleted manifests.
   distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
   reactStrictMode: true,
-  experimental: {
-    webpackBuildWorker: false
-  },
   output: "standalone",
   outputFileTracingRoot: appRoot,
   async headers() {

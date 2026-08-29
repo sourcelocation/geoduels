@@ -19,6 +19,7 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/persistence"
 )
 
 type guestAuthTestStore struct {
@@ -113,6 +114,14 @@ func (s *guestAuthTestStore) GetIdentity(sub string) (Identity, error) {
 	return s.identity, nil
 }
 
+func (s *guestAuthTestStore) GetProfile(userID string) (persistence.Profile, error) {
+	return persistence.Profile{
+		UserID: userID, DisplayName: s.identity.DisplayName,
+		IsGuest: s.identity.AccountType == "guest", IsAdmin: s.identity.IsAdmin,
+		IsModerator: s.identity.IsModerator, IsBanned: s.identity.IsBanned,
+	}, nil
+}
+
 func (s *guestAuthTestStore) SyncLoginBadges(userID string) error {
 	return nil
 }
@@ -161,7 +170,7 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 	}
 }
 
-func TestAnonymousSessionBootstrapReturnsUnauthorizedWithoutLogging(t *testing.T) {
+func TestAnonymousBootstrapReturnsAnonymousPayloadWithoutLogging(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -171,13 +180,13 @@ func TestAnonymousSessionBootstrapReturnsUnauthorizedWithoutLogging(t *testing.T
 		refreshCookieName:     "geoduels_refresh",
 		refreshCookieSameSite: http.SameSiteLaxMode,
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
 	rec := httptest.NewRecorder()
 
-	a.session(rec, req)
+	a.bootstrap(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("session status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bootstrap status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if strings.Contains(buf.String(), "auth session bootstrap failed") {
 		t.Fatalf("anonymous restore logged a failure: %s", buf.String())
@@ -195,17 +204,17 @@ func TestSessionFailureDoesNotClearRefreshCookie(t *testing.T) {
 		refreshCookieSameSite: http.SameSiteLaxMode,
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  "geoduels_refresh",
 		Value: "stale-token",
 	})
 	rec := httptest.NewRecorder()
 
-	a.session(rec, req)
+	a.bootstrap(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("session status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bootstrap status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
 		t.Fatalf("session failure must not overwrite a possibly newer cookie, got %v", cookies)
@@ -243,11 +252,11 @@ func TestSessionUsesValidRefreshCookieWhenStaleDuplicateComesFirst(t *testing.T)
 		refreshCookieSameSite: http.SameSiteLaxMode,
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
 	req.Header.Set("Cookie", "geoduels_refresh=stale-token; geoduels_refresh="+validToken)
 	rec := httptest.NewRecorder()
 
-	a.session(rec, req)
+	a.bootstrap(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("session status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -289,11 +298,11 @@ func TestSessionBootstrapIsIdempotent(t *testing.T) {
 	}
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+		req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
 		req.AddCookie(&http.Cookie{Name: "geoduels_refresh", Value: refreshToken})
 		rec := httptest.NewRecorder()
 
-		a.session(rec, req)
+		a.bootstrap(rec, req)
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("session bootstrap %d status = %d, want %d; body = %s", attempt, rec.Code, http.StatusOK, rec.Body.String())

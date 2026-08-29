@@ -18,8 +18,8 @@ This document describes the current runtime implemented in this repository. Olde
 
 - PostgreSQL is the durable source of truth for users, identities, sessions, profiles, stats, ranks, maps and their current location datasets, parties, chat, moderation, runtime match metadata, compact match summaries, and retained replays.
 - Current bans and chat/report mutes are projected directly on users. `moderation_signals` stores reports and detector observations; the append-only `moderation_log` stores moderator and system actions.
-- PostgreSQL also owns friendships, friend requests and blocks, expiring friend codes, targeted party invitations, notification history, last-seen projections, and sequenced user events.
-- Redis is used for queue state, gameplay-node registration, route assignment, ephemeral party/global presence, user-event fanout, and maintenance status.
+- PostgreSQL also owns friendships, friend requests and blocks, expiring friend codes, targeted party invitations, notification history, and last-seen projections.
+- Redis is used for queue state, gameplay-node registration, route assignment, ephemeral party/global presence, per-user live fanout, and maintenance status.
 - `pkg/persistence` owns Postgres persistence behavior.
 - `pkg/coordinator` owns Redis-backed node registration, assignment, and presence.
 - `pkg/duel` and `pkg/singleplayer` own match rules and round progression.
@@ -40,11 +40,12 @@ This document describes the current runtime implemented in this repository. Olde
 ### Auth
 
 1. Browser loads `apps/web`.
-2. Web restores auth through a single `GET /v1/auth/session` bootstrap. No refresh cookie is an anonymous viewer; it does not create an account.
-3. Playable actions (singleplayer, queue, party) mint a guest through `POST /v1/auth/guest` when no session exists, after Turnstile when configured.
-4. `services/api` validates the `HttpOnly` refresh-session cookie and returns a short-lived app access JWT without rotating the refresh token.
-5. Explicit refresh through `POST /v1/auth/refresh` rotates the refresh token and returns a new app access JWT.
-6. The browser keeps the access JWT in memory only.
+2. Web initializes through one read-only `GET /v1/bootstrap`, which returns auth, viewer, preferences, active-match, notification, and global shell state. No refresh cookie produces an anonymous bootstrap and does not create an account.
+3. The active route then loads one cohesive page read model, such as `GET /v1/me/friends-page`; page collections do not belong in bootstrap.
+4. Playable actions (singleplayer, queue, party) mint a guest through `POST /v1/auth/guest` when no session exists, after Turnstile when configured.
+5. `services/api` validates the `HttpOnly` refresh-session cookie and returns a short-lived app access JWT without rotating the refresh token.
+6. Explicit refresh through `POST /v1/auth/refresh` rotates the refresh token and returns a new app access JWT.
+7. The browser keeps the access JWT in memory only.
 
 ### Duel
 
@@ -80,13 +81,11 @@ authority.
 ### Friends, presence, and notifications
 
 1. Registered users manage durable friend requests, friendships, blocks, friend codes, party invitations, and notification history through `services/api`.
-2. Each signed-in browser keeps one global user-events websocket separate from queue, party, and gameplay sockets.
-3. Redis stores per-connection presence with TTLs so multiple tabs and devices collapse into one online/away state.
-4. PostgreSQL stores coarse `last_seen_at` transitions rather than heartbeat writes.
-5. Durable user-scoped event sequences let reconnecting clients detect gaps and reconcile authoritative HTTP queries.
-6. `match-coordinator` remains the authority for accepting party membership; social party invitations resolve to the existing party join flow.
-7. Authenticated guest sockets receive only public global-status events. Global sockets refresh the coordinator presence set, while each API instance reads the aggregate online count and maintenance state once every ten seconds and fans changes out to its local sockets.
-8. Signed-out pages use the API's slow `/v1/status` fallback; lobby pages do not run their former per-browser `/queue/online` polling loop.
+2. Bootstrap supplies notification and global-status shell snapshots; pages and explicit mutations refresh their authoritative HTTP read models without replaying a user-event log.
+3. Registered browsers then open `GET /v1/me/live` on `services/api` for notification upserts, presence edge patches, friends-page invalidation, and global-status changes. The socket is not a replay log; reconnect refetches notifications and the friends-page.
+4. Friend requests and party invitations are notification types in the same inbox. Accepting a party invitation still joins through the coordinator party flow.
+5. `match-coordinator` remains the authority for accepting party membership; social party invitations resolve to the existing party join flow.
+6. Friend presence is a projection of coordinator presence (`rt:presence:online`), heartbeated from the live socket, queue, party, and gameplay connections, and returned with the friends-page read model.
 
 ### Match route bootstrap
 

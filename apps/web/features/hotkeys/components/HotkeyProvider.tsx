@@ -4,7 +4,7 @@ import { setSfxMuted } from "../../../lib/audio/sfx-preferences";
 import { useAuthState } from "../../auth/components/AuthProvider";
 import { bindingKey, DEFAULT_HOTKEY_PREFERENCES } from "../model/defaults";
 import { eventMatchesBinding, isEditableTarget } from "../lib/keyboard-event";
-import { fetchPreferences, patchPreferences } from "../lib/preferences-client";
+import { patchPreferences } from "../lib/preferences-client";
 import { loadLocalPreferences, normalizePreferences, saveLocalPreferences } from "../lib/storage";
 import type { HotkeyAction, HotkeyPreferences, HotkeyRegistration, KeyBinding } from "../model/types";
 import HotkeySettings from "./HotkeySettings";
@@ -34,6 +34,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
   const [saveStatus, setSaveStatus] = useState<HotkeyContextValue["saveStatus"]>("local");
   const syncRef = useRef<{ token: string; revision: number } | null>(null);
   const hydratedRef = useRef(false);
+  const skipNextSaveRef = useRef(false);
 
   const setPreferences = useCallback((next: HotkeyPreferences) => {
     preferencesRef.current = next;
@@ -48,36 +49,27 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (auth.status === "bootstrapping") return;
-    let cancelled = false;
-    void (async () => {
-      const session = auth.session;
-      if (cancelled || !session?.accessToken) {
-        hydratedRef.current = true;
-        return;
-      }
-      try {
-        const remote = await fetchPreferences(getRuntimeConfig(), session.accessToken);
-        if (cancelled) return;
-        const remotePreferences = normalizePreferences(remote.preferences);
-        const hasRemoteCustomization = remote.revision > 0;
-        syncRef.current = { token: session.accessToken, revision: remote.revision };
-        if (hasRemoteCustomization) setPreferences(remotePreferences);
-        hydratedRef.current = true;
-        if (!hasRemoteCustomization) {
-          const saved = await patchPreferences(getRuntimeConfig(), session.accessToken, preferencesRef.current, remote.revision);
-          syncRef.current.revision = saved.revision;
-        }
-        setSaveStatus("saved");
-      } catch {
-        hydratedRef.current = true;
-        setSaveStatus("error");
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [auth.session, auth.status, setPreferences]);
+    const session = auth.session;
+    const remote = auth.bootstrap?.preferences;
+    if (!session?.accessToken || !remote) {
+      hydratedRef.current = true;
+      return;
+    }
+    syncRef.current = { token: session.accessToken, revision: remote.revision };
+    if (remote.revision > 0) {
+      skipNextSaveRef.current = true;
+      setPreferences(normalizePreferences(remote.value));
+    }
+    hydratedRef.current = true;
+    setSaveStatus("saved");
+  }, [auth.bootstrap, auth.session, auth.status, setPreferences]);
 
   useEffect(() => {
     if (!hydratedRef.current || !syncRef.current) return;
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
     setSaveStatus("saving");
     const timer = window.setTimeout(async () => {
       const sync = syncRef.current;

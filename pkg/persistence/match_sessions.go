@@ -22,10 +22,18 @@ func nullableSessionText(v string) any {
 }
 
 func anySessionText(v any, fallback string) string {
-	if s, ok := v.(string); ok {
-		return s
+	if value := anyText(v); value != "" {
+		return value
 	}
 	return fallback
+}
+
+func nullableSessionUUID(value string) (pgtype.UUID, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return pgtype.UUID{}, nil
+	}
+	return profileUUID(value)
 }
 
 const defaultMatchLeaseTTL = 45 * time.Second
@@ -54,24 +62,21 @@ func (s *DB) UpsertMatchSession(ctx context.Context, p MatchSessionUpsert) error
 		}
 		b, _ := json.Marshal(f.Config)
 		r := f.ReturnTarget
-		var sourcePartyID, sourceInvite, mapID, returnKind, returnMap, returnParty string
-		if f.SourcePartyID != "" {
-			sourcePartyID = f.SourcePartyID
+		sourcePartyID, err := nullableSessionUUID(f.SourcePartyID)
+		if err != nil {
+			return err
 		}
-		if f.SourcePartyInviteCode != "" {
-			sourceInvite = f.SourcePartyInviteCode
+		mapID, err := nullableSessionUUID(resolvedMapID(f))
+		if err != nil {
+			return err
 		}
-		if resolvedMapID(f) != "" {
-			mapID = resolvedMapID(f)
+		returnMap, err := nullableSessionUUID(r.MapID)
+		if err != nil {
+			return err
 		}
-		if r.Kind != "" {
-			returnKind = string(r.Kind)
-		}
-		if r.MapID != "" {
-			returnMap = r.MapID
-		}
-		if r.PartyID != "" {
-			returnParty = r.PartyID
+		returnParty, err := nullableSessionUUID(r.PartyID)
+		if err != nil {
+			return err
 		}
 		e := q.UpsertMatchSession(ctx, db.UpsertMatchSessionParams{
 			MatchID:               matchUUID,
@@ -80,13 +85,13 @@ func (s *DB) UpsertMatchSession(ctx context.Context, p MatchSessionUpsert) error
 			Ranked:                !f.Unranked && f.Mode == contracts.ModeDuel && f.SourcePartyID == "",
 			SourceKind:            db.GdMatchSource(src),
 			SourcePartyID:         sourcePartyID,
-			SourcePartyInviteCode: sourceInvite,
+			SourcePartyInviteCode: pgtype.Text{String: f.SourcePartyInviteCode, Valid: f.SourcePartyInviteCode != ""},
 			NodeID:                pgtype.Text{String: p.NodeID, Valid: true},
 			NodeEpoch:             pgtype.Int8{Int64: p.NodeEpoch, Valid: true},
 			PublicRoute:           pgtype.Text{String: p.PublicRoute, Valid: true},
 			ConfigJson:            b,
 			MapID:                 mapID,
-			ReturnTargetKind:      returnKind,
+			ReturnTargetKind:      pgtype.Text{String: string(r.Kind), Valid: r.Kind != ""},
 			ReturnTargetMapID:     returnMap,
 			ReturnTargetPartyID:   returnParty,
 			LeaseTtl:              pgtype.Interval{Microseconds: defaultMatchLeaseTTL.Microseconds(), Valid: true},
@@ -125,7 +130,8 @@ func (s *DB) UpsertMatchSession(ctx context.Context, p MatchSessionUpsert) error
 			if err != nil {
 				return err
 			}
-			if e = q.UpsertMatchParticipant(ctx, db.UpsertMatchParticipantParams{MatchID: matchUUID, UserID: userUUID, TeamID: strings.TrimSpace(team), DisplayName: pr.DisplayName, AvatarUrl: pr.AvatarURL, JoinedPartyAt: joined}); e != nil {
+			team = strings.TrimSpace(team)
+			if e = q.UpsertMatchParticipant(ctx, db.UpsertMatchParticipantParams{MatchID: matchUUID, UserID: userUUID, TeamID: pgtype.Text{String: team, Valid: team != ""}, DisplayName: pr.DisplayName, AvatarUrl: pr.AvatarURL, JoinedPartyAt: joined}); e != nil {
 				return e
 			}
 		}
@@ -146,7 +152,8 @@ func (s *DB) MatchSessionSourceParty(ctx context.Context, id string) (string, st
 	if e != nil {
 		return "", "", false, e
 	}
-	return source.SourcePartyID, source.SourcePartyInviteCode, source.SourcePartyID != "", nil
+	sourcePartyID := uuidVal(source.SourcePartyID)
+	return sourcePartyID, source.SourcePartyInviteCode, sourcePartyID != "", nil
 }
 func (s *DB) MatchSessionReturnTarget(ctx context.Context, id string) (*contracts.MatchReturnTarget, bool, error) {
 	id = strings.TrimSpace(id)
@@ -178,7 +185,7 @@ func (s *DB) RenewMatchSessionLeases(node string, epoch int64, ids []string, ttl
 	return s.db.RenewMatchSessionLeases(ctx, db.RenewMatchSessionLeasesParams{
 		NodeID:    pgtype.Text{String: node, Valid: true},
 		NodeEpoch: pgtype.Int8{Int64: epoch, Valid: true},
-		MatchIds:  ids,
+		MatchIds:  chatUUIDs(ids),
 		Ttl:       pgtype.Interval{Microseconds: ttl.Microseconds(), Valid: true},
 	})
 }

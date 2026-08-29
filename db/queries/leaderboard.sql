@@ -19,19 +19,19 @@ SELECT coalesce(max(rank) FILTER (WHERE user_id = nullif(sqlc.arg(self_user_id),
        coalesce(max(total_players), 0)::int AS total_players FROM ranked;
 
 -- name: GetRankedSeasonSettings :one
-SELECT value_json::text AS value_json
+SELECT value_json
 FROM site_settings
 WHERE key = 'ranked_season';
 
 -- name: GetRankedSeasonSettingsForUpdate :one
-SELECT value_json::text AS value_json
+SELECT value_json
 FROM site_settings
 WHERE key = 'ranked_season'
 FOR UPDATE;
 
 -- name: ListLeaderboard :many
 SELECT row_number() OVER (ORDER BY r.mmr DESC, r.updated_at ASC, r.user_id ASC) AS rank,
-       r.user_id::text AS user_id,
+       r.user_id AS user_id,
        coalesce(nullif(u.display_name, r.user_id::text), ui.provider_name, r.user_id::text) AS display_name,
        coalesce(u.avatar_url, ui.avatar_url, '') AS avatar_url,
        r.mmr,

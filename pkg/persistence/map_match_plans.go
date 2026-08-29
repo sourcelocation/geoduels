@@ -50,7 +50,7 @@ func (s *DB) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFound) 
 			p.Location.Pitch = &v
 		}
 		found.PlannedRounds = append(found.PlannedRounds, p)
-		found.ResolvedMap.MapID = mapID
+		found.ResolvedMap.MapID = uuidVal(mapID)
 	}
 	if len(found.PlannedRounds) > 0 {
 		id, err := profileUUID(found.ResolvedMap.MapID)
@@ -85,7 +85,7 @@ func (s *DB) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFound) 
 	}
 	selectedMap, err := q.SelectedMap(ctx, mapUUID)
 	if err == nil {
-		owner, _ = selectedMap.OwnerUserID.(string)
+		owner = uuidVal(selectedMap.OwnerUserID)
 		visibility, status, displayName, count = string(selectedMap.Visibility), string(selectedMap.Status), selectedMap.DisplayName, int(selectedMap.LocationCount)
 	}
 	if err != nil {

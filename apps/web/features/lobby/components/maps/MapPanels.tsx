@@ -1,6 +1,6 @@
 import Link from "next/link";
 import React, { useState } from "react";
-import { ArrowLeft, ChartNoAxesColumnIncreasing, Check, Heart, Map as MapIcon, Pencil, Play, Search, Star, Trophy, Upload, X } from "lucide-react";
+import { ArrowLeft, ChartNoAxesColumnIncreasing, Check, Clock3, Flame, Heart, Map as MapIcon, Pencil, Play, Search, Star, Trophy, Upload, X } from "lucide-react";
 import PlayerProfileLink from "../../../players/components/PlayerProfileLink";
 import { Tooltip } from "../../../../components/ui/Tooltip";
 import { Badge } from "../../../../components/ui/Badge";
@@ -21,6 +21,7 @@ import { MapComments } from "./MapComments";
 import { MapEditMetadataModal } from "./MapEditMetadataModal";
 import { CenteredSpinner } from "../../../../components/ui/Spinner";
 import { FileInputTrigger } from "../../../../components/ui/FileInputTrigger";
+import styles from "./MapPanels.module.css";
 
 export type MapScopeLabel = { scope: MapScope; label: string };
 type MapActionNotice = { title: string; message: string };
@@ -44,7 +45,7 @@ export function MapSearchControl({ id, value, onChange }: MapSearchProps) {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder="Search maps"
-        className="h-11 w-full rounded-xl py-2 pl-9 pr-10 font-semibold"
+        className={cn(styles.mapSearchInput, "h-11 w-full rounded-xl py-2 pl-9 pr-10 font-semibold")}
       />
       {value ? (
         <IconButton
@@ -63,11 +64,25 @@ export function MapScopeNav({
   labels,
   value,
   onChange,
+  appearance = "stacked",
 }: {
   labels: MapScopeLabel[];
   value: MapScope;
   onChange: (scope: MapScope) => void;
+  appearance?: "stacked" | "segmented";
 }) {
+  if (appearance === "segmented") {
+    return (
+      <Tabs
+        appearance="segmented"
+        value={value}
+        onChange={onChange}
+        items={labels.map((item) => ({ id: item.scope, label: item.label }))}
+        aria-label="Map collection"
+      />
+    );
+  }
+
   return (
     <div className="grid gap-2">
       {labels.map((item) => (
@@ -94,18 +109,14 @@ export function MapSortControl({
   value: MapSort;
   onChange: (sort: MapSort) => void;
 }) {
+  const items = [
+    { id: "trending", label: "Trending", icon: <Flame size={17} /> },
+    { id: "popular", label: "Most popular", icon: <ChartNoAxesColumnIncreasing size={17} /> },
+    { id: "new", label: "Newest", icon: <Clock3 size={17} /> },
+  ] satisfies Array<{ id: MapSort; label: string; icon: React.ReactNode }>;
+
   return (
-    <Tabs
-      appearance="segmented"
-      value={value}
-      onChange={onChange}
-      items={[
-        { id: "trending", label: "Trending" },
-        { id: "popular", label: "Most Popular" },
-        { id: "new", label: "New" },
-      ]}
-      aria-label="Sort maps"
-    />
+    <Tabs appearance="segmented-icons" value={value} onChange={onChange} items={items} aria-label="Sort maps" />
   );
 }
 
@@ -140,18 +151,20 @@ export function MapCard({
   mode,
   thumbnailURL,
   onSelect,
+  showAuthor = true,
 }: {
   item: CustomMap;
   selected?: boolean;
   mode: "link" | "select";
   thumbnailURL: (item: Pick<CustomMap, "thumbnailVariant" | "thumbnailKey">) => string;
   onSelect?: (item: CustomMap) => void;
+  showAuthor?: boolean;
 }) {
   const content = (
     <AppPanel
       as="div"
       className={cn(
-        "group relative aspect-[16/9] overflow-hidden rounded-xl text-left",
+        "group relative h-44 overflow-hidden rounded-xl text-left",
         "transition duration-normal hover:-translate-y-0.5",
         selected && "ring-2 ring-status-success",
       )}
@@ -186,7 +199,9 @@ export function MapCard({
       <div className="absolute inset-x-0 bottom-0 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3 p-4">
         <div className="min-w-0">
           <h3 className="truncate text-heading-sm font-strong leading-heading text-content-primary">{item.displayName}</h3>
-          <p className="mt-1.5 truncate text-label font-strong text-content-secondary">{item.authorName || "GeoDuels"}</p>
+          {showAuthor ? (
+            <p className="mt-1.5 truncate text-label font-strong text-content-secondary">{item.authorName || "GeoDuels"}</p>
+          ) : null}
         </div>
         <div className="grid gap-1.5 pb-0.5 text-label font-strong text-content-primary">
           <span className="inline-flex items-center justify-end gap-1.5" title="Locations">
@@ -255,19 +270,21 @@ export function MapsPanel({
 }) {
   return (
     <AppPanel className="overflow-hidden rounded-2xl">
-      <div className="grid lg:min-h-[min(640px,calc(100dvh-11rem))] lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="border-b border-border-default p-4 lg:border-b-0 lg:border-r">
+      <div className="flex flex-col lg:min-h-[min(640px,calc(100dvh-11rem))]">
+        <header className="border-b border-border-default p-4 sm:p-5">
           <div className="mb-4 flex items-center gap-2 text-content-primary">
             <MapIcon className="text-status-success" size={22} />
             <span className="text-heading-sm font-strong">Maps</span>
           </div>
-          <MapScopeNav labels={mapScopeLabels} value={mapScope} onChange={setMapScope} />
-        </aside>
-        <section className="bg-surface-grouped p-5 sm:p-7">
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <MapSearchControl id="map-browser-search" value={mapSearchInput} onChange={setMapSearchInput} />
-            {mapScope === "community" ? <MapSortControl value={mapSort} onChange={setMapSort} /> : null}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <MapScopeNav appearance="segmented" labels={mapScopeLabels} value={mapScope} onChange={setMapScope} />
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+              {mapScope === "community" ? <MapSortControl value={mapSort} onChange={setMapSort} /> : null}
+              <MapSearchControl id="map-browser-search" value={mapSearchInput} onChange={setMapSearchInput} />
+            </div>
           </div>
+        </header>
+        <section className="flex-1 bg-surface-grouped p-5 sm:p-7">
 
           {mapActionNotice ? (
             <LobbyNotice title={mapActionNotice.title} tone="success" className="mt-5 rounded-2xl">
@@ -284,7 +301,7 @@ export function MapsPanel({
               {hasMapSearch ? "No maps match your search." : "No maps in this section yet."}
             </LobbyPlaceholder>
           ) : (
-            <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className={cn("gap-4", styles.mapGrid)}>
               {readyMaps.map((item) => (
                 <div key={item.id} className="overflow-hidden rounded-xl">
                   <MapCard

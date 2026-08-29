@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"geoduels/pkg/maintenance"
 )
 
 type LocationPoint struct {
@@ -614,6 +616,50 @@ type AuthSessionPayload struct {
 	User                  AuthUser `json:"user"`
 }
 
+type BootstrapViewer struct {
+	ID                string       `json:"id"`
+	Email             string       `json:"email,omitempty"`
+	DisplayName       string       `json:"displayName"`
+	AvatarURL         string       `json:"avatarUrl,omitempty"`
+	AccountType       string       `json:"accountType"`
+	MMR               int          `json:"mmr"`
+	RatingRD          float64      `json:"ratingRd,omitempty"`
+	GamesPlayed       int          `json:"gamesPlayed"`
+	Wins              int          `json:"wins"`
+	RankedGamesPlayed int          `json:"rankedGamesPlayed"`
+	RankedWins        int          `json:"rankedWins"`
+	IsAdmin           bool         `json:"isAdmin,omitempty"`
+	IsModerator       bool         `json:"isModerator,omitempty"`
+	IsBanned          bool         `json:"isBanned,omitempty"`
+	BanReason         string       `json:"banReason,omitempty"`
+	LinkedProviders   []string     `json:"linkedProviders,omitempty"`
+	SelectedBadge     *PlayerBadge `json:"selectedBadge,omitempty"`
+}
+
+type BootstrapPreferences struct {
+	Revision int64           `json:"revision"`
+	Value    json.RawMessage `json:"value"`
+}
+
+type BootstrapActivity struct {
+	ActiveMatch   *ResumableSessionResponse `json:"activeMatch"`
+	Notifications []UserNotification        `json:"notifications"`
+}
+
+type BootstrapGlobal struct {
+	OnlinePlayers int                `json:"onlinePlayers"`
+	Maintenance   maintenance.Status `json:"maintenance"`
+}
+
+type BootstrapResponse struct {
+	Version     int                   `json:"version"`
+	Auth        *AuthSessionPayload   `json:"auth"`
+	Viewer      *BootstrapViewer      `json:"viewer"`
+	Preferences *BootstrapPreferences `json:"preferences"`
+	Activity    BootstrapActivity     `json:"activity"`
+	Global      BootstrapGlobal       `json:"global"`
+}
+
 type MatchBootstrapResponse struct {
 	Auth  AuthSessionPayload   `json:"auth"`
 	Match MatchSessionResponse `json:"match"`
@@ -1098,6 +1144,32 @@ type UserNotification struct {
 	Payload   json.RawMessage `json:"payload"`
 	ReadAt    *time.Time      `json:"readAt,omitempty"`
 	CreatedAt time.Time       `json:"createdAt"`
+}
+
+const (
+	LiveHello               = "hello"
+	LiveNotificationUpsert  = "notification.upsert"
+	LiveNotificationRead    = "notification.read"
+	LiveNotificationReadAll = "notification.read_all"
+	LivePresenceEvent       = "presence.patch"
+	LiveInvalidate          = "invalidate"
+	LiveGlobalStatus        = "global_status.changed"
+)
+
+type LivePresencePatch struct {
+	UserID         string     `json:"userId"`
+	PresenceStatus string     `json:"presenceStatus"`
+	Activity       string     `json:"activity,omitempty"`
+	LastSeenAt     *time.Time `json:"lastSeenAt,omitempty"`
+}
+
+type LiveEvent struct {
+	Type           string             `json:"type"`
+	Notification   *UserNotification  `json:"notification,omitempty"`
+	NotificationID int64              `json:"notificationId,omitempty"`
+	Presence       *LivePresencePatch `json:"presence,omitempty"`
+	Resources      []string           `json:"resources,omitempty"`
+	Global         *BootstrapGlobal   `json:"global,omitempty"`
 }
 
 type NotificationOutboxItem struct {

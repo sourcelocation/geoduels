@@ -54,7 +54,7 @@ export default function NotificationsPage() {
     onError: (_, __, context) => {
       context?.previous.forEach(([key, value]) => queryClient.setQueryData(key, value));
     },
-    onSettled: () => { void queryClient.invalidateQueries({ queryKey: ["notifications"] }); void queryClient.invalidateQueries({ queryKey: ["social", "summary"] }); },
+    onSettled: () => { void queryClient.invalidateQueries({ queryKey: ["notifications"] }); },
   });
   const read = useMutation({
     mutationFn: (id: number) => markUserNotificationRead(config, auth.accessToken, id),
@@ -67,7 +67,7 @@ export default function NotificationsPage() {
     onError: (_, __, context) => {
       context?.previous.forEach(([key, value]) => queryClient.setQueryData(key, value));
     },
-    onSettled: () => { void queryClient.invalidateQueries({ queryKey: ["notifications"] }); void queryClient.invalidateQueries({ queryKey: ["social", "summary"] }); },
+    onSettled: () => { void queryClient.invalidateQueries({ queryKey: ["notifications"] }); },
   });
   const unreadCount = notifications.filter((item) => !item.readAt).length;
   return (

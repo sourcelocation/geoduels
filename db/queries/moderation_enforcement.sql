@@ -115,7 +115,7 @@ SELECT exists(
 ) AS banned;
 
 -- name: ListActiveIPSignupBans :many
-SELECT id, ip_address, COALESCE(reason, '') AS reason, COALESCE(created_by::text, '') AS created_by, created_at
+SELECT id, ip_address, COALESCE(reason, '') AS reason, created_by, created_at
 FROM ip_signup_bans
 WHERE revoked_at IS NULL
 ORDER BY created_at DESC
@@ -144,8 +144,8 @@ WITH candidate_matches AS (
         AND l.id IS NULL
 )
 SELECT
-    match_id::text AS match_id,
-    opponent_user_id::text AS opponent_user_id,
+    match_id AS match_id,
+    opponent_user_id AS opponent_user_id,
     cheater_mmr,
     cheater_rd,
     COALESCE(original_delta, 0) AS original_delta
@@ -154,7 +154,7 @@ WHERE original_delta IS NOT NULL
 ORDER BY ended_at ASC, match_id ASC;
 
 -- name: ListCommunityPardonCandidates :many
-SELECT u2.id::text AS user_id,
+SELECT u2.id AS user_id,
        COALESCE(max(ml.created_at) FILTER (WHERE ml.action IN ('permanent_ban', 'temporary_ban')), u2.banned_at) AS sanction_started_at
 FROM users u2
 LEFT JOIN moderation_log ml ON ml.subject_user_id = u2.id AND ml.action IN ('permanent_ban', 'temporary_ban', 'unban')
@@ -167,12 +167,12 @@ HAVING COALESCE(max(ml.created_at) FILTER (WHERE ml.action IN ('permanent_ban', 
         OR max(ml.created_at) FILTER (WHERE ml.action = 'unban') < max(ml.created_at) FILTER (WHERE ml.action IN ('permanent_ban', 'temporary_ban')));
 
 -- name: ListMatchGuessPlayers :many
-SELECT DISTINCT user_id::text AS user_id
+SELECT DISTINCT user_id AS user_id
 FROM ranked_guess_events
 WHERE match_id = $1;
 
 -- name: ListRecentGuessEvents :many
-SELECT match_id::text AS match_id, round_number, score, guess_ms, evidence, occurred_at
+SELECT match_id AS match_id, round_number, score, guess_ms, evidence, occurred_at
 FROM ranked_guess_events
 WHERE user_id = $1
 ORDER BY occurred_at DESC, round_number DESC
@@ -201,7 +201,7 @@ UPDATE users u
 SET banned_at = NULL, ban_reason = NULL, ban_expires_at = NULL
 FROM candidates c
 WHERE u.id = c.id
-RETURNING u.id::text AS user_id;
+RETURNING u.id AS user_id;
 
 -- name: RevokeIPSignupBan :exec
 UPDATE ip_signup_bans

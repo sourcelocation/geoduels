@@ -19,6 +19,13 @@ export type CompactPlayer = {
   activity?: "in_match" | "in_party";
   lastSeenAt?: string;
   sharedMatchAt?: string;
+  partyInvite?: PartyInviteStatus;
+};
+
+export type PartyInviteStatus = {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
 };
 
 export type FriendRequest = {

@@ -28,6 +28,13 @@ type CompactPlayer struct {
 	Activity       string                 `json:"activity,omitempty"`
 	LastSeenAt     *time.Time             `json:"lastSeenAt,omitempty"`
 	SharedMatchAt  *time.Time             `json:"sharedMatchAt,omitempty"`
+	PartyInvite    *CompactPartyInvite    `json:"partyInvite,omitempty"`
+}
+
+type CompactPartyInvite struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 type FriendRequest struct {
@@ -59,11 +66,4 @@ type SocialSettings struct {
 	PresenceVisible     bool `json:"presenceVisible"`
 	RequestsEnabled     bool `json:"requestsEnabled"`
 	PartyInvitesEnabled bool `json:"partyInvitesEnabled"`
-}
-
-type UserEvent struct {
-	Sequence   int64     `json:"sequence"`
-	Type       string    `json:"type"`
-	Payload    []byte    `json:"-"`
-	OccurredAt time.Time `json:"occurredAt"`
 }

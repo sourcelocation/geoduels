@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GeoDuels Enhancer",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Official GeoDuels extension that enhances Street View with hidden street names, new modes, a compass, and more.",
   "content_scripts": [
     {

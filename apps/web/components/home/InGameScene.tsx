@@ -284,6 +284,7 @@ export default function InGameScene({
             src={streetViewFrameSrc}
             tabIndex={disableStreetViewTabbing ? -1 : undefined}
             onFocus={disableStreetViewTabbing ? releaseStreetViewFocus : undefined}
+            onLoad={extension.onFrameLoad}
             className={`absolute left-0 top-[-75px] h-[calc(100%+75px)] w-full border-0 ${streetViewInteractive ? '' : 'pointer-events-none'}`}
             allowFullScreen
             loading="eager"
@@ -508,7 +509,12 @@ export default function InGameScene({
       </AnimatePresence>
 
       {uiPhase === 'live_round' && (
-        <MinimapPanel onFinalize={onFinalizeGuess} canFinalizeGuess={canFinalizeGuess} guessSubmitted={guessSubmitted}>
+        <MinimapPanel
+          onFinalize={onFinalizeGuess}
+          canFinalizeGuess={canFinalizeGuess}
+          guessSubmitted={guessSubmitted}
+          reserveNativeStreetViewControls={!extension.available}
+        >
           {guessMapNode}
         </MinimapPanel>
       )}

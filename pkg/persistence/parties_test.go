@@ -47,12 +47,12 @@ func TestMapVisibleToUserHonorsCurrentVisibility(t *testing.T) {
 	}
 }
 
-func TestPartyReadQueryCastsNullableMapID(t *testing.T) {
+func TestPartyReadQueryPreservesNullableMapID(t *testing.T) {
 	body, err := os.ReadFile("../../db/queries/parties.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "COALESCE(l.map_id::text, '')") {
-		t.Fatal("party read query must cast nullable uuid map_id before coalescing with text")
+	if strings.Contains(string(body), "COALESCE(l.map_id::text, '')") {
+		t.Fatal("party read query must preserve nullable uuid map_id")
 	}
 }

@@ -16,7 +16,6 @@ import {
   type AppNavRoute,
 } from "../navigation";
 import { NotificationCenter } from "../../notifications/components/NotificationCenter";
-import { useGlobalRealtime } from "../../social/components/SocialRealtimeProvider";
 import { useOptionalHotkeys } from "../../hotkeys/components/HotkeyProvider";
 import { AppBackground } from "./AppBackground";
 import { AppNavTasks, type AppNavTask } from "./AppNavTasks";
@@ -47,9 +46,8 @@ export function AppShell({
   viewportLocked = false,
 }: AppShellProps) {
   const auth = useAuthState();
-  const globalRealtime = useGlobalRealtime();
   const globalTasks = useAppActivities();
-  const resolvedOnlinePlayers = onlinePlayers ?? globalRealtime.onlinePlayers;
+  const resolvedOnlinePlayers = onlinePlayers ?? auth.bootstrap?.global.onlinePlayers;
   return (
     <div className={cn("relative flex flex-col overflow-hidden font-body text-content-primary selection:bg-status-success/30", viewportLocked ? "h-screen" : "min-h-screen")}>
       <AppBackground blurred={backgroundBlurred} />

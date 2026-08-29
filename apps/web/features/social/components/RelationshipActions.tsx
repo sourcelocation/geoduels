@@ -9,13 +9,11 @@ export function RelationshipActions({
   player,
   state = player.relationship,
   requestId = player.requestId,
-  partyId,
 }: {
   accessToken: string;
   player: CompactPlayer;
   state?: RelationshipState;
   requestId?: string;
-  partyId?: string;
 }) {
   const queryClient = useQueryClient();
   const config = getRuntimeConfig();
@@ -25,12 +23,6 @@ export function RelationshipActions({
       if (action === "accept" || action === "decline" || action === "cancel") {
         if (!requestId) throw new Error("Request is no longer available");
         return socialClient.respondRequest(config, accessToken, requestId, action);
-      }
-      if (action === "invite") {
-        if (partyId) return socialClient.inviteToParty(config, accessToken, partyId, player.userId);
-        const result = await socialClient.createPartyAndInvite(config, accessToken, player.userId);
-        window.location.assign(`/party/${encodeURIComponent(result.party.inviteCode)}`);
-        return result;
       }
     },
     onSuccess: () => {
@@ -51,8 +43,6 @@ export function RelationshipActions({
   if (state === "outgoing_request") {
     return <Button size="sm" variant="secondary" onClick={() => mutation.mutate("cancel")} disabled={mutation.isPending}>Requested</Button>;
   }
-  if (state === "friends") {
-    return <Button size="sm" onClick={() => mutation.mutate("invite")} disabled={mutation.isPending}>Invite</Button>;
-  }
+  if (state === "friends") return null;
   return <Button size="sm" onClick={() => mutation.mutate("add")} disabled={mutation.isPending}>Add friend</Button>;
 }

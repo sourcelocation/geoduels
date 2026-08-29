@@ -39,30 +39,30 @@ SELECT owner_user_id, state FROM parties WHERE id = $1;
 
 -- name: GetPartySnapshotByID :one
 SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
-       COALESCE(l.active_match_id::text, l.started_match_id::text, '') AS active_match_id,
-       COALESCE(l.last_match_id::text, '') AS last_match_id,
-       COALESCE(l.started_match_id::text, '') AS started_match_id,
-       l.created_at, l.expires_at, l.config_json::text, COALESCE(l.map_id::text, '') AS map_id,
+       COALESCE(l.active_match_id, l.started_match_id) AS active_match_id,
+       l.last_match_id AS last_match_id,
+       l.started_match_id AS started_match_id,
+       l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
        COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
 WHERE l.id = $1;
 
 -- name: GetPartySnapshotByInviteCode :one
 SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
-       COALESCE(l.active_match_id::text, l.started_match_id::text, '') AS active_match_id,
-       COALESCE(l.last_match_id::text, '') AS last_match_id,
-       COALESCE(l.started_match_id::text, '') AS started_match_id,
-       l.created_at, l.expires_at, l.config_json::text, COALESCE(l.map_id::text, '') AS map_id,
+       COALESCE(l.active_match_id, l.started_match_id) AS active_match_id,
+       l.last_match_id AS last_match_id,
+       l.started_match_id AS started_match_id,
+       l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
        COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
 WHERE l.invite_code = $1;
 
 -- name: GetPartySnapshotByMatchID :one
 SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
-       COALESCE(l.active_match_id::text, l.started_match_id::text, '') AS active_match_id,
-       COALESCE(l.last_match_id::text, '') AS last_match_id,
-       COALESCE(l.started_match_id::text, '') AS started_match_id,
-       l.created_at, l.expires_at, l.config_json::text, COALESCE(l.map_id::text, '') AS map_id,
+       COALESCE(l.active_match_id, l.started_match_id) AS active_match_id,
+       l.last_match_id AS last_match_id,
+       l.started_match_id AS started_match_id,
+       l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
        COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
 WHERE l.active_match_id = $1 OR l.last_match_id = $1 OR l.started_match_id = $1;
@@ -109,7 +109,7 @@ ORDER BY ub.user_id ASC, ub.awarded_at DESC, ub.badge_code ASC;
 -- name: ListPartyMembers :many
 SELECT m.user_id, u.display_name, COALESCE(u.avatar_url, '') AS avatar_url,
        u.account_type = 'guest' AS is_guest, COALESCE(u.is_admin, false) AS is_admin,
-       COALESCE(u.selected_badge_code, 0) AS selected_badge_code, COALESCE(m.team_id::text, '') AS team_id,
+       COALESCE(u.selected_badge_code, 0) AS selected_badge_code, m.team_id AS team_id,
        m.role, m.ready, m.joined_at
 FROM party_members m JOIN users u ON u.id = m.user_id
 WHERE m.party_id = $1 AND m.left_at IS NULL

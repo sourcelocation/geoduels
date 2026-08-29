@@ -73,7 +73,7 @@ func (s *DB) CreatePlayerReportSignal(p CreatePlayerReportSignalParams) (Moderat
 	if e != nil {
 		return ModerationSignalCreated{}, e
 	}
-	np, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: id, SubjectUserID: r.SubjectUserID, SubjectName: textVal(r.SubjectDisplayName), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: string(r.ReasonCode), OccurredAt: r.OccurredAt.Time})
+	np, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: id, SubjectUserID: uuidVal(r.SubjectUserID), SubjectName: textVal(r.SubjectDisplayName), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: string(r.ReasonCode), OccurredAt: r.OccurredAt.Time})
 	if e = s.db.WithTx(tx).EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{Type: "moderation_signal_queued", DedupeKey: fmt.Sprintf("moderation_signal:%d:queued", id), PayloadJson: np}); e != nil {
 		return ModerationSignalCreated{}, e
 	}
@@ -141,7 +141,11 @@ func (s *DB) listSignals(ctx context.Context, u pgtype.UUID, n int32) ([]Moderat
 	}
 	o := make([]ModerationSignalSummary, 0, len(r))
 	for _, x := range r {
-		o = append(o, ModerationSignalSummary{ID: x.SignalID, SubjectUserID: x.SubjectUserID, SubjectName: textVal(x.SubjectDisplayName), SignalType: x.SignalType, Source: string(x.Source), Severity: string(x.Severity), EvidenceStrength: string(x.EvidenceStrength), DetectorKey: x.DetectorKey, DetectorVersion: x.DetectorVersion, ReasonCode: x.ReasonCode, Score: x.Score, RecommendedQueue: x.RecommendedQueue, ReporterUserID: textVal(x.ReporterUserID), ReporterName: textVal(x.ReporterDisplayName), MatchID: textVal(x.MatchID), Payload: json.RawMessage(x.PayloadJson), OccurredAt: x.OccurredAt.Time, CreatedAt: x.CreatedAt.Time})
+		item := ModerationSignalSummary{ID: x.SignalID, SubjectUserID: uuidVal(x.SubjectUserID), SubjectName: textVal(x.SubjectDisplayName), SignalType: x.SignalType, Source: string(x.Source), Severity: string(x.Severity), EvidenceStrength: string(x.EvidenceStrength), DetectorKey: x.DetectorKey, DetectorVersion: x.DetectorVersion, ReasonCode: x.ReasonCode, Score: x.Score, RecommendedQueue: x.RecommendedQueue, ReporterUserID: uuidVal(x.ReporterUserID), ReporterName: textVal(x.ReporterDisplayName), MatchID: uuidVal(x.MatchID), Payload: json.RawMessage(x.PayloadJson), OccurredAt: x.OccurredAt.Time, CreatedAt: x.CreatedAt.Time, ReviewedAt: x.ReviewedAt.Time, ReviewedBy: uuidVal(x.ReviewedBy)}
+		if x.Outcome.Valid {
+			item.Outcome = string(x.Outcome.GdModerationOutcome)
+		}
+		o = append(o, item)
 	}
 	return o, nil
 }
@@ -152,15 +156,9 @@ func (s *DB) listModerationLog(ctx context.Context, u pgtype.UUID, n int32) ([]M
 	}
 	o := make([]ModerationAuditLogEntry, 0, len(r))
 	for _, x := range r {
-		o = append(o, ModerationAuditLogEntry{ID: x.LogID, SubjectUserID: textVal(x.SubjectUserID), SubjectName: textVal(x.SubjectDisplayName), ActorUserID: textVal(x.ActorUserID), ActorName: textVal(x.ActorDisplayName), Action: string(x.Action), Reason: x.Reason, SignalIDs: x.SignalIds, Metadata: json.RawMessage(x.Metadata), CreatedAt: x.CreatedAt.Time})
+		o = append(o, ModerationAuditLogEntry{ID: x.LogID, SubjectUserID: uuidVal(x.SubjectUserID), SubjectName: textVal(x.SubjectDisplayName), ActorUserID: uuidVal(x.ActorUserID), ActorName: textVal(x.ActorDisplayName), Action: string(x.Action), Reason: x.Reason, ExpiresAt: x.ExpiresAt.Time, SignalIDs: x.SignalIds, Metadata: json.RawMessage(x.Metadata), CreatedAt: x.CreatedAt.Time})
 	}
 	return o, nil
-}
-func textVal(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	return fmt.Sprint(v)
 }
 func normalizeReportCategory(c string) string {
 	switch strings.ToLower(strings.TrimSpace(c)) {
@@ -194,6 +192,6 @@ func enqueueSignalNotification(ctx context.Context, tx pgx.Tx, signalID int64) e
 	if err != nil {
 		return err
 	}
-	p, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: signalID, SubjectUserID: r.SubjectUserID, SubjectName: textVal(r.SubjectDisplayName), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: r.ReasonCode, OccurredAt: r.OccurredAt.Time})
+	p, _ := json.Marshal(ModerationSignalNotificationPayload{SignalID: signalID, SubjectUserID: uuidVal(r.SubjectUserID), SubjectName: textVal(r.SubjectDisplayName), Severity: string(r.Severity), EvidenceStrength: string(r.EvidenceStrength), ReasonCode: r.ReasonCode, OccurredAt: r.OccurredAt.Time})
 	return db.New(tx).EnqueueNotificationOutbox(ctx, db.EnqueueNotificationOutboxParams{Type: "moderation_signal_queued", DedupeKey: fmt.Sprintf("moderation_signal:%d:queued", signalID), PayloadJson: p})
 }

@@ -208,7 +208,7 @@ func (s *DB) GetPartyByInviteCode(inviteCode string) (contracts.PartySnapshot, b
 			State: string(row.State), Mode: string(row.Mode), MapScope: row.MapScope,
 			ActiveMatchID: anyText(row.ActiveMatchID), LastMatchID: anyText(row.LastMatchID), StartedMatchID: anyText(row.StartedMatchID),
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
-			ConfigJSON: row.LConfigJson, MapID: anyText(row.MapID),
+			ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
 			MapName: row.DisplayName, MapLocationCount: row.LocationCount,
 		}, err
 	})
@@ -230,7 +230,7 @@ func (s *DB) GetPartyByMatchID(matchID string) (contracts.PartySnapshot, bool, e
 			State: string(row.State), Mode: string(row.Mode), MapScope: row.MapScope,
 			ActiveMatchID: anyText(row.ActiveMatchID), LastMatchID: anyText(row.LastMatchID), StartedMatchID: anyText(row.StartedMatchID),
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
-			ConfigJSON: row.LConfigJson, MapID: anyText(row.MapID),
+			ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
 			MapName: row.DisplayName, MapLocationCount: row.LocationCount,
 		}, err
 	})
@@ -616,7 +616,7 @@ func toPartySnapshotRow(row db.GetPartySnapshotByIDRow) partySnapshotRow {
 		State: string(row.State), Mode: string(row.Mode), MapScope: row.MapScope,
 		ActiveMatchID: anyText(row.ActiveMatchID), LastMatchID: anyText(row.LastMatchID), StartedMatchID: anyText(row.StartedMatchID),
 		CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
-		ConfigJSON: row.LConfigJson, MapID: anyText(row.MapID),
+		ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
 		MapName: row.DisplayName, MapLocationCount: row.LocationCount,
 	}
 }
@@ -699,8 +699,11 @@ func (s *DB) selectedPartyBadges(ctx context.Context, selected map[string]string
 }
 
 func anyText(v any) string {
-	if s, ok := v.(string); ok {
-		return s
+	switch value := v.(type) {
+	case string:
+		return value
+	case pgtype.UUID:
+		return uuidVal(value)
 	}
 	return ""
 }

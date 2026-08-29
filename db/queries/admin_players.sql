@@ -24,7 +24,7 @@ select is_admin or is_moderator from users where id=$1;
 -- name: ListUserRoles :many
 select u.id, coalesce(nullif(u.display_name, ''), u.id::text) AS display_name, coalesce(u.email, '') AS email,
  case when u.is_admin then 'admin' else 'moderator' end AS role,
- coalesce(last_grant.actor_user_id::text, '') AS actor_user_id, coalesce(last_grant.created_at, u.created_at) AS granted_at,
+ last_grant.actor_user_id AS actor_user_id, coalesce(last_grant.created_at, u.created_at) AS granted_at,
  null::timestamptz AS revoked_at, coalesce(last_grant.reason, '') AS last_reason
 from users u left join lateral (select actor_user_id, created_at, reason from moderation_log where subject_user_id=u.id and action='role_granted' order by created_at desc,id desc limit 1) last_grant on true
 where u.is_admin or u.is_moderator order by u.is_admin desc, coalesce(last_grant.created_at,u.created_at) desc;
@@ -37,7 +37,7 @@ update users set is_admin=case when sqlc.arg(role)='admin' then false else is_ad
 
 -- name: SearchAdminPlayers :many
 select
-    u.id::text as user_id,
+    u.id as user_id,
     coalesce(u.email, '') as email,
     coalesce(nullif(u.display_name, ''), ui.provider_name, u.id::text) as display_name,
     coalesce(u.avatar_url, ui.avatar_url, '') as avatar_url,

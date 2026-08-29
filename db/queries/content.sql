@@ -14,7 +14,7 @@ ON CONFLICT (action, discord_user_id) WHERE processed_at IS NULL DO UPDATE SET
 SELECT id,slug,title,markdown,published,created_at,updated_at FROM changelog_posts WHERE slug=sqlc.arg(slug) AND (sqlc.arg(include_unpublished)::boolean=false OR published=true);
 
 -- name: GetSetting :one
-SELECT value_json::text FROM site_settings WHERE key=$1;
+SELECT value_json FROM site_settings WHERE key=$1;
 
 -- name: ListChangelogPosts :many
 SELECT id,slug,title,markdown,published,created_at,updated_at FROM changelog_posts WHERE ($1::boolean OR published=true) ORDER BY updated_at DESC,id DESC;

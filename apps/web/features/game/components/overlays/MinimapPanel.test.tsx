@@ -57,6 +57,49 @@ describe('MinimapPanel', () => {
     expect(panel.firstElementChild).toHaveClass('-inset-24');
   });
 
+  it('reserves space for native Street View controls by default and drops it when the extension is present', () => {
+    mockDesktop(true);
+    const { rerender } = render(
+      <MinimapPanel onFinalize={vi.fn()} canFinalizeGuess={false} guessSubmitted={false}>
+        <div>Map</div>
+      </MinimapPanel>
+    );
+
+    expect(screen.getByTestId('minimap-panel')).toHaveStyle({ right: '80px' });
+
+    rerender(
+      <MinimapPanel
+        onFinalize={vi.fn()}
+        canFinalizeGuess={false}
+        guessSubmitted={false}
+        reserveNativeStreetViewControls={false}
+      >
+        <div>Map</div>
+      </MinimapPanel>
+    );
+
+    expect(screen.getByTestId('minimap-panel')).toHaveStyle({ right: '16px' });
+  });
+
+  it('keeps equal left and right spacing on mobile when native Street View controls are hidden', () => {
+    mockDesktop(false);
+    render(
+      <MinimapPanel
+        onFinalize={vi.fn()}
+        canFinalizeGuess={false}
+        guessSubmitted={false}
+        reserveNativeStreetViewControls={false}
+      >
+        <div>Map</div>
+      </MinimapPanel>
+    );
+
+    const panel = screen.getByTestId('minimap-panel');
+    expect(panel).toHaveClass('p-3', 'right-0', 'w-full');
+    expect(panel).not.toHaveStyle({ right: '16px' });
+    expect(panel).not.toHaveStyle({ right: '80px' });
+  });
+
   it('does not show the resize handle on mobile', () => {
     mockDesktop(false);
     render(
@@ -97,8 +140,10 @@ describe('MinimapPanel', () => {
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 60, clientY: 70 });
 
     expect(panel).toHaveStyle({ width: '840px', height: '590px' });
+    expect(panel).not.toHaveClass('transition-[width,height]');
 
     fireEvent.pointerUp(handle, { pointerId: 1, clientX: 60, clientY: 70 });
     expect(window.localStorage.getItem('geoduels.minimapExpandedSize')).toBe('{"width":840,"height":590}');
+    expect(panel).toHaveClass('transition-[width,height]');
   });
 });

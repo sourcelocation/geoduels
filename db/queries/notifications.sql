@@ -9,7 +9,7 @@ INSERT INTO notification_outbox(type,dedupe_key,payload_json,next_attempt_at) VA
 SELECT id,type,category,payload_json,read_at,created_at FROM user_notifications WHERE user_id=$1 AND archived_at IS NULL AND (sqlc.arg(before_id)=0 OR id<sqlc.arg(before_id)) AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC,id DESC LIMIT sqlc.arg(row_limit);
 
 -- name: ListReporters :many
-SELECT DISTINCT reporter_user_id::text FROM moderation_signals WHERE subject_user_id=$1 AND reporter_user_id IS NOT NULL;
+SELECT DISTINCT reporter_user_id FROM moderation_signals WHERE subject_user_id=$1 AND reporter_user_id IS NOT NULL;
 
 -- name: ListUserNotifications :many
 SELECT id,type,payload_json,created_at FROM user_notifications WHERE user_id=$1 AND read_at IS NULL ORDER BY created_at DESC,id DESC LIMIT $2;

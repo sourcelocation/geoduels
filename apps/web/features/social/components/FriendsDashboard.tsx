@@ -6,20 +6,25 @@ import { Button } from "../../../components/ui/button";
 import { AppPanel } from "../../../components/ui/compositions";
 import { LobbyInput } from "../../lobby/components/lobby-primitives";
 import { getRuntimeConfig } from "../../../lib/runtime-config";
+import { useFriendsPage } from "../hooks/useFriendsPage";
 import { socialClient } from "../lib/social-client";
 import type { CompactPlayer } from "../types";
 import { CompactPlayerRow } from "./CompactPlayerRow";
+import { InviteToPartyButton } from "./InviteToPartyButton";
+import { PlayerListSection } from "./PlayerListSection";
 import { RelationshipActions } from "./RelationshipActions";
 
 export function FriendsDashboard({
   accessToken,
   isGuest,
   partyId,
+  memberUserIds,
   partyCard,
 }: {
   accessToken?: string;
   isGuest: boolean;
   partyId?: string;
+  memberUserIds?: readonly string[];
   partyCard?: React.ReactNode;
 }) {
   const config = getRuntimeConfig();
@@ -31,27 +36,22 @@ export function FriendsDashboard({
     return () => window.clearTimeout(timer);
   }, [query]);
   const enabled = !!accessToken && !isGuest;
-  const friends = useQuery({
-    queryKey: ["social", "friends"],
-    enabled,
-    queryFn: () => socialClient.friends(config, accessToken!),
-    staleTime: 20_000,
-  });
-  const incoming = useQuery({
-    queryKey: ["social", "requests", "incoming"],
-    enabled,
-    queryFn: () => socialClient.requests(config, accessToken!, "incoming"),
-  });
-  const outgoing = useQuery({
-    queryKey: ["social", "requests", "outgoing"],
-    enabled,
-    queryFn: () => socialClient.requests(config, accessToken!, "outgoing"),
-  });
-  const recent = useQuery({
-    queryKey: ["social", "recent"],
-    enabled,
-    queryFn: () => socialClient.recent(config, accessToken!),
-  });
+  const page = useFriendsPage(accessToken, enabled, partyId);
+  const memberIds = new Set(memberUserIds || []);
+  const friendActions = (player: CompactPlayer) => (
+    <>
+      <RelationshipActions accessToken={accessToken!} player={player} />
+      {partyId && player.relationship === "friends" && !memberIds.has(player.userId) ? (
+        <InviteToPartyButton
+          accessToken={accessToken!}
+          partyId={partyId}
+          userId={player.userId}
+          displayName={player.displayName}
+          partyInvite={player.partyInvite || page.data?.friends.find((friend) => friend.userId === player.userId)?.partyInvite}
+        />
+      ) : null}
+    </>
+  );
   const search = useQuery({
     queryKey: ["social", "search", debouncedQuery],
     enabled: enabled && debouncedQuery.length >= 2,
@@ -79,12 +79,12 @@ export function FriendsDashboard({
   }
 
   const searchPlayers = search.data?.players || [];
-  const allFriends = friends.data?.friends || [];
+  const allFriends = page.data?.friends || [];
   const offlineFriends = allFriends.filter((player) => player.presenceStatus !== "online");
   const onlineFriends = allFriends.filter((player) => player.presenceStatus === "online");
   const pendingRequests = [
-    ...(incoming.data?.requests || []).map((request) => ({ ...request, direction: "incoming" as const })),
-    ...(outgoing.data?.requests || []).map((request) => ({ ...request, direction: "outgoing" as const })),
+    ...(page.data?.requests.incoming || []).map((request) => ({ ...request, direction: "incoming" as const })),
+    ...(page.data?.requests.outgoing || []).map((request) => ({ ...request, direction: "outgoing" as const })),
   ];
   return (
     <div className="w-full max-w-[820px] space-y-5">
@@ -113,20 +113,36 @@ export function FriendsDashboard({
           />
         </div>
         {debouncedQuery.length >= 2 ? (
-          <PlayerSection title="Search results" players={searchPlayers} token={accessToken!} partyId={partyId} loading={search.isLoading} />
+          <PlayerListSection
+            title="Search results"
+            players={searchPlayers}
+            loading={search.isLoading}
+            renderActions={friendActions}
+          />
         ) : null}
 
-        {pendingRequests.length ? <RequestSection requests={pendingRequests} token={accessToken!} partyId={partyId} /> : null}
-        {friends.isLoading ? <AsyncState status="loading" message="Loading friends" className="mt-5" /> : null}
-        {!friends.isLoading && !allFriends.length ? <AsyncState status="empty" message="No friends (yet!)" className="mt-5" /> : null}
-        {offlineFriends.length ? <PlayerSection title="Offline" players={offlineFriends} token={accessToken!} partyId={partyId} /> : null}
-        {onlineFriends.length ? <PlayerSection title="Online" players={onlineFriends} token={accessToken!} partyId={partyId} /> : null}
-        {(recent.data?.players.length || 0) > 0 ? (
-          <PlayerSection
+        {pendingRequests.length ? <RequestSection requests={pendingRequests} token={accessToken!} /> : null}
+        {page.isLoading ? <AsyncState status="loading" message="Loading friends" className="mt-5" /> : null}
+        {!page.isLoading && !allFriends.length ? <AsyncState status="empty" message="No friends (yet!)" className="mt-5" /> : null}
+        {onlineFriends.length ? (
+          <PlayerListSection
+            title="Online"
+            players={onlineFriends}
+            renderActions={friendActions}
+          />
+        ) : null}
+        {offlineFriends.length ? (
+          <PlayerListSection
+            title="Offline"
+            players={offlineFriends}
+            renderActions={friendActions}
+          />
+        ) : null}
+        {(page.data?.recentPlayers.length || 0) > 0 ? (
+          <PlayerListSection
             title="Recently played"
-            players={(recent.data?.players || []).slice(0, 3)}
-            token={accessToken!}
-            partyId={partyId}
+            players={(page.data?.recentPlayers || []).slice(0, 3)}
+            renderActions={friendActions}
           />
         ) : null}
       </AppPanel>
@@ -134,47 +150,12 @@ export function FriendsDashboard({
   );
 }
 
-function PlayerSection({
-  title,
-  players,
-  token,
-  partyId,
-  loading,
-  empty,
-}: {
-  title: string;
-  players: CompactPlayer[];
-  token: string;
-  partyId?: string;
-  loading?: boolean;
-  empty?: string;
-}) {
-  return (
-    <section className="mt-5">
-      <SectionHeader title={title} className="mb-3" />
-      <InsetList>
-        {players.map((player) => (
-          <CompactPlayerRow
-            key={player.userId}
-            player={player}
-            actions={<RelationshipActions accessToken={token} player={player} partyId={partyId} />}
-          />
-        ))}
-        {!players.length && !loading && empty ? <AsyncState status="empty" message={empty} /> : null}
-        {loading ? <AsyncState status="loading" message="Loading players" /> : null}
-      </InsetList>
-    </section>
-  );
-}
-
 function RequestSection({
   requests,
   token,
-  partyId,
 }: {
   requests: Array<{ id: string; player: CompactPlayer; direction: "incoming" | "outgoing" }>;
   token: string;
-  partyId?: string;
 }) {
   return (
     <section className="mt-5">
@@ -185,7 +166,7 @@ function RequestSection({
             key={request.id}
             player={{ ...request.player, requestId: request.id }}
             meta={<span className="text-label text-content-secondary">{request.direction === "incoming" ? "Incoming" : "Sent"}</span>}
-            actions={<RelationshipActions accessToken={token} player={{ ...request.player, requestId: request.id }} partyId={partyId} />}
+            actions={<RelationshipActions accessToken={token} player={{ ...request.player, requestId: request.id }} />}
           />
         ))}
       </InsetList>

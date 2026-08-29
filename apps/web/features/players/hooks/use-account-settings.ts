@@ -6,7 +6,6 @@ import {
   requestDeleteAccount,
   requestDiscordStart,
   requestGoogleStart,
-  requestMe,
   requestUnlinkAuthProvider,
 } from "../../auth/lib/auth-client";
 import { useAuthState } from "../../auth/components/AuthProvider";
@@ -32,21 +31,20 @@ export function useAccountSettings(profilePath: string) {
     enabled: auth.status !== "bootstrapping" && !!auth.accessToken,
     queryFn: async (): Promise<AccountData | null> => {
       if (!auth.accessToken || !auth.userId) return null;
-      const response = await requestMe(config, auth.accessToken);
-      if (!response.ok) throw new Error("Failed to load account");
-      const profile = await response.json();
       return {
         accessToken: auth.accessToken,
-        email: profile.email || auth.email || "Guest account",
-        isGuest: !!profile.isGuest,
-        linkedProviders: auth.session?.linkedProviders || [],
+        email: auth.bootstrap?.viewer?.email || auth.email || "Guest account",
+        isGuest: auth.bootstrap?.viewer?.accountType === "guest",
+        linkedProviders: auth.bootstrap?.viewer?.linkedProviders || auth.session?.linkedProviders || [],
       };
     },
     staleTime: 30_000,
   });
   const account = accountQuery.data;
-  const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: ["profile-account-settings", auth.userId || "anonymous"] });
+  const refresh = async () => {
+    await authGateway.bootstrap({ force: true });
+    await queryClient.invalidateQueries({ queryKey: ["profile-account-settings", auth.userId || "anonymous"] });
+  };
   const fail = (fallback: string) => (value: unknown) =>
     setError(value instanceof Error ? value.message : fallback);
   const unlinkMutation = useMutation({

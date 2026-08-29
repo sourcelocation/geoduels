@@ -137,15 +137,15 @@ WHERE id IN (
 -- name: EndMatchSessions :exec
 UPDATE match_sessions
 SET state = 'ended', ended_at = COALESCE(ended_at, now()), lease_expires_at = NULL, updated_at = now()
-WHERE match_id::text = ANY($1::text[]);
+WHERE match_id = ANY($1::uuid[]);
 
 -- name: EndRuntimeMatches :exec
 UPDATE runtime_matches
 SET state = 'ended', ended_at = COALESCE(ended_at, now())
-WHERE id::text = ANY($1::text[]);
+WHERE id = ANY($1::uuid[]);
 
 -- name: ListLegacyReplays :many
-SELECT match_id, replay_json::text AS replay_json
+SELECT match_id, replay_json
 FROM match_history
 WHERE replay_zstd IS NULL AND replay_json IS NOT NULL
   AND (replay_expires_at IS NULL OR replay_expires_at > now())
@@ -161,7 +161,7 @@ ORDER BY location_count DESC, country ASC
 LIMIT 64;
 
 -- name: ListStaleMatchSessionIDs :many
-SELECT match_id::text AS match_id
+SELECT match_id
 FROM match_sessions
 WHERE state = 'live' AND lease_expires_at < now() - sqlc.arg(stale_after)::interval
 ORDER BY lease_expires_at
@@ -171,17 +171,17 @@ FOR UPDATE SKIP LOCKED;
 -- name: ReopenPartiesForEndedSessions :exec
 UPDATE parties
 SET state = 'open',
-    last_match_id = CASE WHEN active_match_id::text = ANY($1::text[]) THEN active_match_id ELSE started_match_id END,
+    last_match_id = CASE WHEN active_match_id = ANY($1::uuid[]) THEN active_match_id ELSE started_match_id END,
     active_match_id = NULL,
     started_match_id = NULL,
     updated_at = now()
-WHERE active_match_id::text = ANY($1::text[]) OR started_match_id::text = ANY($1::text[]);
+WHERE active_match_id = ANY($1::uuid[]) OR started_match_id = ANY($1::uuid[]);
 
 -- name: ResetPartyMembersForEndedSessions :exec
 UPDATE party_members pm
 SET ready = false
 FROM match_sessions ms
-WHERE ms.match_id::text = ANY($1::text[]) AND pm.party_id = ms.source_party_id;
+WHERE ms.match_id = ANY($1::uuid[]) AND pm.party_id = ms.source_party_id;
 
 -- name: TryAdvisoryLock :one
 

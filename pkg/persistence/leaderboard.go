@@ -32,7 +32,7 @@ func (s *DB) ListLeaderboard(ctx context.Context, mode, seasonID string, limit, 
 	}
 	entries := make([]LeaderboardEntry, 0, limit)
 	for _, row := range rows {
-		entries = append(entries, LeaderboardEntry{Rank: int(row.Rank), UserID: row.UserID, DisplayName: row.DisplayName.String, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), GamesPlayed: int(row.GamesPlayed), Wins: int(row.Wins)})
+		entries = append(entries, LeaderboardEntry{Rank: int(row.Rank), UserID: uuidVal(row.UserID), DisplayName: row.DisplayName.String, AvatarURL: row.AvatarUrl, MMR: int(row.Mmr), GamesPlayed: int(row.GamesPlayed), Wins: int(row.Wins)})
 	}
 	return entries, nil
 }

@@ -23,7 +23,7 @@ delete from maps m where m.id=sqlc.arg(map_id) and (m.owner_user_id=sqlc.arg(use
  delete from locations where map_storage_id=$1;
 
 -- name: FavoriteVisibility :one
-select exists(select 1 from maps visible_map where visible_map.id=$1 and visible_map.archived_at is null and (visible_map.owner_user_id is null or visible_map.official_at is not null or visible_map.owner_user_id=$2 or visible_map.visibility in ('public','unlisted'))) as visible, coalesce((select owner_map.owner_user_id::text from maps owner_map where owner_map.id=$1 and owner_map.archived_at is null),'')::text as owner_user_id;
+select exists(select 1 from maps visible_map where visible_map.id=$1 and visible_map.archived_at is null and (visible_map.owner_user_id is null or visible_map.official_at is not null or visible_map.owner_user_id=$2 or visible_map.visibility in ('public','unlisted'))) as visible, (select owner_map.owner_user_id from maps owner_map where owner_map.id=$1 and owner_map.archived_at is null) as owner_user_id;
 
 -- name: InsertCountryStats :exec
 insert into map_country_stats(map_id,country,location_count) select sqlc.arg(map_id),coalesce(nullif(country,''),'Unknown'),count(*)::int from locations where map_storage_id=sqlc.arg(map_storage_id) group by coalesce(nullif(country,''),'Unknown');
@@ -36,7 +36,7 @@ select sqlc.arg(map_storage_id), unnest(sqlc.arg(lat_e7)::int[]), unnest(sqlc.ar
 insert into map_upload_events(user_id,map_id,location_count) values($1,$2,$3);
 
 -- name: LockMapOwner :one
-select coalesce(owner_user_id::text,'')::text as owner_user_id from maps where id=$1 and archived_at is null for update;
+select owner_user_id from maps where id=$1 and archived_at is null for update;
 
 -- name: MarkMapReady :exec
 update maps set status='ready',location_count=sqlc.arg(location_count),content_hash=sqlc.arg(content_hash),rejected_location_count=sqlc.arg(rejected_location_count),updated_at=now() where id=sqlc.arg(map_id);

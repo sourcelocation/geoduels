@@ -287,14 +287,14 @@ func (s *DB) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.
 		return contracts.PlayerBadge{}, false, err
 	}
 	defer tx.Rollback(ctx)
-	var userID string
-	userID, err = db.New(tx).FindClaimedUser(ctx, nickname)
+	userUUID, err := db.New(tx).FindClaimedUser(ctx, nickname)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return contracts.PlayerBadge{}, false, err
 	}
-	if userID == "" {
+	if errors.Is(err, pgx.ErrNoRows) || !userUUID.Valid {
 		return contracts.PlayerBadge{}, false, ErrBadgeUserNotFound
 	}
+	userID := uuidVal(userUUID)
 	changed, err := upsertBadgeTx(ctx, tx, userID, def.Code, 1, 0, true)
 	if err != nil {
 		return contracts.PlayerBadge{}, false, err
@@ -437,7 +437,7 @@ func (s *DB) AwardDiscordServerMemberByDiscordID(discordUserID string) (bool, er
 		}
 		return false, err
 	}
-	awarded, err := awardBadgeTx(ctx, tx, userID, "discord-server-member")
+	awarded, err := awardBadgeTx(ctx, tx, uuidVal(userID), "discord-server-member")
 	if err != nil {
 		return false, err
 	}
@@ -510,7 +510,7 @@ func (s *DB) GetDiscordLinkedUser(discordUserID string) (DiscordLinkedUser, bool
 		}
 		return DiscordLinkedUser{}, false, err
 	}
-	user.UserID, user.DiscordUserID, user.HighestEloBadgeMMR = row.UiUserID, row.ProviderUserID, int(row.HighestEloBadgeMmr)
+	user.UserID, user.DiscordUserID, user.HighestEloBadgeMMR = uuidVal(row.UserID), row.ProviderUserID, int(row.HighestEloBadgeMmr)
 	return user, true, nil
 }
 
@@ -547,7 +547,7 @@ func (s *DB) AwardSupporterByDonationRef(ref string) (bool, error) {
 		}
 		return false, err
 	}
-	awarded, err := awardBadgeTx(ctx, tx, userID, "supporter")
+	awarded, err := awardBadgeTx(ctx, tx, uuidVal(userID), "supporter")
 	if err != nil {
 		return false, err
 	}

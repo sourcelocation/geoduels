@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1.7
+
+# Release binaries are compiled together by CI so the six services share one
+# Go module/build cache. This image only packages the selected static binary.
+FROM gcr.io/distroless/static-debian12
+ARG BINARY
+COPY dist/release/${BINARY} /service
+ENTRYPOINT ["/service"]

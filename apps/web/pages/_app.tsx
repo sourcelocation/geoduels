@@ -6,7 +6,6 @@ import type { ReactElement, ReactNode } from 'react';
 import { useState } from 'react';
 import { TooltipProvider } from '../components/ui/Tooltip';
 import { HotkeyProvider } from '../features/hotkeys/components/HotkeyProvider';
-import { SocialRealtimeProvider } from '../features/social/components/SocialRealtimeProvider';
 import { AuthProvider } from '../features/auth/components/AuthProvider';
 import { AppActivityProvider } from '../features/app-shell/components/AppActivityProvider';
 import 'leaflet/dist/leaflet.css';
@@ -46,13 +45,11 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
         <TooltipProvider>
           <QueryClientProvider client={queryClient}>
             <AuthProvider>
-              <SocialRealtimeProvider>
-                <AppActivityProvider>
-                  <HotkeyProvider>
-                    {getLayout(<Component {...pageProps} />)}
-                  </HotkeyProvider>
-                </AppActivityProvider>
-              </SocialRealtimeProvider>
+              <AppActivityProvider>
+                <HotkeyProvider>
+                  {getLayout(<Component {...pageProps} />)}
+                </HotkeyProvider>
+              </AppActivityProvider>
             </AuthProvider>
           </QueryClientProvider>
         </TooltipProvider>

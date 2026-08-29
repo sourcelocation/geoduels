@@ -22,24 +22,6 @@ func writePreferences(w http.ResponseWriter, preferences preferencesdomain.UserP
 	})
 }
 
-func (a *api) userPreferences(w http.ResponseWriter, r *http.Request) {
-	claims, err := a.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if a.preferences == nil {
-		http.Error(w, "preferences unavailable", http.StatusNotImplemented)
-		return
-	}
-	preferences, err := a.preferences.Get(r.Context(), claims.Sub)
-	if err != nil {
-		http.Error(w, "failed to load preferences", http.StatusInternalServerError)
-		return
-	}
-	writePreferences(w, preferences)
-}
-
 func (a *api) updateUserPreferences(w http.ResponseWriter, r *http.Request) {
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {

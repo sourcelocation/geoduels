@@ -29,7 +29,9 @@ This creates production Chrome and Firefox ZIP files under
 ### Chrome
 
 Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
-and select this directory.
+and select `dist/extensions/geoduels-enhancer/chrome` after running the package
+command. Brave uses the same Chromium extension package at
+`brave://extensions`.
 
 ### Firefox
 

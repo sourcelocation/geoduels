@@ -8,6 +8,7 @@ type Props = {
   onFinalize: () => void;
   canFinalizeGuess: boolean;
   guessSubmitted: boolean;
+  reserveNativeStreetViewControls?: boolean;
 };
 
 type MinimapSize = {
@@ -16,15 +17,16 @@ type MinimapSize = {
 };
 
 const DESKTOP_BREAKPOINT_PX = 768;
-const RIGHT_GUTTER_PX = 80;
+const NATIVE_CONTROL_GUTTER_PX = 80;
+const EDGE_INSET_PX = 16;
 const MIN_EXPANDED_SIZE: MinimapSize = { width: 460, height: 360 };
 const EXPANDED_SIZE_STORAGE_KEY = 'geoduels.minimapExpandedSize';
 
-function clampExpandedSize(size: MinimapSize): MinimapSize {
+function clampExpandedSize(size: MinimapSize, rightOffset: number): MinimapSize {
   if (typeof window === 'undefined') return size;
 
   return {
-    width: Math.round(Math.min(Math.max(size.width, MIN_EXPANDED_SIZE.width), window.innerWidth - RIGHT_GUTTER_PX - 16)),
+    width: Math.round(Math.min(Math.max(size.width, MIN_EXPANDED_SIZE.width), window.innerWidth - rightOffset - 16)),
     height: Math.round(Math.min(Math.max(size.height, MIN_EXPANDED_SIZE.height), window.innerHeight - 32))
   };
 }
@@ -35,23 +37,30 @@ function loadExpandedSize(): MinimapSize | null {
     if (!stored) return null;
     const parsed = JSON.parse(stored) as Partial<MinimapSize>;
     if (!Number.isFinite(parsed.width) || !Number.isFinite(parsed.height)) return null;
-    return clampExpandedSize({ width: Number(parsed.width), height: Number(parsed.height) });
+    return { width: Number(parsed.width), height: Number(parsed.height) };
   } catch {
     return null;
   }
 }
 
-export default function MinimapPanel({ children, onFinalize, canFinalizeGuess, guessSubmitted }: Props) {
+export default function MinimapPanel({
+  children,
+  onFinalize,
+  canFinalizeGuess,
+  guessSubmitted,
+  reserveNativeStreetViewControls = true,
+}: Props) {
   const GESTURE_MOVE_THRESHOLD_PX = 6;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const activePointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
-  const activeResizeRef = useRef<({ id: number; x: number; y: number } & MinimapSize) | null>(null);
+  const activeResizeRef = useRef<({ id: number; x: number; y: number; lastSize?: MinimapSize } & MinimapSize) | null>(null);
   const resizeLockedRef = useRef(false);
   const suppressNextPanelClickRef = useRef(false);
   const [desktopHovered, setDesktopHovered] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [expandedSize, setExpandedSize] = useState<MinimapSize | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -76,8 +85,9 @@ export default function MinimapPanel({ children, onFinalize, canFinalizeGuess, g
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setExpandedSize(loadExpandedSize());
-  }, []);
+    const stored = loadExpandedSize();
+    setExpandedSize(stored ? clampExpandedSize(stored, reserveNativeStreetViewControls ? NATIVE_CONTROL_GUTTER_PX : EDGE_INSET_PX) : stored);
+  }, [reserveNativeStreetViewControls]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -110,7 +120,12 @@ export default function MinimapPanel({ children, onFinalize, canFinalizeGuess, g
   }, [isDesktop]);
 
   const expanded = isDesktop ? desktopHovered : mobileExpanded;
-  const reserveRightGutter = isDesktop || !mobileExpanded;
+  const reserveNativeGutter = reserveNativeStreetViewControls && (isDesktop || !mobileExpanded);
+  const rightOffset = reserveNativeGutter
+    ? NATIVE_CONTROL_GUTTER_PX
+    : isDesktop
+      ? EDGE_INSET_PX
+      : 0;
   const finalizeLabel = guessSubmitted ? 'Waiting for opponent...' : canFinalizeGuess ? 'Guess' : 'Place Pin';
 
   const beginPointerGesture = (event: ReactPointerEvent) => {
@@ -176,31 +191,41 @@ export default function MinimapPanel({ children, onFinalize, canFinalizeGuess, g
     };
     resizeLockedRef.current = true;
     setDesktopHovered(true);
+    setIsResizing(true);
+  };
+
+  const applyExpandedSize = (size: MinimapSize) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    panel.style.width = `${size.width}px`;
+    panel.style.height = `${size.height}px`;
   };
 
   const resize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const activeResize = activeResizeRef.current;
     if (!activeResize || activeResize.id !== event.pointerId) return;
 
-    setExpandedSize(clampExpandedSize({
+    const nextSize = clampExpandedSize({
       width: activeResize.width + activeResize.x - event.clientX,
       height: activeResize.height + activeResize.y - event.clientY
-    }));
+    }, rightOffset);
+    applyExpandedSize(nextSize);
+    activeResizeRef.current = { ...activeResize, lastSize: nextSize };
   };
 
   const finishResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (activeResizeRef.current?.id !== event.pointerId) return;
+    const nextSize = activeResizeRef.current.lastSize;
     activeResizeRef.current = null;
+    setIsResizing(false);
+    if (!nextSize) return;
 
-    setExpandedSize((currentSize) => {
-      if (!currentSize) return currentSize;
-      try {
-        window.localStorage.setItem(EXPANDED_SIZE_STORAGE_KEY, JSON.stringify(currentSize));
-      } catch {
-        // Resizing still works when browser storage is unavailable.
-      }
-      return currentSize;
-    });
+    setExpandedSize(nextSize);
+    try {
+      window.localStorage.setItem(EXPANDED_SIZE_STORAGE_KEY, JSON.stringify(nextSize));
+    } catch {
+      // Resizing still works when browser storage is unavailable.
+    }
   };
 
   const desktopExpandedStyle = isDesktop && expanded && expandedSize
@@ -244,11 +269,11 @@ export default function MinimapPanel({ children, onFinalize, canFinalizeGuess, g
           }
           setDesktopHovered(false);
         }}
-        className={`absolute bottom-0 right-0 z-game-controls flex w-full flex-col gap-2 p-3 transition-[width,height] duration-fast ease-standard md:bottom-4 md:right-4 md:p-0 md:w-[min(34vw,460px)] md:h-[min(33vh,360px)] ${expanded ? 'md:w-[min(90vw,800px)] md:h-[min(52vh,560px)]' : ''
+        className={`absolute bottom-0 right-0 z-game-controls flex w-full flex-col gap-2 p-3 md:bottom-4 md:right-4 md:p-0 md:w-[min(34vw,460px)] md:h-[min(33vh,360px)] ${isResizing ? '' : 'transition-[width,height] duration-fast ease-standard'} ${expanded ? 'md:w-[min(90vw,800px)] md:h-[min(52vh,560px)]' : ''
           }`}
         style={{
-          right: reserveRightGutter ? `${RIGHT_GUTTER_PX}px` : '0px',
-          width: isDesktop ? undefined : reserveRightGutter ? `calc(100% - ${RIGHT_GUTTER_PX}px)` : '100%',
+          right: rightOffset ? `${rightOffset}px` : undefined,
+          width: isDesktop || !rightOffset ? undefined : `calc(100% - ${rightOffset}px)`,
           ...desktopExpandedStyle
         }}
       >

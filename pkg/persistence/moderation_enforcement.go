@@ -159,8 +159,8 @@ func issueCurrentMMRRefundsForCheater(ctx context.Context, tx pgx.Tx, cheaterUse
 	candidates := []refundCandidate{}
 	for _, row := range rows {
 		item := refundCandidate{
-			matchID:       row.MatchID,
-			opponentID:    row.OpponentUserID,
+			matchID:       uuidVal(row.MatchID),
+			opponentID:    uuidVal(row.OpponentUserID),
 			cheaterMMR:    int(row.CheaterMmr),
 			cheaterRD:     row.CheaterRd.Float64,
 			originalDelta: int(row.OriginalDelta),
@@ -306,7 +306,7 @@ func (s *DB) riskEngineAnalyzeRequest(ctx context.Context, matchID string) (risk
 	}
 	userIDs := []string{}
 	for _, row := range rows {
-		userIDs = append(userIDs, row)
+		userIDs = append(userIDs, uuidVal(row))
 	}
 	req := riskEngineAnalyzeRequest{
 		MatchID:      matchID,
@@ -341,7 +341,7 @@ func (s *DB) riskEngineRecentGuessEvents(ctx context.Context, userID string) ([]
 	events := []riskEngineGuessEvent{}
 	for _, row := range rows {
 		events = append(events, riskEngineGuessEvent{
-			MatchID:     row.MatchID,
+			MatchID:     uuidVal(row.MatchID),
 			RoundNumber: int(row.RoundNumber),
 			Score:       int(row.Score),
 			GuessMS:     int(row.GuessMs),
@@ -443,7 +443,7 @@ func (s *DB) ListSignupIPBans(limit int) ([]SignupIPBan, error) {
 	}
 	out := make([]SignupIPBan, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, SignupIPBan{ID: row.ID, IPAddress: row.IpAddress, Reason: row.Reason, CreatedBy: anyText(row.CreatedBy), CreatedAt: row.CreatedAt.Time})
+		out = append(out, SignupIPBan{ID: row.ID, IPAddress: row.IpAddress, Reason: row.Reason, CreatedBy: uuidVal(row.CreatedBy), CreatedAt: row.CreatedAt.Time})
 	}
 	return out, nil
 }

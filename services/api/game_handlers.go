@@ -23,39 +23,6 @@ import (
 	"geoduels/pkg/sessionpolicy"
 )
 
-func (a *api) me(w http.ResponseWriter, r *http.Request) {
-	claims, identity, err := a.authenticatedAccount(r)
-	if err != nil {
-		http.Error(w, "identity unavailable", http.StatusInternalServerError)
-		return
-	}
-	profile, err := a.profiles.GetProfile(claims.Sub)
-	if err != nil {
-		http.Error(w, "profile unavailable", http.StatusInternalServerError)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":                profile.UserID,
-		"email":             identity.Email,
-		"display_name":      profile.DisplayName,
-		"avatar_url":        profile.AvatarURL,
-		"mmr":               profile.MMR,
-		"ratingRd":          profile.RatingRD,
-		"gamesPlayed":       profile.GamesPlayed,
-		"wins":              profile.Wins,
-		"rankedGamesPlayed": profile.RankedGamesPlayed,
-		"rankedWins":        profile.RankedWins,
-		"isGuest":           profile.IsGuest,
-		"isAdmin":           profile.IsAdmin,
-		"isModerator":       profile.IsModerator,
-		"isBanned":          profile.IsBanned,
-		"banReason":         profile.BanReason,
-		"linkedProviders":   identity.LinkedProviders,
-		"badges":            profile.Badges,
-		"selectedBadge":     profile.SelectedBadge,
-	})
-}
-
 func (a *api) updateSelectedBadge(w http.ResponseWriter, r *http.Request) {
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {
@@ -127,6 +94,9 @@ func (a *api) markAllUserNotificationsRead(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "failed to mark notifications", http.StatusInternalServerError)
 		return
 	}
+	if a.live != nil {
+		a.live.publish(claims.Sub, contracts.LiveEvent{Type: contracts.LiveNotificationReadAll})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -144,6 +114,9 @@ func (a *api) markUserNotificationRead(w http.ResponseWriter, r *http.Request) {
 	if err := a.notificationService.MarkRead(r.Context(), claims.Sub, notificationID); err != nil {
 		http.Error(w, "failed to mark notification", http.StatusInternalServerError)
 		return
+	}
+	if a.live != nil {
+		a.live.publish(claims.Sub, contracts.LiveEvent{Type: contracts.LiveNotificationRead, NotificationID: notificationID})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -340,27 +313,6 @@ func (a *api) matchBootstrap(w http.ResponseWriter, r *http.Request) {
 		Auth:  authPayload,
 		Match: matchPayload,
 	})
-}
-
-func (a *api) sessionResumable(w http.ResponseWriter, r *http.Request) {
-	claims, err := a.authenticatedClaims(r)
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	resp := contracts.ResumableSessionResponse{Status: "none"}
-	if assigned, ok, err := a.coord.GetAssignmentByUser(r.Context(), claims.Sub); err == nil && ok {
-		mode := sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)
-		if mode == contracts.ModeDuel && a.launcher().ValidateAssignment(r.Context(), assigned) == matchlaunch.AssignmentValid {
-			resp = contracts.ResumableSessionResponse{
-				Status:  "match",
-				MatchID: assigned.MatchID,
-				Mode:    string(mode),
-			}
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (a *api) resolveMatchSession(ctx context.Context, userID, targetMatchID string) (contracts.MatchSessionResponse, error) {

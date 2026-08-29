@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { Flame } from "lucide-react";
 import { Button, IconButton } from "../button";
 import { EmptyState } from "../EmptyState";
 import { Field } from "../Field";
@@ -72,6 +73,21 @@ describe("shared UI primitives", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Party" }));
     expect(onChange).toHaveBeenCalledWith("party");
+  });
+
+  it("supports accessible icon-only segmented controls", () => {
+    render(
+      <Tabs
+        appearance="segmented-icons"
+        value="trending"
+        items={[{ id: "trending", label: "Trending", icon: <Flame /> }]}
+        onChange={vi.fn()}
+        aria-label="Sort maps"
+      />,
+    );
+
+    expect(screen.getByRole("group", { name: "Sort maps" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Trending" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("associates field labels with controls", () => {

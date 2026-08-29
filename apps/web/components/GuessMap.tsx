@@ -484,6 +484,17 @@ function normalizePinBorderColor(color?: string) {
   return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(trimmed) ? trimmed : '';
 }
 
+const TEAM_PING_SIZE = 96;
+
+export function createTeamPingIcon() {
+  return L.divIcon({
+    className: 'team-ping-marker',
+    html: '<div class="team-ping" aria-hidden="true"><span class="team-ping-ring"></span><span class="team-ping-ring"></span><span class="team-ping-core">!</span></div>',
+    iconSize: [TEAM_PING_SIZE, TEAM_PING_SIZE],
+    iconAnchor: [TEAM_PING_SIZE / 2, TEAM_PING_SIZE / 2]
+  });
+}
+
 export function createActualLocationIcon(lat: number, lng: number, roundNumber?: number) {
   const label = typeof roundNumber === 'number' ? String(roundNumber) : '';
   const content = label
@@ -564,7 +575,7 @@ export default function GuessMap({
         <Marker key={`teammate-${userId}`} position={[point.lat, point.lng]} icon={createAvatarMarkerIcon({ avatarUrl: playerAvatars[userId], fallback: playerFallbacks[userId] || '?', size: 38 / 1.25 })} />
       )) : null}
       {mode === 'guess' ? teamPings.map((ping) => (
-        <Marker key={ping.id} position={[ping.lat, ping.lng]} icon={L.divIcon({ className: 'team-ping-marker', html: '<span></span>', iconSize: [48, 48], iconAnchor: [24, 24] })} interactive={false} />
+        <Marker key={ping.id} position={[ping.lat, ping.lng]} icon={createTeamPingIcon()} interactive={false} />
       )) : null}
       {mode === 'result' && result ? <FitToResult result={result} /> : null}
       {mode === 'result' && !result && results?.length ? <FitToResults results={results} /> : null}

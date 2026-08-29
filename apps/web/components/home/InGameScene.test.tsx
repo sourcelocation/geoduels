@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import InGameScene from './InGameScene';
 import type { InGameSceneProps } from './InGameScene';
@@ -144,6 +144,102 @@ describe('InGameScene', () => {
       ruleset: 'no_move',
       streetNames: 'hidden',
     });
+  });
+
+  it('starts the extension handshake only after the Street View frame loads', async () => {
+    render(
+      <InGameScene
+        {...createProps({ ruleset: 'no_move', streetNames: 'hidden' })}
+      />,
+    );
+
+    const streetViewFrame = screen.getByTitle('Street View') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(streetViewFrame.contentWindow!, 'postMessage');
+
+    expect(postMessage).not.toHaveBeenCalled();
+
+    fireEvent.load(streetViewFrame);
+
+    await waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'geoduels-app',
+          type: 'configure',
+          ruleset: 'no_move',
+          streetNames: 'hidden',
+        }),
+        'https://www.google.com',
+      );
+    });
+  });
+
+  it('restarts the extension handshake after Retry remounts the Street View frame', async () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <InGameScene
+          {...createProps({ ruleset: 'no_move', streetNames: 'hidden' })}
+        />,
+      );
+
+      fireEvent.load(screen.getByTitle('Street View'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_000);
+      });
+
+      expect(
+        screen.getByText("Couldn't reach the official extension."),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      const remountedFrame = screen.getByTitle('Street View') as HTMLIFrameElement;
+      const postMessage = vi.spyOn(remountedFrame.contentWindow!, 'postMessage');
+      fireEvent.load(remountedFrame);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'geoduels-app',
+          type: 'configure',
+          ruleset: 'no_move',
+          streetNames: 'hidden',
+        }),
+        'https://www.google.com',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the minimap Street View control gutter once the extension is available', async () => {
+    render(<InGameScene {...createProps()} />);
+
+    const panel = screen.getByTestId('minimap-panel');
+    expect(panel).toHaveStyle({ right: '80px' });
+
+    const streetViewFrame = screen.getByTitle('Street View') as HTMLIFrameElement;
+    fireEvent.load(streetViewFrame);
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'https://www.google.com',
+        source: streetViewFrame.contentWindow,
+        data: {
+          source: 'geoduels-extension',
+          version: 1,
+          extensionVersion: '0.1.4',
+          type: 'ready',
+          capabilities: { heading: true, roadLabels: true },
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(panel).not.toHaveStyle({ right: '80px' });
+    });
+    expect(panel).toHaveClass('p-3', 'right-0');
   });
 
   it('keeps NMPZ Street View iframes out of keyboard tab navigation', () => {

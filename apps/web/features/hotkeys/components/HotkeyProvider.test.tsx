@@ -7,10 +7,6 @@ import { HOTKEY_PREFERENCES_STORAGE_KEY } from "../lib/storage";
 import { setSfxMuted } from "../../../lib/audio/sfx-preferences";
 import { HotkeyProvider } from "./HotkeyProvider";
 
-vi.mock("../../auth/lib/auth-client", () => ({
-  requestSession: vi.fn(async () => null),
-}));
-
 function renderHotkeys(ui: ReactNode) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },

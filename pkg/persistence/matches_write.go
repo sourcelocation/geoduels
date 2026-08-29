@@ -158,7 +158,7 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *c
 			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 			Mode:      db.GdMatchMode(modeDuel),
 			SeasonID:  seasonID,
-			P1UserID: p1.userID, P1Mmr: int32(p1.update.MMR), P1Rd: p1.update.RD, P1Apply: !p1.guest,
+			P1UserID:  p1.userID, P1Mmr: int32(p1.update.MMR), P1Rd: p1.update.RD, P1Apply: !p1.guest,
 			P2UserID: p2.userID, P2Mmr: int32(p2.update.MMR), P2Rd: p2.update.RD, P2Apply: !p2.guest,
 		}); err != nil {
 			return err
@@ -180,7 +180,7 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *c
 			return err
 		}
 		if err := q.SetMatchPlayerRatingDeltas(ctx, db.SetMatchPlayerRatingDeltasParams{
-			MatchID: chatUUID(snap.MatchID),
+			MatchID:  chatUUID(snap.MatchID),
 			P1UserID: p1.userID, P1RatingBefore: int32(p1.rating.MMR), P1RatingAfter: int32(p1.update.MMR), P1Apply: !p1.guest,
 			P2UserID: p2.userID, P2RatingBefore: int32(p2.rating.MMR), P2RatingAfter: int32(p2.update.MMR), P2Apply: !p2.guest,
 		}); err != nil {
@@ -244,23 +244,24 @@ func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, q *db.Queri
 		return err
 	}
 	rows, err := q.MatchPlayerPersistedRatings(ctx, db.MatchPlayerPersistedRatingsParams{
-		DefaultRd: initialRatingRD,
-		Mode:      db.GdMatchMode(modeDuel),
-		SeasonID:  seasonID,
-		MatchID:   chatUUID(snap.MatchID),
+		DefaultRd:   initialRatingRD,
+		Mode:        db.GdMatchMode(modeDuel),
+		SeasonID:    seasonID,
+		MatchID:     chatUUID(snap.MatchID),
 		UserIdsJson: encodedIDs,
 	})
 	if err != nil {
 		return err
 	}
 	for _, row := range rows {
-		player, ok := snap.Players[row.UserID]
+		userID := uuidVal(row.UserID)
+		player, ok := snap.Players[userID]
 		if !ok {
 			continue
 		}
 		player.MMR = int(row.Mmr)
 		player.RatingRD = row.Rd
-		snap.Players[row.UserID] = player
+		snap.Players[userID] = player
 	}
 	return nil
 }
@@ -395,23 +396,23 @@ func recordMatchHistory(
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if strings.TrimSpace(partyID) != "" {
-			sourcePartyID = partyID
+		if partyID.Valid {
+			sourcePartyID = uuidVal(partyID)
 		}
 		if sourcePartyID == nil {
 			foundPartyID, err := q.FindPartyIDByMatchID(ctx, matchUUID)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			if foundPartyID != "" {
-				sourcePartyID = foundPartyID
+			if foundPartyID.Valid {
+				sourcePartyID = uuidVal(foundPartyID)
 			}
 		}
 	}
 	ruleset := string(contracts.NormalizeRuleset(snap.Config.Ruleset))
 	mapID := snap.Config.MapID
-	if planMapID, err := q.GetMatchRoundPlanMapID(ctx, matchUUID); err == nil && planMapID != "" {
-		mapID = planMapID
+	if planMapID, err := q.GetMatchRoundPlanMapID(ctx, matchUUID); err == nil && planMapID.Valid {
+		mapID = uuidVal(planMapID)
 	}
 	if err := q.UpsertMatchHistory(ctx, db.UpsertMatchHistoryParams{
 		MatchID:                 matchUUID,
@@ -473,9 +474,9 @@ func recordMatchHistory(
 		return err
 	}
 	if err := q.UpsertMatchPlayers(ctx, db.UpsertMatchPlayersParams{
-		MatchID: matchUUID,
+		MatchID:     matchUUID,
 		PlayersJson: encodedPlayers,
-		EndedAt: pgtype.Timestamptz{Time: endedAt, Valid: true},
+		EndedAt:     pgtype.Timestamptz{Time: endedAt, Valid: true},
 	}); err != nil {
 		return err
 	}
@@ -485,10 +486,10 @@ func recordMatchHistory(
 			rulesetCode = 1
 		}
 		if err := q.UpsertPlayerMapBests(ctx, db.UpsertPlayerMapBestsParams{
-			MapID:      chatUUID(mapID),
-			Ruleset:    int16(rulesetCode),
-			MatchID:    matchUUID,
-			AchievedAt: pgtype.Timestamptz{Time: endedAt, Valid: true},
+			MapID:       chatUUID(mapID),
+			Ruleset:     int16(rulesetCode),
+			MatchID:     matchUUID,
+			AchievedAt:  pgtype.Timestamptz{Time: endedAt, Valid: true},
 			PlayersJson: encodedPlayers,
 		}); err != nil {
 			return err
@@ -533,7 +534,7 @@ func recordMatchHistory(
 			return err
 		}
 		if err := q.UpsertRankedGuessEvents(ctx, db.UpsertRankedGuessEventsParams{
-			MatchID: matchUUID,
+			MatchID:    matchUUID,
 			EventsJson: encodedGuesses,
 		}); err != nil {
 			return err

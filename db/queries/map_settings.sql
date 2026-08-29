@@ -2,7 +2,7 @@
 UPDATE maps SET official_at=null, official_by=null, updated_at=now() WHERE id=$1::uuid AND archived_at IS NULL;
 
 -- name: GetGameplayMapSettings :one
-SELECT value_json::text AS value_json FROM site_settings WHERE key = $1;
+SELECT value_json FROM site_settings WHERE key = $1;
 
 -- name: GetReadyMapForShare :one
 SELECT status, location_count FROM maps WHERE id=$1::uuid AND archived_at IS NULL FOR SHARE;

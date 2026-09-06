@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const script = readFileSync(
   resolve(
@@ -18,7 +18,13 @@ type StyleElement = {
   remove: () => void;
 };
 
-function loadGoogleStreetViewScript(referrer: string) {
+class Panorama {
+  setOptions = vi.fn();
+  set = vi.fn();
+  constructor(public element: unknown, public options: unknown) {}
+}
+
+function loadGoogleStreetViewScript(referrer: string, ancestorOrigins?: string[]) {
   const posted: Array<{ data: unknown; targetOrigin: string }> = [];
   const styles = new Map<string, StyleElement>();
   const parent = {
@@ -32,7 +38,7 @@ function loadGoogleStreetViewScript(referrer: string) {
   };
   const iframeWindow: {
     top: typeof parent;
-    location: { search: string; hash: string };
+    location: { search: string; hash: string; ancestorOrigins?: string[] };
     addEventListener: (type: string, handler: (event: MessageEvent) => void) => void;
     document: {
       referrer: string;
@@ -42,11 +48,11 @@ function loadGoogleStreetViewScript(referrer: string) {
       head: { appendChild: (node: StyleElement) => void };
       documentElement: { appendChild: (node: StyleElement) => void };
     };
-    google?: unknown;
+    google?: { maps: { StreetViewPanorama: typeof Panorama } };
     setTimeout: typeof setTimeout;
   } = {
     top: parent,
-    location: { search: "", hash: "" },
+    location: { search: "", hash: "", ancestorOrigins },
     addEventListener(type, handler) {
       if (type === "message") messageListeners.push(handler);
     },
@@ -89,6 +95,7 @@ function loadGoogleStreetViewScript(referrer: string) {
   return {
     posted,
     styles,
+    iframeWindow,
     send(origin: string, data: unknown) {
       const event = {
         source: parent,
@@ -102,7 +109,19 @@ function loadGoogleStreetViewScript(referrer: string) {
 
 describe("google-street-view content script", () => {
   it("accepts GeoDuels configure messages when the iframe referrer is stripped", () => {
-    const { posted, send } = loadGoogleStreetViewScript("");
+    const { posted, styles, iframeWindow, send } = loadGoogleStreetViewScript("");
+    iframeWindow.google = { maps: { StreetViewPanorama: Panorama } };
+    const options = { panControl: true, zoomControl: true, clickToGo: true };
+    const panorama = new iframeWindow.google.maps.StreetViewPanorama(null, options);
+    const original = (panorama as Panorama & { __geoduels: { original: Panorama } }).__geoduels.original;
+
+    expect(styles.size).toBe(0);
+    expect(panorama.options).toBe(options);
+    expect(original.setOptions).not.toHaveBeenCalled();
+    panorama.setOptions(options);
+    panorama.set("panControl", true);
+    expect(original.setOptions).toHaveBeenLastCalledWith(options);
+    expect(original.set).toHaveBeenLastCalledWith("panControl", true);
 
     send("https://geoduels.io", {
       source: "geoduels-app",
@@ -117,7 +136,7 @@ describe("google-street-view content script", () => {
         data: {
           source: "geoduels-extension",
           version: 1,
-          extensionVersion: "0.1.4",
+          extensionVersion: "0.1.5",
           type: "ready",
           capabilities: { heading: true, roadLabels: true },
         },
@@ -127,7 +146,7 @@ describe("google-street-view content script", () => {
         data: {
           source: "geoduels-extension",
           version: 1,
-          extensionVersion: "0.1.4",
+          extensionVersion: "0.1.5",
           type: "configured",
           ruleset: "no_move",
           streetNames: "hidden",
@@ -135,10 +154,17 @@ describe("google-street-view content script", () => {
         targetOrigin: "*",
       },
     ]);
+    expect(styles.has("geoduels-hidden-native-chrome")).toBe(true);
+    expect(original.setOptions).toHaveBeenLastCalledWith(expect.objectContaining({
+      panControl: false,
+      zoomControl: false,
+      clickToGo: false,
+      showRoadLabels: false,
+    }));
   });
 
   it("hides Google's native Street View compass and zoom controls", () => {
-    const { styles } = loadGoogleStreetViewScript("");
+    const { styles } = loadGoogleStreetViewScript("https://geoduels.io/match/test");
     const css = styles.get("geoduels-hidden-native-chrome")?.textContent ?? "";
 
     expect(css).toContain(".gm-compass");
@@ -148,7 +174,7 @@ describe("google-street-view content script", () => {
   });
 
   it("ignores configure messages from untrusted origins even with an empty referrer", () => {
-    const { posted, send } = loadGoogleStreetViewScript("");
+    const { posted, styles, send } = loadGoogleStreetViewScript("");
 
     send("https://evil.example", {
       source: "geoduels-app",
@@ -159,5 +185,22 @@ describe("google-street-view content script", () => {
     });
 
     expect(posted).toEqual([]);
+    expect(styles.size).toBe(0);
+  });
+
+  it("leaves untrusted embeds untouched, including when ancestorOrigins overrides the referrer", () => {
+    for (const [referrer, ancestors] of [
+      ["https://geoduels.io.evil.example", undefined],
+      ["https://geoduels.io", ["https://unrelated.example"]],
+    ] as const) {
+      const { styles, iframeWindow } = loadGoogleStreetViewScript(referrer, ancestors ? [...ancestors] : undefined);
+      expect(styles.size).toBe(0);
+      expect(Object.getOwnPropertyDescriptor(iframeWindow, "google")).toBeUndefined();
+    }
+  });
+
+  it("enables GeoDuels embeds with an ancestor origin and no referrer", () => {
+    const { styles } = loadGoogleStreetViewScript("", ["https://play.geoduels.io"]);
+    expect(styles.has("geoduels-hidden-native-chrome")).toBe(true);
   });
 });

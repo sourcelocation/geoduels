@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const EXTENSION_VERSION = "0.1.4";
+  const EXTENSION_VERSION = "0.1.5";
   const ready = () => {
     window.postMessage({ source: "geoduels-extension", version: 1, extensionVersion: EXTENSION_VERSION, type: "extension_ready" }, location.origin);
   };

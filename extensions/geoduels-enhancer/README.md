@@ -14,6 +14,18 @@ The app owns all visible UI and launch preferences. The extension:
 - enforces No Move matches inside the Google frame;
 - has no background worker, account access, analytics, or remote code.
 
+The Google-frame script checks the embedding origin before changing controls or
+hooking Street View. It uses `ancestorOrigins` when available and otherwise the
+document referrer. Non-GeoDuels embeds are left untouched. If both origin signals
+are unavailable, enhancements stay inactive until a trusted GeoDuels configure
+message arrives.
+
+Run the minimal, local script checks with:
+
+```sh
+npm --prefix apps/web test -- features/browser-extension/lib/google-street-view-script.test.ts
+```
+
 ## Local installation
 
 The checked-in `manifest.json` includes localhost matches for development.

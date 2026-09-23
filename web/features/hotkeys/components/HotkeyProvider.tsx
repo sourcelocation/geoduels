@@ -17,6 +17,7 @@ type HotkeyContextValue = {
   resetAll: () => void;
   setAudioMuted: (muted: boolean) => void;
   setSfxMuted: (muted: boolean) => void;
+  setCompassStyle: (style: HotkeyPreferences["compassStyle"]) => void;
   settingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
   saveStatus: "local" | "saving" | "saved" | "error";
@@ -171,6 +172,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     resetAll: () => setPreferences(normalizePreferences(DEFAULT_HOTKEY_PREFERENCES)),
     setAudioMuted: (audioMuted) => setPreferences({ ...preferencesRef.current, audioMuted }),
     setSfxMuted: (sfxMuted) => setPreferences({ ...preferencesRef.current, sfxMuted }),
+    setCompassStyle: (compassStyle) => setPreferences({ ...preferencesRef.current, compassStyle }),
     settingsOpen,
     setSettingsOpen,
     saveStatus,

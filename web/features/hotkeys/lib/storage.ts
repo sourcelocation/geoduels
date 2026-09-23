@@ -23,6 +23,8 @@ export function normalizePreferences(value: unknown): HotkeyPreferences {
     bindings,
     audioMuted: typeof input.audioMuted === "boolean" ? input.audioMuted : DEFAULT_HOTKEY_PREFERENCES.audioMuted,
     sfxMuted: typeof input.sfxMuted === "boolean" ? input.sfxMuted : DEFAULT_HOTKEY_PREFERENCES.sfxMuted,
+    compassStyle: input.compassStyle === "traditional" || input.compassStyle === "modern" || input.compassStyle === "both"
+      ? input.compassStyle : DEFAULT_HOTKEY_PREFERENCES.compassStyle,
   };
 }
 

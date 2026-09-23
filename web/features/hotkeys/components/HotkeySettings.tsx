@@ -16,7 +16,7 @@ import { useHotkeys } from "./HotkeyProvider";
 
 export default function HotkeySettings({ onClose }: { onClose: () => void }) {
   const state = useHotkeys();
-  const [tab, setTab] = useState<"Controls" | "Privacy" | "Audio" | "Account">("Controls");
+  const [tab, setTab] = useState<"Controls" | "Privacy" | "Game" | "Account">("Controls");
   const [capturing, setCapturing] = useState<HotkeyAction | null>(null);
   const { show } = useAppNotice();
 
@@ -49,7 +49,7 @@ export default function HotkeySettings({ onClose }: { onClose: () => void }) {
         appearance="segmented"
         value={tab}
         onChange={setTab}
-        items={(["Controls", "Privacy", "Audio", "Account"] as const).map((label) => ({ id: label, label }))}
+        items={(["Controls", "Privacy", "Game", "Account"] as const).map((label) => ({ id: label, label }))}
         aria-label="Settings section"
         className="mb-5"
       />
@@ -60,9 +60,19 @@ export default function HotkeySettings({ onClose }: { onClose: () => void }) {
         </section>
       ) : tab === "Account" ? (
         <AccountSettings profilePath={typeof window === "undefined" ? "/" : window.location.pathname} />
-      ) : tab === "Audio" ? (
+      ) : tab === "Game" ? (
         <section>
           <InsetList>
+            <SettingRow title="Compass Style" info="Choose which compass appears during Street View gameplay when the extension is available." stackControlOnMobile control={
+              <Tabs
+                appearance="segmented"
+                value={state.preferences.compassStyle}
+                onChange={state.setCompassStyle}
+                items={(["traditional", "modern", "both"] as const).map((style) => ({ id: style, label: style.toUpperCase() }))}
+                aria-label="Compass Style"
+                className="w-full sm:w-auto"
+              />
+            } />
             <SettingRow title="Chat alerts" info="Play an alert for incoming chat message previews." control={<Switch checked={!state.preferences.audioMuted} onCheckedChange={(checked) => state.setAudioMuted(!checked)} aria-label="Enable chat alerts" />} />
             <SettingRow title="Sound effects" info="Play interface and gameplay sound effects." control={<Switch checked={!state.preferences.sfxMuted} onCheckedChange={(checked) => state.setSfxMuted(!checked)} aria-label="Enable sound effects" />} />
           </InsetList>

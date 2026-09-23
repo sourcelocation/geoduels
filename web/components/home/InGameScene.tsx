@@ -19,6 +19,7 @@ import type { MatchSidesView, PlayerIdentityView } from '../../features/game/com
 import { StreetViewEnhancements } from '../../features/browser-extension/components/StreetViewEnhancements';
 import { useGeoDuelsExtension } from '../../features/browser-extension/hooks/use-geoduels-extension';
 import { useHotkey } from '../../features/hotkeys/hooks/use-hotkey';
+import { useHotkeys } from '../../features/hotkeys/components/HotkeyProvider';
 
 export type InGameSceneProps = {
   uiPhase: UIPhase;
@@ -165,11 +166,13 @@ export default function InGameScene({
     ruleset,
     streetNames,
   );
+  const { preferences } = useHotkeys();
+  const hasTraditionalCompass = preferences.compassStyle !== 'modern';
   const extensionRequired = ruleset === "no_move" || streetNames === "hidden";
   const streetViewReady = !extensionRequired || extension.configured;
   const canShowForfeit = uiPhase !== 'match_end';
   const disableStreetViewTabbing = uiPhase !== 'live_round' || !streetViewInteractive;
-  const utilityControlPosition = 'absolute left-3 top-3 z-game-controls pointer-events-auto md:bottom-4 md:left-4 md:top-auto';
+  const utilityControlPosition = `absolute left-3 z-game-controls pointer-events-auto md:left-4 ${hasTraditionalCompass ? 'bottom-4' : 'top-3 md:bottom-4 md:top-auto'}`;
 
   const releaseStreetViewFocus = useCallback(() => {
     const frame = streetViewFrameRef.current;
@@ -322,6 +325,7 @@ export default function InGameScene({
         <StreetViewEnhancements
           capabilities={extension.capabilities}
           heading={extension.heading}
+          style={preferences.compassStyle}
         />
       ) : null}
 
@@ -384,7 +388,8 @@ export default function InGameScene({
               hideMultiplier={partyMode === "free_for_all" || multiplierMode === "individual"}
               hasTopCompass={
                 extension.available &&
-                extension.capabilities?.heading === true
+                extension.capabilities?.heading === true &&
+                preferences.compassStyle !== 'traditional'
               }
             />
           </motion.div>

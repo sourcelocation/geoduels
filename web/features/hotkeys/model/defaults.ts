@@ -27,6 +27,7 @@ export const DEFAULT_HOTKEY_PREFERENCES: HotkeyPreferences = {
   },
   audioMuted: false,
   sfxMuted: false,
+  compassStyle: "modern",
 };
 
 export function bindingKey(binding: KeyBinding) {

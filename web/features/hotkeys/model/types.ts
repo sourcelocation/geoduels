@@ -21,6 +21,7 @@ export type HotkeyPreferences = {
   bindings: Record<HotkeyAction, KeyBinding[]>;
   audioMuted: boolean;
   sfxMuted: boolean;
+  compassStyle: "traditional" | "modern" | "both";
 };
 
 export type HotkeyRegistration = {

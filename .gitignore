@@ -3,8 +3,6 @@
 .env.*
 !.env.example
 !web/.env.local.example
-k3s/overlays/k3d/secrets.env
-k3s/overlays/prod/secrets.prod.env
 backend/beta.secrets.env
 
 # Node / Next.js

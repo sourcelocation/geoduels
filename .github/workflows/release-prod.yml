@@ -140,8 +140,8 @@ jobs:
           targets: web
           push: true
 
-  # Deploys: commits the release to the ops repo, where Flux picks it up. The tag pins this repo's
-  # k3s/base and the images together (apps/geoduels/release.yaml). Rollback: revert that commit.
+  # Deploys: sets the new image tags in the ops repo (apps/geoduels), where Flux picks them up.
+  # Rollback: revert that commit.
   deploy:
     name: deploy
     runs-on: ubuntu-latest
@@ -160,13 +160,13 @@ jobs:
           token: ${{ secrets.OPS_REPO_TOKEN }}
 
       # yq is preinstalled on GitHub's Ubuntu runners.
-      - name: Pin the release
+      - name: Set the image tags
         run: |
           set -euo pipefail
-          yq -i '(select(.kind == "GitRepository") | .spec.ref.tag) = strenv(TAG)
-               | (select(.kind == "Kustomization") | .spec.images[].newTag) = strenv(TAG) + "-amd64"' \
-            apps/geoduels/release.yaml
-          yq -i '.data.NEXT_PUBLIC_APP_VERSION = strenv(TAG)' apps/geoduels/production/runtime-config.yaml
+          # The risk engine is released from its own repo.
+          yq -i '(.images[] | select(.name != "*-risk-engine") | .newTag) = strenv(TAG) + "-amd64"' \
+            apps/geoduels/kustomization.yaml
+          yq -i '.data.NEXT_PUBLIC_APP_VERSION = strenv(TAG)' apps/geoduels/config.yaml
           git diff --stat
 
       - name: Commit to ops

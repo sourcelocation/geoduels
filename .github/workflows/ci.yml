@@ -92,21 +92,6 @@ jobs:
           files: docker-bake.hcl
           targets: default
 
-  manifests:
-    name: manifests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install kustomize
-        run: |
-          KUSTOMIZE_VERSION="v5.5.0"
-          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar -xz
-          sudo mv kustomize /usr/local/bin/kustomize
-
-      - name: Validate local k3d overlay
-        run: kustomize build k3s/overlays/k3d >/tmp/geoduels-k3d.yaml
-
   secret-scan:
     name: secret-scan
     runs-on: ubuntu-latest

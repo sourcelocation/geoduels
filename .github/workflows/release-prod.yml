@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: ${{ vars.REGISTRY != '' && vars.REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
-  OPS_REPOSITORY: ${{ vars.OPS_REPOSITORY != '' && vars.OPS_REPOSITORY || 'sourcelocation/geoduels-prod' }}
+  OPS_REPOSITORY: ${{ vars.OPS_REPOSITORY != '' && vars.OPS_REPOSITORY || 'sourcelocation/ops' }}
 
 jobs:
   release-meta:
@@ -140,78 +140,44 @@ jobs:
           targets: web
           push: true
 
-  update-ops-repo:
-    name: update-ops-repo
+  # Deploys: commits the release to the ops repo, where Flux picks it up. The tag pins this repo's
+  # k3s/base and the images together (apps/geoduels/release.yaml). Rollback: revert that commit.
+  deploy:
+    name: deploy
     runs-on: ubuntu-latest
     environment: production
     needs:
       - release-meta
       - build-and-push-backend-amd64
       - build-and-push-web-amd64
+    env:
+      TAG: ${{ needs.release-meta.outputs.release_tag }}
     steps:
       - name: Checkout ops repo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.OPS_REPOSITORY }}
           token: ${{ secrets.OPS_REPO_TOKEN }}
-          path: ops
 
-      - name: Install kustomize
-        run: |
-          KUSTOMIZE_VERSION="v5.5.0"
-          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar -xz
-          sudo mv kustomize /usr/local/bin/kustomize
-
-      - name: Update production image tags
-        working-directory: ops/infra/k3s/overlays/prod
+      # yq is preinstalled on GitHub's Ubuntu runners.
+      - name: Pin the release
         run: |
           set -euo pipefail
-          kustomize edit set image \
-            ghcr.io/sourcelocation/geoduels-api="${{ env.REGISTRY }}/geoduels-api:${{ needs.release-meta.outputs.release_tag }}-amd64" \
-            ghcr.io/sourcelocation/geoduels-discord-worker="${{ env.REGISTRY }}/geoduels-discord-worker:${{ needs.release-meta.outputs.release_tag }}-amd64" \
-            ghcr.io/sourcelocation/geoduels-match-coordinator="${{ env.REGISTRY }}/geoduels-match-coordinator:${{ needs.release-meta.outputs.release_tag }}-amd64" \
-            ghcr.io/sourcelocation/geoduels-gameplay-node="${{ env.REGISTRY }}/geoduels-gameplay-node:${{ needs.release-meta.outputs.release_tag }}-amd64" \
-            ghcr.io/sourcelocation/geoduels-moderation-worker="${{ env.REGISTRY }}/geoduels-moderation-worker:${{ needs.release-meta.outputs.release_tag }}-amd64" \
-            ghcr.io/sourcelocation/geoduels-realtime-gateway="${{ env.REGISTRY }}/geoduels-realtime-gateway:${{ needs.release-meta.outputs.release_tag }}-amd64" \
-            ghcr.io/sourcelocation/geoduels-web="${{ env.REGISTRY }}/geoduels-web:${{ needs.release-meta.outputs.release_tag }}-amd64"
+          yq -i '(select(.kind == "GitRepository") | .spec.ref.tag) = strenv(TAG)
+               | (select(.kind == "Kustomization") | .spec.images[].newTag) = strenv(TAG) + "-amd64"' \
+            apps/geoduels/release.yaml
+          yq -i '.data.NEXT_PUBLIC_APP_VERSION = strenv(TAG)' apps/geoduels/production/runtime-config.yaml
+          git diff --stat
 
-      - name: Update runtime version
-        working-directory: ops
-        env:
-          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
+      - name: Commit to ops
         run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          path = Path("infra/k3s/overlays/prod/runtime-config.yaml")
-          lines = path.read_text().splitlines()
-          lines = [
-              f"  NEXT_PUBLIC_APP_VERSION: {os.environ['RELEASE_TAG']}"
-              if line.startswith("  NEXT_PUBLIC_APP_VERSION: ")
-              else line
-              for line in lines
-          ]
-          path.write_text("\n".join(lines) + "\n")
-          PY
-
-      - name: Validate ops manifests
-        working-directory: ops
-        run: kustomize build infra/k3s/overlays/prod >/tmp/geoduels-prod.yaml
-
-      - name: Create ops release pull request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.OPS_REPO_TOKEN }}
-          path: ops
-          branch: release/prod-${{ needs.release-meta.outputs.release_tag }}
-          commit-message: "release(prod): pin images for ${{ needs.release-meta.outputs.release_tag }}"
-          title: "release(prod): deploy ${{ needs.release-meta.outputs.release_tag }}"
-          body: |
-            Production release prepared from `${{ github.repository }}`.
-
-            - Release tag: `${{ needs.release-meta.outputs.release_tag }}`
-            - Release commit: `${{ needs.release-meta.outputs.release_sha }}`
-            - Deploy method: merge this PR and let Flux reconcile production.
-          add-paths: |
-            infra/k3s/overlays/prod/kustomization.yaml
-            infra/k3s/overlays/prod/runtime-config.yaml
+          set -euo pipefail
+          git config user.name "geoduels-release[bot]"
+          git config user.email "geoduels-release@users.noreply.github.com"
+          git commit -am "deploy geoduels ${TAG}" -m "From ${{ github.repository }}@${{ needs.release-meta.outputs.release_sha }}"
+          # Other products release into the same repo; replay on top of theirs.
+          for attempt in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1

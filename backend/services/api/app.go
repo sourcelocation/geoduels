@@ -17,10 +17,12 @@ import (
 	"geoduels/internal/authsession"
 	"geoduels/internal/badges"
 	"geoduels/internal/content"
+	"geoduels/internal/curation"
 	"geoduels/internal/jobs"
 	"geoduels/internal/leaderboard"
 	"geoduels/internal/maps"
 	"geoduels/internal/matches"
+	"geoduels/internal/moderation"
 	"geoduels/internal/notifications"
 	"geoduels/internal/parties"
 	preferencesdomain "geoduels/internal/preferences"
@@ -37,15 +39,17 @@ import (
 
 type api struct {
 	staff                  *staffctx.Service
+	moderation             *moderation.Service
+	curation               *curation.Service
 	matchCoordinator       string
 	db                     *persistence.DB
 	accounts               *accounts.Service
 	sessions               authsession.Store
 	profiles               profiles.Store
-	badges                 badges.Store
+	badges                 *badges.Service
 	matchStore             matches.Store
-	content                content.Store
-	seasons                seasons.Store
+	content                *content.Service
+	seasons                *seasons.Service
 	gameplayMaps           maps.Store
 	runtimeStore           matches.Store
 	parties                *parties.Service
@@ -177,19 +181,19 @@ func newAPI() (*api, error) {
 	accountsStore := accounts.NewPGStore(pool, jobsClient)
 	accountsService := accounts.NewService(accountsStore)
 	mapsService := maps.NewService(mapsStore)
-	staffStore := staffctx.NewPGStore(pool, contentStore, seasonStore, mapsStore, badgeStore, rdb, jobsClient)
-	staffService := staffctx.NewService(staffStore, staffctx.NewRiskEngineFromEnv())
 	instance := &api{
-		staff:                  staffService,
+		staff:                  staffctx.NewService(staffctx.NewPGStore(pool)),
+		moderation:             moderation.NewService(moderation.NewPGStore(pool, jobsClient), moderation.NewRiskEngineFromEnv()),
+		curation:               curation.NewService(curation.NewPGStore(pool)),
 		matchCoordinator:       getenv("MATCH_COORDINATOR_URL", getenv("QUEUE_COORDINATOR_URL", "http://localhost:8090")),
 		db:                     store,
 		accounts:               accountsService,
 		sessions:               authsession.NewPGStore(pool),
 		profiles:               profiles.NewPGStore(pool),
-		badges:                 badgeStore,
+		badges:                 badges.NewService(badgeStore),
 		matchStore:             matchStore,
-		content:                contentStore,
-		seasons:                seasonStore,
+		content:                content.NewService(contentStore),
+		seasons:                seasons.NewService(seasonStore),
 		gameplayMaps:           mapsStore,
 		runtimeStore:           matchStore,
 		parties:                partyService,
@@ -281,6 +285,11 @@ func routes(a *api) *echo.Echo {
 	e.POST("/api/auth/logout-all", a.logoutAll)
 	e.GET("/api/status", a.publicGlobalStatus)
 	e.PATCH("/api/me/badge", a.updateSelectedBadge, a.active)
+	e.GET("/api/v1/staff/players/:id/warnings", a.staffWarnings)
+	e.POST("/api/v1/staff/players/:id/warnings", a.staffWarn, a.active)
+	e.POST("/api/v1/staff/players/:id/warnings/:warningId/withdraw", a.staffWithdrawWarning, a.active)
+	e.GET("/api/v1/me/warnings", a.userWarnings)
+	e.POST("/api/v1/me/warnings/:warningId/acknowledge", a.acknowledgeWarning)
 	e.PUT("/api/me/nickname", a.updateNickname, a.active)
 	e.PATCH("/api/me/nickname", a.updateNickname, a.active)
 	e.PATCH("/api/me/preferences", a.updateUserPreferences, a.active)

@@ -83,7 +83,7 @@ func (a *api) resolveOAuthIdentity(r *http.Request, state oauthStateClaims, prov
 		return a.accounts.UpsertProviderIdentity(provider, providerUserID, email, displayName, avatarURL, state.LinkSub)
 	}
 	if !identityExists {
-		if banned, err := a.staff.IsSignupIPBanned(r.Context(), a.clientIP(r)); err != nil {
+		if banned, err := a.moderation.IsSignupIPBanned(r.Context(), a.clientIP(r)); err != nil {
 			return accounts.Identity{}, errors.New("signup unavailable")
 		} else if banned {
 			return accounts.Identity{}, errors.New("signup unavailable")

@@ -5,9 +5,6 @@ LEFT JOIN users actor ON actor.id=n.actor_user_id OR (n.actor_user_id IS NULL AN
 WHERE n.user_id=$1 AND n.archived_at IS NULL AND (sqlc.arg(before_id)=0 OR n.id<sqlc.arg(before_id)) AND (n.expires_at IS NULL OR n.expires_at>now())
 ORDER BY n.created_at DESC,n.id DESC LIMIT sqlc.arg(row_limit);
 
--- name: ListReporters :many
-SELECT DISTINCT reporter_user_id FROM moderation_signals WHERE subject_user_id=$1 AND reporter_user_id IS NOT NULL;
-
 -- name: ListUserNotifications :many
 SELECT n.id,n.type,n.payload_json,n.created_at,actor.id AS actor_user_id,coalesce(nullif(actor.display_name,''),actor.id::text,'')::text AS actor_display_name
 FROM user_notifications n

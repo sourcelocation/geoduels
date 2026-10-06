@@ -468,7 +468,7 @@ func (a *api) createMatchReport(c echo.Context) error {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
 	reportedUserID := strings.TrimSpace(req.ReportedUserID)
-	created, err := a.staff.CreateReport(c.Request().Context(), matchID, claims.Sub, reportedUserID, req.Category, req.Reason)
+	created, err := a.moderation.CreateReport(c.Request().Context(), matchID, claims.Sub, reportedUserID, req.Category, req.Reason)
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, err.Error())
 	}

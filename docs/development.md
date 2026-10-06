@@ -15,6 +15,18 @@ go test ./...
 go vet ./...
 ```
 
+### Module boundaries
+
+Each directory under `backend/internal` is a module, drawn around the data it
+changes. Staff operations live in the module that owns the data and check
+`pkg/staff` capabilities themselves; `internal/staff` only manages role grants.
+A module calls only the queries in its own files under `db/queries`. When
+another module must write in the same transaction, the owner exports a function
+that takes the caller's transaction, such as `badges.AwardBadgeTx` or
+`accounts.ResetNicknameTx`; staff actions are audited through `audit.Record`.
+`internal/architecture` enforces query ownership and the allowed module imports
+as part of `go test ./...`.
+
 ## Frontend
 
 ```sh

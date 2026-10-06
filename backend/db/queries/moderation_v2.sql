@@ -4,11 +4,6 @@ INSERT INTO moderation_signals(subject_user_id,signal_type,source,severity,evide
 -- name: GetSignalNotificationPayload :one
 SELECT s.id AS signal_id,s.subject_user_id,coalesce(nullif(u.display_name,''),s.subject_user_id::text) AS subject_display_name,s.severity,s.evidence_strength,s.reason_code,s.occurred_at FROM moderation_signals s LEFT JOIN users u ON u.id=s.subject_user_id WHERE s.id=sqlc.arg(signal_id);
 
--- name: ListModerationLog :many
-SELECT l.id AS log_id, l.subject_user_id, coalesce(nullif(subject.display_name, ''), l.subject_user_id::text, '') AS subject_display_name, l.actor_user_id, coalesce(nullif(actor.display_name, ''), l.actor_user_id::text, '') AS actor_display_name, l.action, coalesce(l.reason, '') AS reason, l.expires_at, l.signal_ids, l.metadata, l.created_at
-FROM moderation_log l LEFT JOIN users subject ON subject.id=l.subject_user_id LEFT JOIN users actor ON actor.id=l.actor_user_id
-WHERE (sqlc.narg(subject_user_id)::uuid IS NULL OR l.subject_user_id=sqlc.narg(subject_user_id)::uuid) ORDER BY l.created_at DESC,l.id DESC LIMIT sqlc.arg(row_limit);
-
 -- name: ListModerationSignals :many
 SELECT s.id AS signal_id, s.subject_user_id, coalesce(nullif(subject.display_name, ''), s.subject_user_id::text) AS subject_display_name, s.signal_type, s.source, s.severity, s.evidence_strength, coalesce(s.detector_key, '') AS detector_key, coalesce(s.detector_version, '') AS detector_version, s.reason_code, s.score, s.recommended_queue, s.reporter_user_id, coalesce(nullif(reporter.display_name, ''), s.reporter_user_id::text, '') AS reporter_display_name, s.match_id, s.payload_json, s.occurred_at, s.created_at, s.reviewed_at, s.reviewed_by, s.outcome
 FROM moderation_signals s LEFT JOIN users subject ON subject.id=s.subject_user_id LEFT JOIN users reporter ON reporter.id=s.reporter_user_id
@@ -41,3 +36,6 @@ DO UPDATE SET
     payload_json = excluded.payload_json,
     occurred_at = greatest(moderation_signals.occurred_at, excluded.occurred_at)
 RETURNING id;
+
+-- name: ListReporters :many
+SELECT DISTINCT reporter_user_id FROM moderation_signals WHERE subject_user_id=$1 AND reporter_user_id IS NOT NULL;

@@ -13,6 +13,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"geoduels/internal/curation"
+	"geoduels/internal/moderation"
 	staffctx "geoduels/internal/staff"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/maintenance"
@@ -49,20 +51,20 @@ var defaultLobbyChangelogContent = LobbyChangelogContent{
 
 // staffActor authenticates the caller and rejects banned accounts. Capability
 // checks live in the staff application service.
-func (a *api) staffActor(r *http.Request) (staffctx.Actor, error) {
+func (a *api) staffActor(r *http.Request) (pkgstaff.Actor, error) {
 	identity, err := a.authenticatedIdentity(r)
 	if err != nil {
-		return staffctx.Actor{}, err
+		return pkgstaff.Actor{}, err
 	}
 	if identity.IsBanned {
-		return staffctx.Actor{}, staffctx.ErrForbidden
+		return pkgstaff.Actor{}, pkgstaff.ErrForbidden
 	}
 	return identity.StaffActor(), nil
 }
 
 // requireStaff authenticates and requires one of the given capabilities. Used
-// only by handlers that read game-domain data outside the staff service.
-func (a *api) requireStaff(r *http.Request, caps ...pkgstaff.Capability) (staffctx.Actor, error) {
+// only by map handlers whose service methods take no actor.
+func (a *api) requireStaff(r *http.Request, caps ...pkgstaff.Capability) (pkgstaff.Actor, error) {
 	actor, err := a.staffActor(r)
 	if err != nil {
 		return actor, err
@@ -72,20 +74,20 @@ func (a *api) requireStaff(r *http.Request, caps ...pkgstaff.Capability) (staffc
 			return actor, nil
 		}
 	}
-	return actor, staffctx.ErrForbidden
+	return actor, pkgstaff.ErrForbidden
 }
 
 func staffError(c echo.Context, err error) error {
 	switch {
-	case errors.Is(err, staffctx.ErrForbidden):
+	case errors.Is(err, pkgstaff.ErrForbidden):
 		return plainTextError(c, http.StatusForbidden, "forbidden")
-	case errors.Is(err, staffctx.ErrNotFound), errors.Is(err, ErrNoRows):
+	case errors.Is(err, staffctx.ErrNotFound), errors.Is(err, moderation.ErrNotFound), errors.Is(err, ErrNoRows):
 		return plainTextError(c, http.StatusNotFound, "not found")
-	case errors.Is(err, staffctx.ErrUnavailable):
+	case errors.Is(err, curation.ErrUnavailable):
 		return plainTextError(c, http.StatusNotFound, err.Error())
-	case errors.Is(err, staffctx.ErrInvalidCurationTime):
+	case errors.Is(err, curation.ErrInvalidTime):
 		return plainTextError(c, http.StatusBadRequest, err.Error())
-	case errors.Is(err, staffctx.ErrCurationScheduleChanged):
+	case errors.Is(err, curation.ErrScheduleChanged):
 		return plainTextError(c, http.StatusConflict, err.Error())
 	default:
 		return plainTextError(c, http.StatusInternalServerError, err.Error())
@@ -128,7 +130,7 @@ func (a *api) adminPlayers(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	players, err := a.staff.SearchSubjects(c.Request().Context(), actor, c.QueryParam("query"), 30)
+	players, err := a.moderation.SearchSubjects(c.Request().Context(), actor, c.QueryParam("query"), 30)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -140,7 +142,7 @@ func (a *api) adminPlayerDetail(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	detail, err := a.staff.GetSubject(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")))
+	detail, err := a.moderation.GetSubject(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")))
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -152,7 +154,7 @@ func (a *api) moderatorSubject(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	profile, err := a.staff.SubjectProfile(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")))
+	profile, err := a.moderation.SubjectProfile(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")))
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -164,7 +166,7 @@ func (a *api) moderatorSignals(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	signals, err := a.staff.ListSignals(c.Request().Context(), actor, 100)
+	signals, err := a.moderation.ListSignals(c.Request().Context(), actor, 100)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -176,7 +178,7 @@ func (a *api) moderatorLog(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	entries, err := a.staff.ListAudit(c.Request().Context(), actor, 100)
+	entries, err := a.moderation.ListAudit(c.Request().Context(), actor, 100)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -193,14 +195,14 @@ func (a *api) adminBanPlayer(c echo.Context) error {
 	return a.banPlayerForCheating(c, actor, c.Param("id"))
 }
 
-func (a *api) banPlayerForCheating(c echo.Context, actor staffctx.Actor, rawUserID string) error {
+func (a *api) banPlayerForCheating(c echo.Context, actor pkgstaff.Actor, rawUserID string) error {
 	var req struct {
 		Reason string `json:"reason"`
 	}
 	if err := decodeJSONBody(c.Request(), &req); err != nil && !errors.Is(err, io.EOF) {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	summary, err := a.staff.BanCheater(c.Request().Context(), actor, a.resolveEntityID("user", rawUserID), req.Reason)
+	summary, err := a.moderation.BanCheater(c.Request().Context(), actor, a.resolveEntityID("user", rawUserID), req.Reason)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -212,7 +214,7 @@ func (a *api) adminUnbanPlayer(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	if err := a.staff.SetBan(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), "", false); err != nil {
+	if err := a.moderation.SetBan(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), "", false); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -233,7 +235,7 @@ func (a *api) moderatorSubjectMute(c echo.Context) error {
 	if req.DurationHours <= 0 {
 		req.DurationHours = 7 * 24
 	}
-	if err := a.staff.SetMute(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), c.Param("kind"), req.Reason, time.Now().Add(time.Duration(req.DurationHours)*time.Hour), true); err != nil {
+	if err := a.moderation.SetMute(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), c.Param("kind"), req.Reason, time.Now().Add(time.Duration(req.DurationHours)*time.Hour), true); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -244,7 +246,7 @@ func (a *api) moderatorSubjectUnmute(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	if err := a.staff.SetMute(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), c.Param("kind"), "", time.Time{}, false); err != nil {
+	if err := a.moderation.SetMute(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), c.Param("kind"), "", time.Time{}, false); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -255,7 +257,7 @@ func (a *api) adminClearReporterMute(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	if err := a.staff.ClearReporterMute(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id"))); err != nil {
+	if err := a.moderation.ClearReporterMute(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id"))); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -266,7 +268,7 @@ func (a *api) adminCommunityPardonPreview(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	summary, err := a.staff.PreviewPardon(c.Request().Context(), actor, 7*24*time.Hour)
+	summary, err := a.moderation.PreviewPardon(c.Request().Context(), actor, 7*24*time.Hour)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -284,7 +286,7 @@ func (a *api) adminCommunityPardon(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &req); err != nil || !req.Confirm {
 		return plainTextError(c, http.StatusBadRequest, "explicit confirmation required")
 	}
-	summary, err := a.staff.Pardon(c.Request().Context(), actor, 7*24*time.Hour)
+	summary, err := a.moderation.Pardon(c.Request().Context(), actor, 7*24*time.Hour)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -363,7 +365,7 @@ func (a *api) adminBadgeDefinitions(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	badges, err := a.staff.BadgeCatalog(c.Request().Context(), actor)
+	badges, err := a.badges.Catalog(actor)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -388,7 +390,7 @@ func (a *api) adminGrantBadge(c echo.Context) error {
 	if strings.TrimSpace(req.BadgeID) == "" {
 		return plainTextError(c, http.StatusBadRequest, "badge id required")
 	}
-	grant, err := a.staff.GrantBadge(c.Request().Context(), actor, strings.TrimSpace(req.Nickname), strings.TrimSpace(req.BadgeID))
+	grant, err := a.badges.Grant(actor, strings.TrimSpace(req.Nickname), strings.TrimSpace(req.BadgeID))
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrBadgeUserNotFound):
@@ -409,7 +411,7 @@ func (a *api) adminListSignupIPBans(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	bans, err := a.staff.ListIPBans(c.Request().Context(), actor, 100)
+	bans, err := a.moderation.ListIPBans(c.Request().Context(), actor, 100)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -428,7 +430,7 @@ func (a *api) adminAddSignupIPBan(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &req); err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	if err := a.staff.AddIPBan(c.Request().Context(), actor, strings.TrimSpace(req.IPAddress), req.Reason); err != nil {
+	if err := a.moderation.AddIPBan(c.Request().Context(), actor, strings.TrimSpace(req.IPAddress), req.Reason); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -443,7 +445,7 @@ func (a *api) adminRemoveSignupIPBan(c echo.Context) error {
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid ip")
 	}
-	if err := a.staff.RemoveIPBan(c.Request().Context(), actor, ip); err != nil {
+	if err := a.moderation.RemoveIPBan(c.Request().Context(), actor, ip); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -456,7 +458,7 @@ func (a *api) adminGetMaintenance(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	status, err := a.staff.GetMaintenance(c.Request().Context(), actor)
+	status, err := maintenance.StaffRead(c.Request().Context(), a.redis, actor)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -472,7 +474,7 @@ func (a *api) adminPutMaintenance(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &status); err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	saved, err := a.staff.SetMaintenance(c.Request().Context(), actor, status)
+	saved, err := maintenance.Save(c.Request().Context(), a.redis, actor, status)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -484,7 +486,7 @@ func (a *api) adminClearMaintenance(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	if err := a.staff.ClearMaintenance(c.Request().Context(), actor); err != nil {
+	if err := maintenance.Clear(c.Request().Context(), a.redis, actor); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -495,7 +497,7 @@ func (a *api) adminGetModerationSettings(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	settings, err := a.staff.GetModerationSettings(c.Request().Context(), actor)
+	settings, err := a.content.ModerationSettings(actor)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -515,7 +517,7 @@ func (a *api) adminPutModerationSettings(c echo.Context) error {
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, err.Error())
 	}
-	settings, err := a.staff.SetModerationSettings(c.Request().Context(), actor, ModerationSettings{DiscordWebhookURL: webhookURL})
+	settings, err := a.content.SetModerationSettings(actor, ModerationSettings{DiscordWebhookURL: webhookURL})
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -527,7 +529,7 @@ func (a *api) adminGetDiscordIntegrationSettings(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	settings, err := a.staff.GetDiscordSettings(c.Request().Context(), actor)
+	settings, err := a.content.DiscordSettings(actor)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -557,7 +559,7 @@ func (a *api) adminPutDiscordIntegrationSettings(c echo.Context) error {
 	if settings.ReconcileIntervalMinutes < 1 || settings.ReconcileIntervalMinutes > 1440 {
 		return plainTextError(c, http.StatusBadRequest, "reconcile interval must be between 1 and 1440 minutes")
 	}
-	saved, err := a.staff.SetDiscordSettings(c.Request().Context(), actor, settings)
+	saved, err := a.content.SetDiscordSettings(actor, settings)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -569,7 +571,7 @@ func (a *api) adminGetRankedSeason(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	settings, err := a.staff.GetSeasonSettings(c.Request().Context(), actor)
+	settings, err := a.seasons.StaffSettings(actor)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -587,7 +589,7 @@ func (a *api) adminPutRankedSeasonResetRule(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &req); err != nil && !errors.Is(err, io.EOF) {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	settings, err := a.staff.SetSeasonResetRule(c.Request().Context(), actor, req.MonthlyResetDay)
+	settings, err := a.seasons.SetResetRule(actor, req.MonthlyResetDay)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "reset day") {
 			return plainTextError(c, http.StatusBadRequest, err.Error())
@@ -600,7 +602,7 @@ func (a *api) adminPutRankedSeasonResetRule(c echo.Context) error {
 // ---- Content ----
 
 func (a *api) publicLobbyChangelog(c echo.Context) error {
-	content, err := a.staff.GetLobbyChangelog(c.Request().Context(), defaultLobbyChangelogContent)
+	content, err := a.content.LobbyChangelog(defaultLobbyChangelogContent)
 	if err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "changelog unavailable")
 	}
@@ -608,7 +610,7 @@ func (a *api) publicLobbyChangelog(c echo.Context) error {
 }
 
 func (a *api) publicChangelogPosts(c echo.Context) error {
-	posts, err := a.staff.ListChangelogPosts(c.Request().Context(), false)
+	posts, err := a.content.PublishedPosts()
 	if err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "changelog unavailable")
 	}
@@ -617,7 +619,7 @@ func (a *api) publicChangelogPosts(c echo.Context) error {
 
 func (a *api) publicChangelogPost(c echo.Context) error {
 	slug := strings.TrimSpace(c.Param("slug"))
-	post, ok, err := a.staff.GetChangelogPost(c.Request().Context(), slug, true)
+	post, ok, err := a.content.PublishedPost(slug)
 	if err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "changelog unavailable")
 	}
@@ -628,11 +630,15 @@ func (a *api) publicChangelogPost(c echo.Context) error {
 }
 
 func (a *api) adminGetChangelog(c echo.Context) error {
-	if _, err := a.requireStaff(c.Request(), pkgstaff.CapManageContent); err != nil {
+	actor, err := a.staffActor(c.Request())
+	if err != nil {
 		return staffError(c, err)
 	}
-	posts, err := a.staff.ListChangelogPosts(c.Request().Context(), true)
+	posts, err := a.content.AllPosts(actor)
 	if err != nil {
+		if errors.Is(err, pkgstaff.ErrForbidden) {
+			return staffError(c, err)
+		}
 		return plainTextError(c, http.StatusInternalServerError, "changelog unavailable")
 	}
 	return writeJSON(c, map[string]any{"posts": posts})
@@ -651,7 +657,7 @@ func (a *api) adminCreateChangelogPost(c echo.Context) error {
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, err.Error())
 	}
-	post, err := a.staff.CreateChangelogPost(c.Request().Context(), actor, input)
+	post, err := a.content.CreatePost(actor, input)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -675,7 +681,7 @@ func (a *api) adminUpdateChangelogPost(c echo.Context) error {
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, err.Error())
 	}
-	post, ok, err := a.staff.UpdateChangelogPost(c.Request().Context(), actor, id, input)
+	post, ok, err := a.content.UpdatePost(actor, id, input)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -791,7 +797,7 @@ func (a *api) adminSetMapCreatorTier(c echo.Context) error {
 	default:
 		return plainTextError(c, http.StatusBadRequest, "tier must be auto, base, trusted, or established")
 	}
-	quota, err := a.staff.SetMapCreatorTier(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), tier)
+	quota, err := a.maps.SetMapCreatorTierOverride(actor, a.resolveEntityID("user", c.Param("id")), tier)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -820,7 +826,7 @@ func (a *api) adminImportOfficialMap(c echo.Context) error {
 		OfficialRegionType: r.FormValue("officialRegionType"),
 		OfficialRegionCode: r.FormValue("officialRegionCode"),
 	}
-	item, err := a.staff.ImportOfficialMap(r.Context(), actor, input, file)
+	item, err := a.maps.ImportOfficialMap(actor, input, file)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -853,7 +859,7 @@ func (a *api) uploadMap(c echo.Context, mapKey string) error {
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, "failed to read file")
 	}
-	summary, err := a.staff.ReplaceMapLocations(r.Context(), actor, mapKey, mapKey, dataset)
+	summary, err := a.maps.ReplaceMapLocations(actor, mapKey, mapKey, dataset)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -878,7 +884,7 @@ func (a *api) rescheduleMOTW(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &input); err != nil || input.ExpectedClosesAt.IsZero() || input.ClosesAt.IsZero() {
 		return plainTextError(c, http.StatusBadRequest, "expectedClosesAt and closesAt must be valid timestamps with a timezone")
 	}
-	if err := a.staff.RescheduleCuration(c.Request().Context(), actor, input.ExpectedClosesAt, input.ClosesAt); err != nil {
+	if err := a.curation.Reschedule(c.Request().Context(), actor, input.ExpectedClosesAt, input.ClosesAt); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -890,7 +896,7 @@ func (a *api) motwNominations(c echo.Context) error {
 		return staffError(c, err)
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
-	result, err := a.staff.ListNominations(c.Request().Context(), actor, page)
+	result, err := a.curation.ListNominations(c.Request().Context(), actor, page)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -902,7 +908,7 @@ func (a *api) nominateMOTW(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	if err := a.staff.NominateMap(c.Request().Context(), actor, a.resolveEntityID("map", c.Param("id"))); err != nil {
+	if err := a.curation.NominateMap(c.Request().Context(), actor, a.resolveEntityID("map", c.Param("id"))); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -923,7 +929,7 @@ func (a *api) likeMOTW(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &input); err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	if err := a.staff.LikeNomination(c.Request().Context(), actor, id, input.Liked); err != nil {
+	if err := a.curation.LikeNomination(c.Request().Context(), actor, id, input.Liked); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

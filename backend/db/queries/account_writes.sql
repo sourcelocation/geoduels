@@ -58,3 +58,9 @@ insert into users(id,email,display_name,avatar_url) values($1,$2,$3,$4) on confl
 
 -- name: ListAllDiscordIdentityIDs :many
 SELECT provider_user_id FROM user_identities WHERE provider = 'discord';
+
+-- name: LockNicknameForReset :one
+SELECT display_name, gd_is_registered(id) AS registered FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE;
+
+-- name: ResetNickname :exec
+UPDATE users SET display_name = $2 WHERE id = $1;

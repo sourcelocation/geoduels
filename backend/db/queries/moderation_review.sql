@@ -12,27 +12,6 @@ select count(*)::int as total_matches,
        count(*) filter (where h.mode = $2 and h.winner_user_id is not null and h.winner_user_id <> $1)::int as losses
 from match_history h join match_players p on p.match_id = h.match_id where p.user_id = $1;
 
--- name: GetStaffRoles :many
-SELECT role::text FROM user_roles WHERE user_id=$1 ORDER BY role;
-
--- name: LockStaffUser :one
-SELECT id FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE;
-
--- name: InsertStaffRole :exec
-INSERT INTO user_roles(user_id,role,granted_by,reason)
-VALUES(sqlc.arg(user_id),sqlc.arg(role)::staff_role,nullif(sqlc.arg(actor_user_id),'')::uuid,sqlc.arg(reason))
-ON CONFLICT(user_id,role) DO NOTHING;
-
--- name: DeleteStaffRole :exec
-DELETE FROM user_roles WHERE user_id=sqlc.arg(user_id) AND role=sqlc.arg(role)::staff_role;
-
--- name: ListUserRoles :many
-SELECT u.id, coalesce(nullif(u.display_name,''),u.id::text) AS display_name,
- coalesce(u.email,'') AS email, ur.role::text AS role,
- ur.granted_by AS actor_user_id, ur.granted_at, ur.reason AS last_reason
-FROM user_roles ur JOIN users u ON u.id=ur.user_id
-WHERE u.deleted_at IS NULL ORDER BY ur.granted_at DESC, u.id, ur.role;
-
 -- name: SearchAdminPlayers :many
 select
     u.id as user_id,

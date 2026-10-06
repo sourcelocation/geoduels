@@ -16,9 +16,10 @@ import (
 
 	"geoduels/internal/accounts"
 	"geoduels/internal/content"
+	"geoduels/internal/curation"
 	"geoduels/internal/jobs"
+	"geoduels/internal/moderation"
 	"geoduels/internal/seasons"
-	staffctx "geoduels/internal/staff"
 	"geoduels/internal/storage"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
@@ -86,15 +87,15 @@ func newWorker() (*worker, error) {
 		return nil, err
 	}
 	contentStore := content.NewPGStore(pool, producer)
-	staffStore := staffctx.NewPGStore(pool, contentStore, nil, nil, nil, nil, producer)
-	staffService := staffctx.NewService(staffStore, staffctx.NewRiskEngineFromEnv())
+	moderationService := moderation.NewService(moderation.NewPGStore(pool, producer), moderation.NewRiskEngineFromEnv())
+	curationService := curation.NewService(curation.NewPGStore(pool))
 	accountsStore := accounts.NewPGStore(pool, producer)
 	accountsService := accounts.NewService(accountsStore)
 	storageStore := storage.NewPGStore(pool)
 	seasonsStore := seasons.NewPGStore(pool)
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &matchAnalyzeWorker{staff: staffService})
+	river.AddWorker(workers, &matchAnalyzeWorker{moderation: moderationService})
 	river.AddWorker(workers, &moderationNotifyWorker{queries: db.New(pool), content: contentStore, httpClient: &http.Client{Timeout: 3 * time.Second}})
 	river.AddWorker(workers, &guestCleanupWorker{
 		accounts: accountsService,
@@ -107,7 +108,7 @@ func newWorker() (*worker, error) {
 		batch:   getenvInt("STORAGE_CLEANUP_BATCH_SIZE", 1000),
 	})
 	river.AddWorker(workers, &seasonResetWorker{seasons: seasonsStore})
-	river.AddWorker(workers, &curationSweepWorker{staff: staffService})
+	river.AddWorker(workers, &curationSweepWorker{curation: curationService})
 
 	periodic := jobs.PeriodicJobs(jobs.PeriodicConfig{
 		GuestCleanupInterval:   getenvDuration("GUEST_ACCOUNT_CLEANUP_INTERVAL", time.Hour),

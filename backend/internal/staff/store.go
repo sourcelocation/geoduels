@@ -6,42 +6,34 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
-	"geoduels/internal/badges"
-	"geoduels/internal/content"
-	"geoduels/internal/jobs"
-	"geoduels/internal/maps"
-	"geoduels/internal/seasons"
+	"geoduels/internal/audit"
 	"geoduels/internal/storekit"
+	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-// PGStore persists staff data and delegates other feature storage operations.
-type PGStore struct {
-	pool    *pgxpool.Pool
-	db      *db.Queries
-	tx      pgx.Tx
-	content content.Store
-	seasons seasons.Store
-	maps    *maps.PGStore
-	badges  badges.Store
-	redis   *redis.Client
-	jobs    jobs.Enqueuer
+// Store persists role grants. WithinTx supplies a store whose writes commit
+// together, or roll back when the callback returns an error.
+type Store interface {
+	WithinTx(ctx context.Context, fn func(Store) error) error
+	LockUser(ctx context.Context, userID string) error
+	UserRoles(ctx context.Context, userID string) ([]string, error)
+	GrantRole(ctx context.Context, userID, role, actorID, reason string) error
+	RevokeRole(ctx context.Context, userID, role string) error
+	ListRoleGrants(ctx context.Context) ([]contracts.UserRoleGrant, error)
+	RecordAudit(ctx context.Context, entry audit.Entry) (int64, error)
+	AwardTeamBadge(ctx context.Context, userID string) error
+	RemoveTeamBadge(ctx context.Context, userID string) error
 }
 
-// NewPGStore builds the staff store.
-func NewPGStore(pool *pgxpool.Pool, contentStore content.Store, seasonStore seasons.Store, mapStore *maps.PGStore, badgeStore badges.Store, rdb *redis.Client, enqueuer jobs.Enqueuer) *PGStore {
-	return &PGStore{
-		pool:    pool,
-		db:      db.New(pool),
-		content: contentStore,
-		seasons: seasonStore,
-		maps:    mapStore,
-		badges:  badgeStore,
-		redis:   rdb,
-		jobs:    enqueuer,
-	}
+type PGStore struct {
+	pool *pgxpool.Pool
+	tx   pgx.Tx
+}
+
+func NewPGStore(pool *pgxpool.Pool) *PGStore {
+	return &PGStore{pool: pool}
 }
 
 // q selects the transaction when present and the pool otherwise.
@@ -49,7 +41,7 @@ func (a *PGStore) q() *db.Queries {
 	if a.tx != nil {
 		return db.New(a.tx)
 	}
-	return a.db
+	return db.New(a.pool)
 }
 
 func (a *PGStore) requireTx() (pgx.Tx, error) {
@@ -66,6 +58,14 @@ func (a *PGStore) WithinTx(ctx context.Context, fn func(Store) error) error {
 		bound.tx = tx
 		return fn(&bound)
 	})
+}
+
+func (a *PGStore) RecordAudit(ctx context.Context, entry audit.Entry) (int64, error) {
+	tx, err := a.requireTx()
+	if err != nil {
+		return 0, err
+	}
+	return audit.Record(ctx, tx, entry)
 }
 
 var _ Store = (*PGStore)(nil)

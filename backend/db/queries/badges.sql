@@ -19,14 +19,8 @@ SELECT level, COALESCE(extra,0)::smallint AS extra FROM user_badges WHERE user_i
 -- name: InsertBadge :exec
 INSERT INTO user_badges(user_id,badge_code,level,extra,awarded_at,updated_at) VALUES (sqlc.arg(user_id)::uuid,sqlc.arg(badge_code),sqlc.arg(level),NULLIF(sqlc.arg(extra),0),now(),now());
 
--- name: InsertBadgeGrantLog :exec
-INSERT INTO moderation_log(subject_user_id,actor_user_id,action,reason,metadata) VALUES (sqlc.arg(subject_user_id)::uuid,NULLIF(sqlc.arg(actor_user_id),'')::uuid,'badge_granted',NULL,jsonb_build_object('badgeId',sqlc.arg(badge_id)::text,'source','admin'));
-
 -- name: InsertDonationRef :exec
 INSERT INTO support_donation_refs(ref,user_id) VALUES(sqlc.arg(donation_ref),sqlc.arg(user_id)::uuid);
-
--- name: InsertModerationBadgeGrant :exec
-INSERT INTO moderation_log(subject_user_id,actor_user_id,action,reason,metadata) VALUES(sqlc.arg(subject_user_id)::uuid,NULLIF(sqlc.arg(actor_user_id),'')::uuid,'badge_granted',NULL,jsonb_build_object('badgeId',sqlc.arg(badge_id)::text,'source','admin'));
 
 -- name: LockBadge :one
 SELECT level, COALESCE(extra, 0)::smallint AS extra FROM user_badges WHERE user_id = sqlc.arg(user_id)::uuid AND badge_code = sqlc.arg(badge_code) FOR UPDATE;

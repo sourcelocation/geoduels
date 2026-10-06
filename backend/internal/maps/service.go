@@ -5,6 +5,7 @@ import (
 
 	"geoduels/pkg/contentfilter"
 	"geoduels/pkg/contracts"
+	pkgstaff "geoduels/pkg/staff"
 )
 
 // Store is the narrow persistence capability required by the maps use cases.
@@ -30,11 +31,11 @@ type Store interface {
 	ReplaceMapLocations(mapKey, displayName string, dataset []byte) (contracts.MapImportSummary, error)
 	GetGameplayMapSettings() (contracts.GameplayMapSettings, error)
 	ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error)
+	MapCreatorAdminRepository
 }
 
 // MapCreatorAdminRepository is the administrative capability for overriding a
-// creator's trust tier. It is implemented by PGStore but kept separate from
-// Store because ordinary map use cases never need it.
+// creator's trust tier.
 type MapCreatorAdminRepository interface {
 	SetMapCreatorTierOverride(userID string, tier *int) (contracts.MapUploadQuota, error)
 }
@@ -69,8 +70,11 @@ func (s *Service) CreateCustomMap(userID, displayName, description, visibility, 
 	return s.store.CreateCustomMap(userID, displayName, description, visibility, difficulty, thumbnailKey, thumbnailVariant, source)
 }
 
-func (s *Service) ImportOfficialMap(adminUserID string, input OfficialMapImportInput, source io.Reader) (contracts.CustomMap, error) {
-	return s.store.ImportOfficialMap(adminUserID, input, source)
+func (s *Service) ImportOfficialMap(actor pkgstaff.Actor, input OfficialMapImportInput, source io.Reader) (contracts.CustomMap, error) {
+	if err := actor.RequireCap(pkgstaff.CapManageMaps); err != nil {
+		return contracts.CustomMap{}, err
+	}
+	return s.store.ImportOfficialMap(actor.ID, input, source)
 }
 
 func (s *Service) ReplaceCustomMapLocations(userID, mapID string, source io.Reader) (contracts.CustomMap, error) {
@@ -125,7 +129,10 @@ func (s *Service) ArchiveCustomMap(userID, mapID string, allowAnyMap bool) error
 	return s.store.ArchiveCustomMap(userID, mapID, allowAnyMap)
 }
 
-func (s *Service) ReplaceMapLocations(mapKey, displayName string, dataset []byte) (contracts.MapImportSummary, error) {
+func (s *Service) ReplaceMapLocations(actor pkgstaff.Actor, mapKey, displayName string, dataset []byte) (contracts.MapImportSummary, error) {
+	if err := actor.RequireCap(pkgstaff.CapManageMaps); err != nil {
+		return contracts.MapImportSummary{}, err
+	}
 	return s.store.ReplaceMapLocations(mapKey, displayName, dataset)
 }
 
@@ -137,7 +144,11 @@ func (s *Service) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contrac
 	return s.store.ResolveGameplayMapID(mode, ruleset, requestedMapID)
 }
 
-// SetMapCreatorTierOverride delegates the admin tier override to the store.
-func (s *Service) SetMapCreatorTierOverride(userID string, tier *int) (contracts.MapUploadQuota, error) {
-	return s.store.(MapCreatorAdminRepository).SetMapCreatorTierOverride(userID, tier)
+// SetMapCreatorTierOverride overrides a creator's trust tier; nil restores
+// the automatic tier.
+func (s *Service) SetMapCreatorTierOverride(actor pkgstaff.Actor, userID string, tier *int) (contracts.MapUploadQuota, error) {
+	if err := actor.RequireCap(pkgstaff.CapManageMaps); err != nil {
+		return contracts.MapUploadQuota{}, err
+	}
+	return s.store.SetMapCreatorTierOverride(userID, tier)
 }

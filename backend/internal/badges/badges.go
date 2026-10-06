@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"geoduels/internal/accounts"
+	"geoduels/internal/audit"
 	"geoduels/internal/storekit"
 	"geoduels/pkg/entityid"
 	"sort"
@@ -319,7 +320,7 @@ func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, nickname, badgeID, actor
 		return contracts.PlayerBadge{}, false, err
 	}
 	level, extra = badge.Level, badge.Extra
-	if err := db.New(tx).InsertBadgeGrantLog(ctx, db.InsertBadgeGrantLogParams{SubjectUserID: chatUUID(userID), ActorUserID: actorUserID, BadgeID: def.ID}); err != nil {
+	if _, err := audit.Record(ctx, tx, audit.Entry{SubjectID: userID, ActorID: actorUserID, Action: audit.ActionBadgeGranted, Metadata: map[string]any{"badgeId": def.ID, "source": "admin"}}); err != nil {
 		return contracts.PlayerBadge{}, false, err
 	}
 	return FromParts(def.Code, level, extra, true), changed, nil

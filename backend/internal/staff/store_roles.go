@@ -2,8 +2,10 @@ package staff
 
 import (
 	"context"
+	"time"
 
 	"geoduels/internal/storekit"
+	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -43,4 +45,21 @@ func (a *PGStore) RevokeRole(ctx context.Context, userID, role string) error {
 		return ErrNotFound
 	}
 	return a.q().DeleteStaffRole(ctx, db.DeleteStaffRoleParams{UserID: id, Role: db.StaffRole(role)})
+}
+
+func (a *PGStore) ListRoleGrants(ctx context.Context) ([]contracts.UserRoleGrant, error) {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	rows, err := a.q().ListUserRoles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]contracts.UserRoleGrant, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, contracts.UserRoleGrant{
+			UserID: row.ID.String(), DisplayName: storekit.TextVal(row.DisplayName), Email: row.Email,
+			Role: row.Role, GrantedBy: storekit.UUIDVal(row.ActorUserID), GrantedAt: row.GrantedAt.Time, Reason: row.LastReason,
+		})
+	}
+	return out, nil
 }

@@ -1221,3 +1221,29 @@ type MatchSessionUpsert struct {
 	NodeEpoch   int64
 	PublicRoute string
 }
+
+// ModerationWarning is the staff view of a warning.
+type ModerationWarning struct {
+	ID                int64      `json:"id"`
+	Category          string     `json:"category"`
+	Message           string     `json:"message"`
+	PreviousNickname  string     `json:"previousNickname,omitempty"`
+	ResetNickname     string     `json:"resetNickname,omitempty"`
+	EvidenceMessageID string     `json:"evidenceMessageId,omitempty"`
+	ActorUserID       string     `json:"actorUserId,omitempty"`
+	ActorName         string     `json:"actorName,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	AcknowledgedAt    *time.Time `json:"acknowledgedAt,omitempty"`
+	WithdrawnAt       *time.Time `json:"withdrawnAt,omitempty"`
+}
+
+// PlayerWarning is a player's view of their own warning. Reading it does not
+// acknowledge it.
+type PlayerWarning struct {
+	ID             int64      `json:"id"`
+	Category       string     `json:"category"`
+	Message        string     `json:"message"`
+	ResetNickname  string     `json:"resetNickname,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
+}

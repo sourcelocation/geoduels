@@ -1,8 +1,7 @@
-package staff
+package moderation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"geoduels/internal/audit"
 	"geoduels/internal/rating"
 	"geoduels/internal/storekit"
 	db "geoduels/pkg/persistence/sqlc/db"
@@ -84,20 +84,15 @@ func (a *PGStore) SetBan(ctx context.Context, userID, reason, actorID string, ba
 			return err
 		}
 	}
-	action := "unban"
+	action := audit.ActionUnban
 	if banned {
-		action = "permanent_ban"
+		action = audit.ActionPermanentBan
 	}
-	logID, err := q.InsertModerationLog(ctx, db.InsertModerationLogParams{
-		SubjectUserID: uid,
-		ActorUserID:   strings.TrimSpace(actorID),
-		Action:        db.GdModerationLogAction(action),
-		Reason:        strings.TrimSpace(reason),
-	})
+	logID, err := a.RecordAudit(ctx, audit.Entry{SubjectID: userID, ActorID: actorID, Action: action, Reason: reason})
 	if err != nil {
 		return err
 	}
-	return a.notifyAccountEnforcement(ctx, userID, action, reason, logID)
+	return a.notifyAccountEnforcement(ctx, userID, string(action), reason, logID)
 }
 
 func (a *PGStore) SetMute(ctx context.Context, userID, kind, reason, actorID string, until time.Time, muted bool) error {
@@ -132,20 +127,25 @@ func (a *PGStore) SetMute(ctx context.Context, userID, kind, reason, actorID str
 	if tag == 0 {
 		return ErrNotFound
 	}
-	action := kind + "_unmute"
-	expiresAt := pgtype.Timestamptz{}
+	entry := audit.Entry{SubjectID: userID, ActorID: actorID, Action: muteAction(kind, muted), Reason: reason}
 	if muted {
-		action = kind + "_mute"
-		expiresAt = storekit.Timestamptz(until)
+		entry.ExpiresAt = &until
 	}
-	_, err = q.InsertModerationLog(ctx, db.InsertModerationLogParams{
-		SubjectUserID: uid,
-		ActorUserID:   strings.TrimSpace(actorID),
-		Action:        db.GdModerationLogAction(action),
-		Reason:        strings.TrimSpace(reason),
-		ExpiresAt:     expiresAt,
-	})
+	_, err = a.RecordAudit(ctx, entry)
 	return err
+}
+
+func muteAction(kind string, muted bool) audit.Action {
+	switch {
+	case kind == "chat" && muted:
+		return audit.ActionChatMute
+	case kind == "chat":
+		return audit.ActionChatUnmute
+	case muted:
+		return audit.ActionReportMute
+	default:
+		return audit.ActionReportUnmute
+	}
 }
 
 func (a *PGStore) ClearReporterMute(ctx context.Context, userID string) error {
@@ -165,14 +165,14 @@ func (a *PGStore) ClearReporterMute(ctx context.Context, userID string) error {
 	if tag == 0 {
 		return ErrNotFound
 	}
-	_, err = q.InsertModerationLog(ctx, db.InsertModerationLogParams{SubjectUserID: uid, Action: db.GdModerationLogActionReportUnmute})
+	_, err = a.RecordAudit(ctx, audit.Entry{SubjectID: userID, Action: audit.ActionReportUnmute})
 	return err
 }
 
 func (a *PGStore) PreviewPardon(ctx context.Context, cutoff time.Time) (CommunityPardonSummary, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	candidates, err := a.db.ListCommunityPardonCandidates(ctx, storekit.Timestamptz(cutoff))
+	candidates, err := a.q().ListCommunityPardonCandidates(ctx, storekit.Timestamptz(cutoff))
 	if err != nil {
 		return CommunityPardonSummary{}, err
 	}
@@ -186,19 +186,13 @@ func (a *PGStore) Pardon(ctx context.Context, cutoff time.Time, actorID string) 
 	if err != nil {
 		return CommunityPardonSummary{}, err
 	}
-	metadata, _ := json.Marshal(map[string]any{"release": "v2", "policy": "active ban older than 7 days"})
+	metadata := map[string]any{"release": "v2", "policy": "active ban older than 7 days"}
 	for _, uid := range userIDs {
 		userID := storekit.UUIDVal(uid)
 		if _, err := q.RevokeOAuthIdentityBans(ctx, uid); err != nil {
 			return CommunityPardonSummary{}, err
 		}
-		logID, err := q.InsertModerationLog(ctx, db.InsertModerationLogParams{
-			SubjectUserID: uid,
-			ActorUserID:   actorID,
-			Action:        db.GdModerationLogActionUnban,
-			Reason:        "v2 community pardon",
-			Metadata:      metadata,
-		})
+		logID, err := a.RecordAudit(ctx, audit.Entry{SubjectID: userID, ActorID: actorID, Action: audit.ActionUnban, Reason: "v2 community pardon", Metadata: metadata})
 		if err != nil {
 			return CommunityPardonSummary{}, err
 		}
@@ -236,7 +230,7 @@ func (a *PGStore) IsSignupIPBanned(ctx context.Context, ipAddress string) (bool,
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	return a.db.IsIPSignupBanned(ctx, ipAddress)
+	return a.q().IsIPSignupBanned(ctx, ipAddress)
 }
 
 func (a *PGStore) ListIPBans(ctx context.Context, limit int) ([]SignupIPBan, error) {
@@ -248,7 +242,7 @@ func (a *PGStore) ListIPBans(ctx context.Context, limit int) ([]SignupIPBan, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	rows, err := a.db.ListActiveIPSignupBans(ctx, int32(limit))
+	rows, err := a.q().ListActiveIPSignupBans(ctx, int32(limit))
 	if err != nil {
 		return nil, err
 	}

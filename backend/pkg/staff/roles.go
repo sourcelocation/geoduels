@@ -99,6 +99,16 @@ func (a Actor) RequireCap(capability Capability) error {
 	return nil
 }
 
+// RequireAny allows the actor when it holds at least one of capabilities.
+func (a Actor) RequireAny(capabilities ...Capability) error {
+	for _, capability := range capabilities {
+		if a.Can(capability) {
+			return nil
+		}
+	}
+	return ErrForbidden
+}
+
 func (a Actor) Require(role Role) error {
 	if a.ID == "" || a.Banned || !a.Roles.Has(role) {
 		return ErrForbidden

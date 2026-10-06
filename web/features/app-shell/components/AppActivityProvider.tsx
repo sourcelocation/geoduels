@@ -70,6 +70,7 @@ export function AppActivityProvider({ children }: { children: ReactNode }) {
   const restoredParty = useRef("");
   const previousUserId = useRef(auth.userId);
   const navigatedMatch = useRef("");
+  const [navigationAttempt, setNavigationAttempt] = useState(0);
   const [nowMs, setNowMs] = useState(0);
   const isQueueing = match.matchmaking.status === "queueing";
 
@@ -99,13 +100,31 @@ export function AppActivityProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (!router.isReady || navigatedMatch.current === matchId) return;
-    navigatedMatch.current = matchId;
     const routedId = typeof router.query.id === "string" ? normalizeEntityRouteId(router.query.id) : "";
-    if (router.pathname === "/match/[id]" && routedId === matchId) return;
-    void router.replace(`/match/${encodeURIComponent(toPublicEntityId(matchId))}`).catch(() => {
-      navigatedMatch.current = "";
-    });
-  }, [party.launchMatchId, router]);
+    if (router.pathname === "/match/[id]" && routedId === matchId) {
+      navigatedMatch.current = matchId;
+      return;
+    }
+
+    let active = true;
+    let retryTimer: number | undefined;
+    const retry = () => {
+      if (!active) return;
+      // Next also resolves cancelled transitions with false. Keep the launch
+      // pending when another page navigation interrupts this one.
+      retryTimer = window.setTimeout(() => setNavigationAttempt((attempt) => attempt + 1), 300);
+    };
+    void router.replace(`/match/${encodeURIComponent(toPublicEntityId(matchId))}`).then((completed) => {
+      if (!active) return;
+      if (completed) navigatedMatch.current = matchId;
+      else retry();
+    }).catch(retry);
+
+    return () => {
+      active = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+  }, [auth.userId, party.launchMatchId, router, router.isReady, router.pathname, router.query.id, navigationAttempt]);
 
   useEffect(() => {
     if (!isQueueing) return;

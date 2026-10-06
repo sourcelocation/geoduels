@@ -91,6 +91,8 @@ export function parseNotificationEntry(entry: NotificationFeedEntry): Notificati
       return { ...base, title: badge?.label ? `${badge.label} unlocked` : "Badge unlocked", body: badge?.description, href: "/notifications", icon: <Trophy size={16} />, actions: [] };
     case "mmr_refund":
       return { ...base, title: "Rating refunded", body: "Your rating was adjusted after a match review.", href: matchId ? `/match/${encodeURIComponent(matchId)}` : "/notifications", icon: <ShieldAlert size={16} />, actions: [] };
+    case "moderation_warning":
+      return { ...base, title: notification.payload.withdrawn ? "Warning withdrawn" : notification.payload.nicknameReset ? "Nickname reset" : "Moderation warning", body: reason, href: "/notifications", icon: <ShieldAlert size={16} />, actions: [] };
     case "account_banned":
       return { ...base, title: "Account suspended", body: reason ? `Reason: ${reason}` : "Your account access has been restricted.", href: "/notifications", icon: <ShieldAlert size={16} />, actions: [] };
     case "account_unbanned":

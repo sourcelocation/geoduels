@@ -7,9 +7,10 @@ import (
 	"github.com/riverqueue/river"
 
 	"geoduels/internal/accounts"
+	"geoduels/internal/curation"
 	"geoduels/internal/jobs"
+	"geoduels/internal/moderation"
 	"geoduels/internal/seasons"
-	staffctx "geoduels/internal/staff"
 	"geoduels/internal/storage"
 	"geoduels/pkg/observability"
 )
@@ -17,14 +18,14 @@ import (
 // matchAnalyzeWorker runs the integrity detector for a finished match.
 type matchAnalyzeWorker struct {
 	river.WorkerDefaults[jobs.MatchAnalyzeArgs]
-	staff *staffctx.Service
+	moderation *moderation.Service
 }
 
 func (w *matchAnalyzeWorker) Work(ctx context.Context, job *river.Job[jobs.MatchAnalyzeArgs]) error {
-	if w.staff == nil || job.Args.MatchID == "" {
+	if w.moderation == nil || job.Args.MatchID == "" {
 		return nil
 	}
-	return w.staff.EvaluateMatch(ctx, job.Args.MatchID)
+	return w.moderation.EvaluateMatch(ctx, job.Args.MatchID)
 }
 
 // guestCleanupWorker deletes stale guest accounts in batches.
@@ -118,12 +119,12 @@ func (w *seasonResetWorker) Work(ctx context.Context, _ *river.Job[jobs.SeasonRe
 // curationSweepWorker closes any due Map-of-the-Week cycle.
 type curationSweepWorker struct {
 	river.WorkerDefaults[jobs.CurationSweepArgs]
-	staff *staffctx.Service
+	curation *curation.Service
 }
 
 func (w *curationSweepWorker) Work(ctx context.Context, _ *river.Job[jobs.CurationSweepArgs]) error {
-	if w.staff == nil {
+	if w.curation == nil {
 		return nil
 	}
-	return w.staff.RunCurationSweep(ctx)
+	return w.curation.RunSweep(ctx)
 }

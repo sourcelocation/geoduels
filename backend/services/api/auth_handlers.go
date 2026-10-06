@@ -38,7 +38,7 @@ func (a *api) guestLogin(c echo.Context) error {
 	if err := decodeJSONBody(r, &req); err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	if banned, err := a.staff.IsSignupIPBanned(r.Context(), a.clientIP(r)); err != nil {
+	if banned, err := a.moderation.IsSignupIPBanned(r.Context(), a.clientIP(r)); err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "signup unavailable (101)")
 	} else if banned {
 		return plainTextError(c, http.StatusForbidden, "signup unavailable (102)")

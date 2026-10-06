@@ -2,6 +2,7 @@ import Link from "next/link";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Ban, ExternalLink, ShieldAlert } from "lucide-react";
 import { useState } from "react";
+import { PlayerWarnings } from "../components/PlayerWarnings";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { CenteredSpinner } from "../../../components/ui/Spinner";
@@ -146,6 +147,9 @@ export function PlayerDetailRoute(props: {
           </div>
         </Panel>
       </div>
+
+      <PlayerWarnings config={props.config} accessToken={props.accessToken} userId={props.userId}
+        onChanged={async () => { await detailQuery.refetch(); await props.refreshAdminData(); }} />
 
       {moderatorSubject ? (
         <div className="grid gap-4 xl:grid-cols-2">

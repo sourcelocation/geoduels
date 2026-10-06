@@ -1,4 +1,4 @@
-package staff
+package moderation
 
 import (
 	"context"
@@ -8,18 +8,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"geoduels/internal/audit"
 	"geoduels/internal/storekit"
 	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 	pkgstaff "geoduels/pkg/staff"
 )
 
-const (
-	modeDuel   = "duel"
-	initialMMR = 1000
-)
-
-func (a *PGStore) SearchSubjects(ctx context.Context, viewer Actor, query string, limit int) ([]contracts.AdminPlayerSummary, error) {
+func (a *PGStore) SearchSubjects(ctx context.Context, viewer pkgstaff.Actor, query string, limit int) ([]contracts.AdminPlayerSummary, error) {
 	if limit <= 0 {
 		limit = 30
 	}
@@ -36,7 +32,7 @@ func (a *PGStore) SearchSubjects(ctx context.Context, viewer Actor, query string
 	if err != nil {
 		return nil, err
 	}
-	rows, err := a.db.SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
+	rows, err := a.q().SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
 		Mode:             db.GdMatchMode(modeDuel),
 		SeasonID:         seasonID,
 		DefaultMmr:       int32(initialMMR),
@@ -60,7 +56,7 @@ func (a *PGStore) SearchSubjects(ctx context.Context, viewer Actor, query string
 	return result, nil
 }
 
-func (a *PGStore) GetSubject(ctx context.Context, viewer Actor, userID string) (SubjectDetail, error) {
+func (a *PGStore) GetSubject(ctx context.Context, viewer pkgstaff.Actor, userID string) (SubjectDetail, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	summary, err := a.getSubjectSummary(ctx, viewer.Can(pkgstaff.CapManageAccess), userID)
@@ -84,7 +80,7 @@ func (a *PGStore) getSubjectSummary(ctx context.Context, includeSensitive bool, 
 	if err != nil {
 		return contracts.AdminPlayerSummary{}, err
 	}
-	rows, err := a.db.SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
+	rows, err := a.q().SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
 		Mode:             db.GdMatchMode(modeDuel),
 		SeasonID:         seasonID,
 		DefaultMmr:       int32(initialMMR),
@@ -119,7 +115,7 @@ func (a *PGStore) subjectStats(ctx context.Context, userID string) (adminStats, 
 	if err != nil {
 		return adminStats{}, err
 	}
-	row, err := a.db.AdminPlayerStats(ctx, db.AdminPlayerStatsParams{WinnerUserID: u, Mode: db.GdMatchMode(modeDuel)})
+	row, err := a.q().AdminPlayerStats(ctx, db.AdminPlayerStatsParams{WinnerUserID: u, Mode: db.GdMatchMode(modeDuel)})
 	if err != nil {
 		return adminStats{}, err
 	}
@@ -190,7 +186,7 @@ func (a *PGStore) populateIdentities(ctx context.Context, players []contracts.Ad
 		userIDs = append(userIDs, uid)
 		byUserID[uid.String()] = i
 	}
-	rows, err := a.db.AdminPlayerIdentities(ctx, userIDs)
+	rows, err := a.q().AdminPlayerIdentities(ctx, userIDs)
 	if err != nil {
 		return err
 	}
@@ -213,7 +209,7 @@ func (a *PGStore) populateIdentities(ctx context.Context, players []contracts.Ad
 	return nil
 }
 
-func (a *PGStore) ListSignals(ctx context.Context, _ Actor, subjectID string, limit int) ([]contracts.ModerationSignalSummary, error) {
+func (a *PGStore) ListSignals(ctx context.Context, subjectID string, limit int) ([]contracts.ModerationSignalSummary, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -230,7 +226,7 @@ func (a *PGStore) ListSignals(ctx context.Context, _ Actor, subjectID string, li
 		}
 		subject = u
 	}
-	rows, err := a.db.ListModerationSignals(ctx, db.ListModerationSignalsParams{SubjectUserID: subject, RowLimit: int32(limit)})
+	rows, err := a.q().ListModerationSignals(ctx, db.ListModerationSignalsParams{SubjectUserID: subject, RowLimit: int32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -252,51 +248,8 @@ func (a *PGStore) ListSignals(ctx context.Context, _ Actor, subjectID string, li
 	return out, nil
 }
 
-func (a *PGStore) ListAudit(ctx context.Context, _ Actor, subjectID string, limit int) ([]contracts.ModerationAuditLogEntry, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 200 {
-		limit = 200
-	}
+func (a *PGStore) ListAudit(ctx context.Context, subjectID string, limit int) ([]contracts.ModerationAuditLogEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	subject := pgtype.UUID{}
-	if strings.TrimSpace(subjectID) != "" {
-		u, err := storekit.ProfileUUID(subjectID)
-		if err != nil {
-			return nil, err
-		}
-		subject = u
-	}
-	rows, err := a.db.ListModerationLog(ctx, db.ListModerationLogParams{SubjectUserID: subject, RowLimit: int32(limit)})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]contracts.ModerationAuditLogEntry, 0, len(rows))
-	for _, x := range rows {
-		out = append(out, contracts.ModerationAuditLogEntry{
-			ID: x.LogID, SubjectUserID: storekit.UUIDVal(x.SubjectUserID), SubjectName: storekit.TextVal(x.SubjectDisplayName),
-			ActorUserID: storekit.UUIDVal(x.ActorUserID), ActorName: storekit.TextVal(x.ActorDisplayName), Action: string(x.Action),
-			Reason: x.Reason, ExpiresAt: x.ExpiresAt.Time, SignalIDs: x.SignalIds, Metadata: json.RawMessage(x.Metadata), CreatedAt: x.CreatedAt.Time,
-		})
-	}
-	return out, nil
-}
-
-func (a *PGStore) ListRoleGrants(ctx context.Context) ([]contracts.UserRoleGrant, error) {
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-	rows, err := a.db.ListUserRoles(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]contracts.UserRoleGrant, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, contracts.UserRoleGrant{
-			UserID: row.ID.String(), DisplayName: storekit.TextVal(row.DisplayName), Email: row.Email,
-			Role: row.Role, GrantedBy: storekit.UUIDVal(row.ActorUserID), GrantedAt: row.GrantedAt.Time, Reason: row.LastReason,
-		})
-	}
-	return out, nil
+	return audit.List(ctx, a.conn(), subjectID, limit)
 }

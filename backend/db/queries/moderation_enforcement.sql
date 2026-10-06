@@ -95,19 +95,6 @@ ON CONFLICT (ip_address) DO UPDATE SET
     created_at = now(),
     revoked_at = NULL;
 
--- name: InsertModerationLog :one
-
-INSERT INTO moderation_log(subject_user_id, actor_user_id, action, reason, expires_at, metadata)
-VALUES(
-    sqlc.arg('subject_user_id')::uuid,
-    NULLIF(sqlc.arg('actor_user_id'), '')::uuid,
-    sqlc.arg('action'),
-    NULLIF(sqlc.arg('reason'), ''),
-    sqlc.arg('expires_at'),
-    convert_from(sqlc.arg('metadata'), 'UTF8')::jsonb
-)
-RETURNING id;
-
 -- name: IsIPSignupBanned :one
 SELECT exists(
     SELECT 1 FROM ip_signup_bans

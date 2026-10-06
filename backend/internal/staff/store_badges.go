@@ -4,36 +4,23 @@ import (
 	"context"
 
 	"geoduels/internal/badges"
-	"geoduels/pkg/contracts"
 )
 
-func (a *PGStore) AwardBadge(ctx context.Context, userID, badgeID string) (bool, error) {
+// AwardTeamBadge gives staff the GeoDuels team badge in the role transaction.
+func (a *PGStore) AwardTeamBadge(ctx context.Context, userID string) error {
 	tx, err := a.requireTx()
 	if err != nil {
-		return false, err
+		return err
 	}
-	return badges.AwardBadgeTx(ctx, tx, userID, badgeID)
+	_, err = badges.AwardBadgeTx(ctx, tx, userID, "geoduels-team")
+	return err
 }
 
-// RemoveBadge removes the GeoDuels team badge (the only staff-managed revocable badge).
-func (a *PGStore) RemoveBadge(ctx context.Context, userID, _ string) error {
+// RemoveTeamBadge removes the badge when a user's last role is revoked.
+func (a *PGStore) RemoveTeamBadge(ctx context.Context, userID string) error {
 	tx, err := a.requireTx()
 	if err != nil {
 		return err
 	}
 	return badges.RemoveGeoDuelsTeamBadgeTx(ctx, tx, userID)
-}
-
-// BadgeCatalog lists badges an admin may grant.
-func (a *PGStore) BadgeCatalog() []contracts.AdminBadgeDefinition {
-	return a.badges.ListAdminGrantableBadges()
-}
-
-// GrantBadgeByNickname grants a badge by nickname, writing its own audit entry.
-func (a *PGStore) GrantBadgeByNickname(ctx context.Context, nickname, badgeID, actorID string) (contracts.PlayerBadge, bool, error) {
-	tx, err := a.requireTx()
-	if err != nil {
-		return contracts.PlayerBadge{}, false, err
-	}
-	return badges.GrantBadgeToUserTx(ctx, tx, nickname, badgeID, actorID)
 }

@@ -2,7 +2,6 @@ import { avatarImage } from "../lib/avatar";
 import { MapContainer, Marker, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
-import { SmoothWheelZoom } from '../lib/leaflet/smooth-wheel-zoom';
 import type { TeamPing } from '../features/game/model/types';
 
 // Leaflet consumes JS color/opacity values rather than Tailwind classes. Keep
@@ -439,19 +438,6 @@ function SafeMapUnmount() {
   return null;
 }
 
-function SmoothWheelZoomControl({ enabled }: { enabled: boolean }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!enabled) return;
-    const handler = new SmoothWheelZoom(map);
-    handler.enable();
-    return () => { handler.disable(); };
-  }, [enabled, map]);
-
-  return null;
-}
-
 function hasVisibleGuess(p: RoundPlayerResult) {
   return !(p.lat === 0 && p.lng === 0 && p.score === 0);
 }
@@ -565,8 +551,7 @@ export default function GuessMap({
       attributionControl={false}
       zoomControl={interactive}
       dragging={interactive}
-      scrollWheelZoom={false}
-      zoomSnap={0}
+      scrollWheelZoom={interactive}
       doubleClickZoom={interactive}
       touchZoom={interactive}
       boxZoom={interactive}
@@ -577,7 +562,6 @@ export default function GuessMap({
         subdomains={['0', '1', '2', '3']}
       />
       <SafeMapUnmount />
-      <SmoothWheelZoomControl enabled={interactive} />
       <InvalidateOnResize />
       {mode === 'guess' && (guessSubmitted ? onPing : onGuess) ? <ClickCapture onClick={(guessSubmitted ? onPing : onGuess)!} /> : null}
       {mode === 'guess' && guess ? <Marker position={[guess.lat, guess.lng]} icon={guessMarkerIcon} /> : null}

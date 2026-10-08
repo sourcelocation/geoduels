@@ -1,8 +1,11 @@
 name: release-prod
 
 # A release is a pull request from master into production, titled with the version it ships
-# (v1.2.3). On the pull request, "Release version" checks the title; merging it runs the checks,
-# tags the merge commit, builds the images and asks ops to deploy them.
+# (v1.2.3). On the pull request, the amd64 images are built and pushed as candidates
+# (<version>-<commit>-amd64), and "Release candidate" passes once all of them exist. Merging it
+# promotes the candidates to <version>-amd64, tags the merge commit and deploys through ops; then the
+# arm64 and multi-arch images for self-hosters follow. A build that fails blocks the merge, so no
+# version is used up by a broken release.
 on:
   pull_request:
     branches: [production]
@@ -12,10 +15,12 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
-  group: release-prod-${{ github.event_name }}-${{ github.event.pull_request.number || 'production' }}
+  # A body-only edit gets a group of its own, so it never cancels a build.
+  group: >-
+    release-prod-${{ github.event.pull_request.number || 'production' }}${{
+    github.event.action == 'edited' && !github.event.changes.title && '-edit' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -29,14 +34,19 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
-      release_sha: ${{ steps.meta.outputs.release_sha }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_sha: ${{ steps.meta.outputs.release_sha }}
+      candidate: ${{ steps.meta.outputs.candidate }}
+      build: ${{ steps.meta.outputs.build }}
     steps:
       - id: meta
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REBUILD: ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.title != null) }}
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
@@ -49,6 +59,7 @@ jobs:
             echo "::error::production only changes through a release pull request."; exit 1
           fi
           tag=$(jq -r '.title' <<<"$pr")
+          sha=$(jq -r '.head.sha' <<<"$pr")
           from=$(jq -r '.head.repo.full_name + ":" + .head.ref' <<<"$pr")
           if [ "$from" != "$GITHUB_REPOSITORY:$DEFAULT_BRANCH" ]; then
             echo "::error::A release comes from $DEFAULT_BRANCH, not $from."; exit 1
@@ -59,77 +70,33 @@ jobs:
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
             echo "::error::$tag is released already."; exit 1
           fi
-          echo "release_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            # The release builds what master's CI tested: wait for it on this commit. A commit that
+            # only touches docs has no CI run.
+            for _ in $(seq 1 120); do
+              run=$(gh run list --workflow ci.yml --commit "$sha" --event push --limit 1 --json status,conclusion --jq '.[0] // empty')
+              [ -z "$run" ] || [ "$(jq -r .status <<<"$run")" = completed ] && break
+              sleep 15
+            done
+            if [ -n "$run" ] && [ "$(jq -r .conclusion <<<"$run")" != success ]; then
+              echo "::error::CI didn't pass on master at ${sha:0:7}."; exit 1
+            fi
+          fi
+          {
+            echo "release_tag=$tag"
+            echo "release_sha=$sha"
+            echo "candidate=$tag-${sha:0:7}"
+            echo "build=$REBUILD"
+          } >> "$GITHUB_OUTPUT"
 
-  go-checks:
-    name: go-checks
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+  build-amd64:
+    name: build-amd64
+    if: needs.release-meta.outputs.build == 'true'
     needs: release-meta
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-meta.outputs.release_sha }}
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          cache: true
-          cache-dependency-path: backend/go.sum
-
-      - name: Generate and test Go code
-        working-directory: backend
-        run: |
-          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
-          go test ./...
-          go vet ./...
-
-  web-checks:
-    name: web-checks
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    needs: release-meta
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-meta.outputs.release_sha }}
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Test
-        working-directory: web
-        run: |
-          npm ci --no-audit --no-fund
-          npm run test
-
-  # The checks passed: the merge commit is the release.
-  tag:
-    name: tag
-    runs-on: ubuntu-latest
-    needs:
-      - release-meta
-      - go-checks
-      - web-checks
     permissions:
-      contents: write
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release-meta.outputs.release_tag }}
-          SHA: ${{ needs.release-meta.outputs.release_sha }}
-        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" --silent
-
-  build-and-push-backend-amd64:
-    name: build-and-push-backend-amd64
-    runs-on: ubuntu-latest
-    needs:
-      - release-meta
-      - tag
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -143,64 +110,146 @@ jobs:
           REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
           echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
 
-      - name: Build and push backend images (amd64)
+      - name: Build and push the candidates (amd64)
         uses: docker/bake-action@v6
         env:
-          TAG: ${{ needs.release-meta.outputs.release_tag }}-amd64
-          PLATFORMS: linux/amd64
-          CACHE_SCOPE: images-ubuntu-latest
-          CACHE_READONLY: 'true'
-        with:
-          files: docker-bake.hcl
-          targets: backend
-          push: true
-
-  build-and-push-web-amd64:
-    name: build-and-push-web-amd64
-    runs-on: ubuntu-latest
-    needs:
-      - release-meta
-      - tag
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-meta.outputs.release_sha }}
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Login to registry
-        run: |
-          set -euo pipefail
-          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
-          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
-
-      - name: Build and push web (amd64)
-        uses: docker/bake-action@v6
-        env:
-          TAG: ${{ needs.release-meta.outputs.release_tag }}-amd64
+          TAG: ${{ needs.release-meta.outputs.candidate }}-amd64
           PLATFORMS: linux/amd64
           APP_VERSION: ${{ needs.release-meta.outputs.release_tag }}
           GIT_SHA: ${{ needs.release-meta.outputs.release_sha }}
-          CACHE_SCOPE: images-ubuntu-latest
-          CACHE_READONLY: 'true'
+          CACHE: write
         with:
           files: docker-bake.hcl
-          targets: web
+          targets: default
           push: true
 
-  # arm64 images are for self-hosters; production and the deploy below use amd64 only.
-  # Built without a cache, since CI on master only builds amd64.
+  candidate:
+    name: Release candidate
+    if: always() && github.event_name == 'pull_request'
+    needs: [release-meta, build-amd64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-meta.outputs.release_sha || github.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        run: |
+          set -euo pipefail
+          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
+          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
+
+      # Passes once every candidate image exists: built by this run, or, after a body-only edit, by
+      # the run still building them.
+      - name: Every candidate image exists
+        env:
+          META_RESULT: ${{ needs.release-meta.result }}
+          BUILD_RESULT: ${{ needs.build-amd64.result }}
+          TAG: ${{ needs.release-meta.outputs.candidate }}-amd64
+        run: |
+          set -euo pipefail
+          [ "$META_RESULT" = success ] || { echo "::error::The release version isn't valid."; exit 1; }
+          [ "$BUILD_RESULT" = success ] || [ "$BUILD_RESULT" = skipped ] || { echo "::error::An image failed to build."; exit 1; }
+          for image in $(docker buildx bake -f docker-bake.hcl --print default | jq -r '.target[].tags[]'); do
+            for _ in $(seq 1 60); do docker buildx imagetools inspect "$image" >/dev/null 2>&1 && continue 2; sleep 15; done
+            echo "::error::$image doesn't exist."; exit 1
+          done
+
+  # The candidates become the release, and the merge commit is tagged.
+  promote:
+    name: promote
+    if: github.event_name == 'push'
+    needs: release-meta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        run: |
+          set -euo pipefail
+          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
+          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
+
+      - name: Promote the candidates
+        env:
+          TAG: ${{ needs.release-meta.outputs.candidate }}-amd64
+          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}-amd64
+        run: |
+          set -euo pipefail
+          for image in $(docker buildx bake -f docker-bake.hcl --print default | jq -r '.target[].tags[]'); do
+            docker buildx imagetools create -t "${image%:*}:$RELEASE_TAG" "$image"
+          done
+
+      - name: Tag the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-meta.outputs.release_tag }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" --silent
+
+  # Deploys: sets the new image tags in the ops repo (apps/geoduels), where Flux picks them up.
+  # Rollback: revert that commit.
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    needs:
+      - release-meta
+      - promote
+    env:
+      TAG: ${{ needs.release-meta.outputs.release_tag }}
+    steps:
+      - name: Checkout ops repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.OPS_REPOSITORY }}
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+
+      # yq is preinstalled on GitHub's Ubuntu runners.
+      - name: Set the image tags
+        run: |
+          set -euo pipefail
+          # The risk engine is released from its own repo.
+          yq -i '(.images[] | select(.name != "*-risk-engine") | .newTag) = strenv(TAG) + "-amd64"' \
+            apps/geoduels/kustomization.yaml
+          git diff --stat
+
+      - name: Commit to ops
+        run: |
+          set -euo pipefail
+          git config user.name "geoduels-release[bot]"
+          git config user.email "geoduels-release@users.noreply.github.com"
+          git commit -am "deploy geoduels ${TAG}" -m "From ${{ github.repository }}@${{ needs.release-meta.outputs.release_sha }}"
+          # Other products release into the same repo; replay on top of theirs.
+          for _ in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
+
+  # arm64 images are for self-hosters; production and the deploy above use amd64 only.
+  # Built after the release, without a cache: they don't hold up the merge.
   build-and-push-arm64:
     name: build-and-push-arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     needs:
       - release-meta
-      - tag
+      - promote
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-meta.outputs.release_sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -228,15 +277,14 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - release-meta
-      - build-and-push-backend-amd64
-      - build-and-push-web-amd64
       - build-and-push-arm64
+    permissions:
+      contents: read
+      packages: write
     env:
       TAG: ${{ needs.release-meta.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-meta.outputs.release_sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -258,44 +306,3 @@ jobs:
             fi
             docker buildx imagetools create "${tags[@]}" "$image-amd64" "$image-arm64"
           done
-
-  # Deploys: sets the new image tags in the ops repo (apps/geoduels), where Flux picks them up.
-  # Rollback: revert that commit.
-  deploy:
-    name: deploy
-    runs-on: ubuntu-latest
-    environment: production
-    needs:
-      - release-meta
-      - build-and-push-backend-amd64
-      - build-and-push-web-amd64
-    env:
-      TAG: ${{ needs.release-meta.outputs.release_tag }}
-    steps:
-      - name: Checkout ops repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.OPS_REPOSITORY }}
-          token: ${{ secrets.OPS_REPO_TOKEN }}
-
-      # yq is preinstalled on GitHub's Ubuntu runners.
-      - name: Set the image tags
-        run: |
-          set -euo pipefail
-          # The risk engine is released from its own repo.
-          yq -i '(.images[] | select(.name != "*-risk-engine") | .newTag) = strenv(TAG) + "-amd64"' \
-            apps/geoduels/kustomization.yaml
-          git diff --stat
-
-      - name: Commit to ops
-        run: |
-          set -euo pipefail
-          git config user.name "geoduels-release[bot]"
-          git config user.email "geoduels-release@users.noreply.github.com"
-          git commit -am "deploy geoduels ${TAG}" -m "From ${{ github.repository }}@${{ needs.release-meta.outputs.release_sha }}"
-          # Other products release into the same repo; replay on top of theirs.
-          for attempt in 1 2 3; do
-            git push && exit 0
-            git pull --rebase
-          done
-          exit 1

@@ -1,0 +1,57 @@
+name: images
+
+# Builds the amd64 images, without pushing them, when something they're built from changes that
+# ci's tests don't compile: a Dockerfile, the bake file, a lockfile. Releases build the real images;
+# this catches a broken build before a release does.
+on:
+  push:
+    branches: [master]
+    paths:
+      - '**/Dockerfile'
+      - '**/.dockerignore'
+      - docker-bake.hcl
+      - backend/go.mod
+      - backend/go.sum
+      - web/package-lock.json
+      - .github/workflows/images.yml
+  pull_request:
+    branches-ignore: [production]
+    paths:
+      - '**/Dockerfile'
+      - '**/.dockerignore'
+      - docker-bake.hcl
+      - backend/go.mod
+      - backend/go.sum
+      - web/package-lock.json
+      - .github/workflows/images.yml
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  images:
+    name: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to registry
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      # Reads the cache release builds write; never writes it.
+      - name: Build images
+        uses: docker/bake-action@v6
+        env:
+          PLATFORMS: linux/amd64
+          CACHE: read
+          TAG: ci
+          APP_VERSION: ci
+          GIT_SHA: ${{ github.sha }}
+        with:
+          files: docker-bake.hcl
+          targets: default

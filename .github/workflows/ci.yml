@@ -1,7 +1,9 @@
 name: ci
 
+# Release pull requests into production carry master's latest commit, which this already tested.
 on:
   pull_request:
+    branches-ignore: [production]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -72,28 +74,6 @@ jobs:
           npm run lint:architecture:strict
           npm run test
           npm run build
-
-  # Checks the Dockerfiles and warms the cache that releases build from.
-  # Production is amd64; arm64 images are built only on release.
-  images:
-    name: images
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build images
-        uses: docker/bake-action@v6
-        env:
-          PLATFORMS: linux/amd64
-          CACHE_SCOPE: images-ubuntu-latest
-          CACHE_READONLY: ${{ github.ref != 'refs/heads/master' }}
-          TAG: ci
-          APP_VERSION: ci
-          GIT_SHA: ${{ github.sha }}
-        with:
-          files: docker-bake.hcl
-          targets: default
 
   secret-scan:
     name: secret-scan

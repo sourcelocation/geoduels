@@ -23,6 +23,12 @@ variable "CACHE_SCOPE" {
   default = ""
 }
 
+// Set to "true" to read the cache without writing it. Only main writes, since
+// caches saved on PR or tag refs are invisible to later runs.
+variable "CACHE_READONLY" {
+  default = ""
+}
+
 group "default" {
   targets = ["backend", "web"]
 }
@@ -48,7 +54,7 @@ target "backend" {
   dockerfile = "services/${service}/Dockerfile"
   tags = ["${REGISTRY}/geoduels-${service}:${TAG}"]
   cache-from = CACHE_SCOPE != "" ? ["type=gha,scope=${CACHE_SCOPE}-${service}"] : []
-  cache-to = CACHE_SCOPE != "" ? ["type=gha,mode=max,scope=${CACHE_SCOPE}-${service}"] : []
+  cache-to = CACHE_SCOPE != "" && CACHE_READONLY != "true" ? ["type=gha,mode=max,scope=${CACHE_SCOPE}-${service}"] : []
 }
 
 target "web" {
@@ -61,5 +67,5 @@ target "web" {
     NEXT_PUBLIC_GIT_SHA = GIT_SHA
   }
   cache-from = CACHE_SCOPE != "" ? ["type=gha,scope=${CACHE_SCOPE}-web"] : []
-  cache-to = CACHE_SCOPE != "" ? ["type=gha,mode=max,scope=${CACHE_SCOPE}-web"] : []
+  cache-to = CACHE_SCOPE != "" && CACHE_READONLY != "true" ? ["type=gha,mode=max,scope=${CACHE_SCOPE}-web"] : []
 }

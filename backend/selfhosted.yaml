@@ -3,6 +3,8 @@
 # the single public entrypoint. Run with:
 #   docker compose --env-file backend/beta.secrets.env \
 #     -f backend/selfhosted.yaml up -d
+# Images default to the latest release (amd64 and arm64); pin IMAGE_TAG to a
+# release such as v2.2.4 to stay on it.
 services:
   postgres:
     image: postgres:16
@@ -58,7 +60,7 @@ services:
       - redis-data:/data
 
   gameplay-node:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-gameplay-node:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-gameplay-node:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5m
@@ -86,7 +88,7 @@ services:
         condition: service_healthy
 
   match-coordinator:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-match-coordinator:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-match-coordinator:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5s
@@ -113,7 +115,7 @@ services:
         condition: service_healthy
 
   realtime-gateway:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-realtime-gateway:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-realtime-gateway:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5s
@@ -134,7 +136,7 @@ services:
         condition: service_started
 
   api:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5s
@@ -171,7 +173,7 @@ services:
       - match-coordinator
 
   web:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-web:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5s
@@ -189,14 +191,14 @@ services:
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: ${NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS}
       NEXT_PUBLIC_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
-      NEXT_PUBLIC_APP_VERSION: ${IMAGE_TAG:-beta}
+      NEXT_PUBLIC_APP_VERSION: ${IMAGE_TAG:-latest}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
       - api
 
   moderation-worker:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-moderation-worker:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-moderation-worker:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5s
@@ -217,7 +219,7 @@ services:
         condition: service_healthy
 
   discord-worker:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-discord-worker:${IMAGE_TAG:-beta}
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-discord-worker:${IMAGE_TAG:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 5s

@@ -62,11 +62,14 @@ type matchCoordinator struct {
 	metrics         *observability.APIMetrics
 	draining        atomic.Bool
 	matchmakerOwner atomic.Bool
-	leaseStore      controlplane.LeaseStore
-	lease           controlplane.Lease
-	leaseClose      func()
-	chatMu          sync.Mutex
-	chatRecent      map[string][]time.Time
+	// Held through a matchmaking tick and while the lease is renewed, taken or handed over, so this
+	// replica never runs a tick after giving the lease up.
+	matchmakerMu sync.Mutex
+	leaseStore   controlplane.LeaseStore
+	lease        controlplane.Lease
+	leaseClose   func()
+	chatMu       sync.Mutex
+	chatRecent   map[string][]time.Time
 }
 
 var queueUpgrader = websocket.Upgrader{CheckOrigin: httpx.WSOriginAllowed}
@@ -209,19 +212,26 @@ func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if q.draining.Load() || !q.isMatchmakerOwner() {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), interval)
-		status, err := q.maintenanceStatus(ctx)
-		cancel()
-		if err == nil && status.QueueBlocked() {
-			continue
-		}
-		for _, queue := range matchstore.AllQueueVariants {
-			if _, err := q.store.RunMatchmaking(matchstore.QueuePoolRegistered, queue, batchSize); err != nil {
-				observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(matchstore.QueuePoolRegistered), "queue": string(queue), "error": err.Error()})
-			}
+		q.matchmakerMu.Lock()
+		q.runMatchmakingTick(interval, batchSize)
+		q.matchmakerMu.Unlock()
+	}
+}
+
+// runMatchmakingTick matches queued players, on the replica that holds the matchmaker lease only.
+func (q *matchCoordinator) runMatchmakingTick(interval time.Duration, batchSize int) {
+	if q.draining.Load() || !q.isMatchmakerOwner() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interval)
+	status, err := q.maintenanceStatus(ctx)
+	cancel()
+	if err == nil && status.QueueBlocked() {
+		return
+	}
+	for _, queue := range matchstore.AllQueueVariants {
+		if _, err := q.store.RunMatchmaking(matchstore.QueuePoolRegistered, queue, batchSize); err != nil {
+			observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(matchstore.QueuePoolRegistered), "queue": string(queue), "error": err.Error()})
 		}
 	}
 }
@@ -265,25 +275,52 @@ func (q *matchCoordinator) runMatchmakerLeaseLoop() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if q.draining.Load() || q.leaseStore == nil {
+		if !q.renewOrTakeLease(interval, ttl) {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), interval)
-		if q.matchmakerOwner.Load() {
-			renewed, err := q.leaseStore.Renew(ctx, q.lease, ttl)
-			if err != nil || !renewed {
-				q.matchmakerOwner.Store(false)
-				observability.Log("error", "matchmaker lease lost", map[string]any{"error": err})
-			}
-		} else {
-			lease, acquired, err := q.leaseStore.Acquire(ctx, matchmakerLeaseName, q.lease.Owner, ttl)
-			if err == nil && acquired {
-				q.lease = lease
-				q.matchmakerOwner.Store(true)
-				observability.Log("info", "matchmaker lease acquired", map[string]any{"fencingToken": lease.Token})
-			}
+	}
+}
+
+// renewOrTakeLease keeps the matchmaker lease, or takes it once it's free. It reports false once this
+// replica is draining: it has handed the lease over and won't take it back.
+func (q *matchCoordinator) renewOrTakeLease(interval, ttl time.Duration) bool {
+	q.matchmakerMu.Lock()
+	defer q.matchmakerMu.Unlock()
+	if q.draining.Load() || q.leaseStore == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interval)
+	defer cancel()
+	if q.matchmakerOwner.Load() {
+		renewed, err := q.leaseStore.Renew(ctx, q.lease, ttl)
+		if err != nil || !renewed {
+			q.matchmakerOwner.Store(false)
+			observability.Log("error", "matchmaker lease lost", map[string]any{"error": err})
+		}
+	} else {
+		lease, acquired, err := q.leaseStore.Acquire(ctx, matchmakerLeaseName, q.lease.Owner, ttl)
+		if err == nil && acquired {
+			q.lease = lease
+			q.matchmakerOwner.Store(true)
+			observability.Log("info", "matchmaker lease acquired", map[string]any{"fencingToken": lease.Token})
+		}
+	}
+	return true
+}
+
+// handOverLease gives the matchmaker lease up between ticks, so another replica takes it on its next
+// check rather than after this one has exited.
+func (q *matchCoordinator) handOverLease() {
+	q.matchmakerMu.Lock()
+	defer q.matchmakerMu.Unlock()
+	if q.leaseStore != nil && q.matchmakerOwner.Load() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := q.leaseStore.Release(ctx, q.lease); err != nil {
+			observability.Log("warn", "matchmaker lease hand-over failed", map[string]any{"error": err.Error()})
 		}
 		cancel()
+		q.matchmakerOwner.Store(false)
+		observability.Log("info", "matchmaker lease handed over", nil)
 	}
 }
 
@@ -302,9 +339,6 @@ func (q *matchCoordinator) queue(c echo.Context) error {
 	r := c.Request()
 	if q.draining.Load() {
 		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "draining")
-	}
-	if !q.isMatchmakerOwner() {
-		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "matchmaker unavailable")
 	}
 	status, err := q.maintenanceStatus(r.Context())
 	if err != nil {
@@ -439,7 +473,8 @@ func (q *matchCoordinator) queue(c echo.Context) error {
 
 	for {
 		if q.draining.Load() {
-			q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "DRAINING", "message": "Queue server is restarting. Please re-queue."})
+			// Another replica serves the queue; the client reconnects there and queues again.
+			q.writeQueueMessage(conn, &writeMu, "queue_reconnect", nil)
 			return nil
 		}
 		if found == nil {
@@ -689,9 +724,6 @@ func (q *matchCoordinator) healthReady(c echo.Context) error {
 	if q.draining.Load() {
 		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "draining")
 	}
-	if !q.isMatchmakerOwner() {
-		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "matchmaker standby")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := q.redis.Ping(ctx).Err(); err != nil {
@@ -738,6 +770,7 @@ func (q *matchCoordinator) handleShutdown(srv *http.Server) {
 
 	<-sigCh
 	q.draining.Store(true)
+	q.handOverLease()
 	time.Sleep(20 * time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

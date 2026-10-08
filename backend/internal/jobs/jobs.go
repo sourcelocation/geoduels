@@ -5,6 +5,8 @@ package jobs
 
 import (
 	"context"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -90,7 +92,11 @@ type Client struct {
 // NewClient builds a River client. Pass nil workers for an insert-only client,
 // and periodic jobs to schedule maintenance (worker clients only).
 func NewClient(pool *pgxpool.Pool, workers *river.Workers, periodic []*river.PeriodicJob) (*Client, error) {
-	cfg := &river.Config{}
+	cfg := &river.Config{
+		// Behind PgBouncer in transaction mode LISTEN never hears anything, and River would hold a
+		// connection for it forever; poll instead.
+		PollOnly: strings.EqualFold(os.Getenv("POSTGRES_PGBOUNCER"), "true"),
+	}
 	if workers != nil {
 		cfg.Workers = workers
 		cfg.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 8}}

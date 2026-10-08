@@ -2,9 +2,17 @@ name: ci
 
 on:
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'extension/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'extension/**'
 
 permissions:
   contents: read
@@ -65,26 +73,21 @@ jobs:
           npm run test
           npm run build
 
+  # Checks the Dockerfiles and warms the cache that releases build from.
+  # Production is amd64; arm64 images are built only on release.
   images:
-    name: images (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
+    name: images
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            platform: linux/amd64
-          - runner: ubuntu-24.04-arm
-            platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Build images
         uses: docker/bake-action@v6
         env:
-          PLATFORMS: ${{ matrix.platform }}
-          CACHE_SCOPE: images-${{ matrix.runner }}
+          PLATFORMS: linux/amd64
+          CACHE_SCOPE: images-ubuntu-latest
+          CACHE_READONLY: ${{ github.ref != 'refs/heads/main' }}
           TAG: ci
           APP_VERSION: ci
           GIT_SHA: ${{ github.sha }}

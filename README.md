@@ -39,7 +39,7 @@ docker compose --env-file backend/beta.secrets.env -f backend/selfhosted.yaml up
 docker compose --env-file backend/beta.secrets.env -f backend/selfhosted.yaml run --rm db-migrate
 ```
 
-Build and push the images first with `docker buildx bake` (see [development notes](docs/development.md)).
+This pulls the latest release images for amd64 or arm64; set `IMAGE_TAG` (for example `v2.2.4`) to pin a release. To run your own changes, build and push the images with `docker buildx bake` and point `REGISTRY` and `IMAGE_TAG` at them (see [development notes](docs/development.md)).
 
 ## Development references
 

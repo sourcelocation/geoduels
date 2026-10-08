@@ -68,6 +68,15 @@ export async function heartbeatQueue(
   throw new Error('Queue unavailable');
 }
 
+// How the queue's one connection ended: matched ('done'), asked to reconnect by a server that is
+// restarting, or never reached a server at all, as while a restarting server's address moves over.
+type QueueOutcome = 'done' | 'reconnect' | 'unreachable';
+
+// A queue server that restarts asks its clients to reconnect, and another one serves them. Opening a
+// connection that reaches no server is tried a few more times before the queue counts as unavailable.
+const QUEUE_ATTEMPTS = 6;
+const QUEUE_RETRY_MS = 750;
+
 export async function streamQueue(
   config: RuntimeConfig,
   session: AuthSessionSnapshot,
@@ -75,24 +84,64 @@ export async function streamQueue(
   queues: QueueVariant[],
   onEvent: (event: QueueEvent) => void
 ) {
+  let unreachable = 0;
+  for (;;) {
+    const outcome = await openQueue(config, session, signal, queues, onEvent);
+    if (outcome === 'done') return;
+    if (outcome === 'reconnect') {
+      unreachable = 0;
+    } else if (++unreachable >= QUEUE_ATTEMPTS) {
+      throw new Error('Queue unavailable');
+    }
+    await waitOrAbort(QUEUE_RETRY_MS, signal);
+  }
+}
+
+function waitOrAbort(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function openQueue(
+  config: RuntimeConfig,
+  session: AuthSessionSnapshot,
+  signal: AbortSignal,
+  queues: QueueVariant[],
+  onEvent: (event: QueueEvent) => void
+): Promise<QueueOutcome> {
   const base = normalizeWSBase(config.queueURL).replace(/\/$/, '');
   const selectedQueues = (queues.length ? queues : ['moving']).join(',');
   const target = `${base}/queue?accessToken=${encodeURIComponent(session.accessToken)}&queues=${encodeURIComponent(selectedQueues)}`;
 
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<QueueOutcome>((resolve, reject) => {
     let settled = false;
     let assigned = false;
+    let heard = false;
+    let reconnect = false;
     const ws = new WebSocket(target);
 
     const cleanup = () => {
       signal.removeEventListener('abort', abort);
     };
 
-    const settleResolve = () => {
+    const settleResolve = (outcome: QueueOutcome) => {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve();
+      resolve(outcome);
     };
 
     const settleReject = (error: Error) => {
@@ -110,6 +159,10 @@ export async function streamQueue(
     signal.addEventListener('abort', abort, { once: true });
 
     ws.onerror = () => {
+      if (!heard) {
+        settleResolve('unreachable');
+        return;
+      }
       settleReject(new Error('Queue unavailable'));
     };
 
@@ -119,13 +172,22 @@ export async function streamQueue(
         return;
       }
       if (assigned) {
-        settleResolve();
+        settleResolve('done');
+        return;
+      }
+      if (reconnect) {
+        settleResolve('reconnect');
+        return;
+      }
+      if (!heard) {
+        settleResolve('unreachable');
         return;
       }
       settleReject(new Error('Search cancelled'));
     };
 
     ws.onmessage = (evt) => {
+      heard = true;
       let msg: any;
       try {
         msg = JSON.parse(String(evt.data));
@@ -157,6 +219,10 @@ export async function streamQueue(
             sourcePartyInviteCode: typeof payload?.sourcePartyInviteCode === 'string' ? payload.sourcePartyInviteCode : '',
             returnTarget: normalizeMatchReturnTarget(payload?.returnTarget)
           });
+          return;
+        }
+        if (eventName === 'queue_reconnect') {
+          reconnect = true;
           return;
         }
         if (eventName === 'queue_error') {

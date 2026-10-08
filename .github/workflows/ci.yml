@@ -8,7 +8,7 @@ on:
       - 'extension/**'
   push:
     branches:
-      - main
+      - master
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -87,7 +87,7 @@ jobs:
         env:
           PLATFORMS: linux/amd64
           CACHE_SCOPE: images-ubuntu-latest
-          CACHE_READONLY: ${{ github.ref != 'refs/heads/main' }}
+          CACHE_READONLY: ${{ github.ref != 'refs/heads/master' }}
           TAG: ci
           APP_VERSION: ci
           GIT_SHA: ${{ github.sha }}

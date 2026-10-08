@@ -166,7 +166,6 @@ jobs:
           # The risk engine is released from its own repo.
           yq -i '(.images[] | select(.name != "*-risk-engine") | .newTag) = strenv(TAG) + "-amd64"' \
             apps/geoduels/kustomization.yaml
-          yq -i '.data.NEXT_PUBLIC_APP_VERSION = strenv(TAG)' apps/geoduels/config.yaml
           git diff --stat
 
       - name: Commit to ops

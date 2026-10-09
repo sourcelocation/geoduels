@@ -71,13 +71,20 @@ jobs:
             echo "::error::$tag is released already."; exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            # The release builds what master's CI tested: wait for it on this commit. A commit that
-            # only touches docs has no CI run.
-            for _ in $(seq 1 120); do
+            # The release builds what master's CI tested: wait for its run on this commit, which may
+            # take a moment to start after a merge. A commit that only touches docs has no run
+            # (ci.yml's paths-ignore): when none has started after two minutes, there is none.
+            may_skip=true
+            run=""
+            for i in $(seq 1 120); do
               run=$(gh run list --workflow ci.yml --commit "$sha" --event push --limit 1 --json status,conclusion --jq '.[0] // empty')
-              [ -z "$run" ] || [ "$(jq -r .status <<<"$run")" = completed ] && break
+              if [ -n "$run" ] && [ "$(jq -r .status <<<"$run")" = completed ]; then break; fi
+              if [ -z "$run" ] && [ "$may_skip" = true ] && [ "$i" -ge 8 ]; then break; fi
               sleep 15
             done
+            if [ -z "$run" ] && [ "$may_skip" != true ]; then
+              echo "::error::CI never ran on master at ${sha:0:7}."; exit 1
+            fi
             if [ -n "$run" ] && [ "$(jq -r .conclusion <<<"$run")" != success ]; then
               echo "::error::CI didn't pass on master at ${sha:0:7}."; exit 1
             fi
@@ -166,11 +173,16 @@ jobs:
     if: github.event_name == 'push'
     needs: release-meta
     runs-on: ubuntu-latest
+    environment: release
     permissions:
-      contents: write
+      contents: read
       packages: write
     steps:
+      # Only CI creates release tags: the tag ruleset lets only this repository's deploy key push one,
+      # and its private half lives in the release environment, which only production's jobs can use.
       - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.RELEASE_TAG_KEY }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -192,9 +204,10 @@ jobs:
 
       - name: Tag the release
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-meta.outputs.release_tag }}
-        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" --silent
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
 
   # Deploys: sets the new image tags in the ops repo (apps/geoduels), where Flux picks them up.
   # Rollback: revert that commit.

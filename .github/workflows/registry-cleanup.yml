@@ -1,0 +1,42 @@
+name: registry-cleanup
+
+# Release candidates that never became a release (an abandoned or renamed release pull request) are
+# deleted two weeks after they were built. A promoted candidate shares its image with the release
+# tag, so it stays.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: List what would be deleted, without deleting it
+        type: boolean
+        default: true
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    name: Delete abandoned candidates
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+          PACKAGES: geoduels-api geoduels-discord-worker geoduels-gameplay-node geoduels-match-coordinator geoduels-moderation-worker geoduels-realtime-gateway geoduels-web
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d '14 days ago' +%s)
+          for pkg in $PACKAGES; do
+            gh api --paginate "users/$OWNER/packages/container/$pkg/versions" --jq '.[]
+              | select((.metadata.container.tags | length) > 0
+                and all(.metadata.container.tags[]; test("^v[0-9].*-[0-9a-f]{7}(-amd64)?$")))
+              | "\(.id) \(.created_at) \(.metadata.container.tags | join(","))"' |
+            while read -r id created tags; do
+              [ "$(date -u -d "$created" +%s)" -lt "$cutoff" ] || continue
+              echo "$pkg: $tags"
+              [ "$DRY_RUN" = true ] || gh api -X DELETE "users/$OWNER/packages/container/$pkg/versions/$id" --silent
+            done
+          done

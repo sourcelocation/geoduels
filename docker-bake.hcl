@@ -18,14 +18,10 @@ variable "GIT_SHA" {
   default = "dev"
 }
 
-// CI opts into GitHub Actions caching; local builds use BuildKit's own cache.
-variable "CACHE_SCOPE" {
-  default = ""
-}
-
-// Set to "true" to read the cache without writing it. Only main writes, since
-// caches saved on PR or tag refs are invisible to later runs.
-variable "CACHE_READONLY" {
+// The build cache lives in the registry (<image>:buildcache), so every run shares it. "write" (release
+// builds) reads and writes it, "read" (CI's image check) only reads it; empty, as in local builds,
+// leaves BuildKit to its own cache.
+variable "CACHE" {
   default = ""
 }
 
@@ -53,8 +49,8 @@ target "backend" {
   context = "backend"
   dockerfile = "services/${service}/Dockerfile"
   tags = ["${REGISTRY}/geoduels-${service}:${TAG}"]
-  cache-from = CACHE_SCOPE != "" ? ["type=gha,scope=${CACHE_SCOPE}-${service}"] : []
-  cache-to = CACHE_SCOPE != "" && CACHE_READONLY != "true" ? ["type=gha,mode=max,scope=${CACHE_SCOPE}-${service}"] : []
+  cache-from = CACHE != "" ? ["type=registry,ref=${REGISTRY}/geoduels-${service}:buildcache"] : []
+  cache-to = CACHE == "write" ? ["type=registry,ref=${REGISTRY}/geoduels-${service}:buildcache,mode=max"] : []
 }
 
 target "web" {
@@ -66,6 +62,6 @@ target "web" {
     NEXT_PUBLIC_APP_VERSION = APP_VERSION
     NEXT_PUBLIC_GIT_SHA = GIT_SHA
   }
-  cache-from = CACHE_SCOPE != "" ? ["type=gha,scope=${CACHE_SCOPE}-web"] : []
-  cache-to = CACHE_SCOPE != "" && CACHE_READONLY != "true" ? ["type=gha,mode=max,scope=${CACHE_SCOPE}-web"] : []
+  cache-from = CACHE != "" ? ["type=registry,ref=${REGISTRY}/geoduels-web:buildcache"] : []
+  cache-to = CACHE == "write" ? ["type=registry,ref=${REGISTRY}/geoduels-web:buildcache,mode=max"] : []
 }

@@ -29,8 +29,8 @@ VALUES(
 ON CONFLICT (subject_user_id, coalesce(match_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(detector_key, ''), coalesce(detector_version, ''), reason_code)
     WHERE source = 'risk_engine'
 DO UPDATE SET
-    severity = CASE WHEN array_position(ARRAY['low','medium','high','critical'], excluded.severity) > array_position(ARRAY['low','medium','high','critical'], moderation_signals.severity) THEN excluded.severity ELSE moderation_signals.severity END,
-    evidence_strength = CASE WHEN array_position(ARRAY['weak','limited','substantial','strong'], excluded.evidence_strength) > array_position(ARRAY['weak','limited','substantial','strong'], moderation_signals.evidence_strength) THEN excluded.evidence_strength ELSE moderation_signals.evidence_strength END,
+    severity = greatest(moderation_signals.severity, excluded.severity),
+    evidence_strength = greatest(moderation_signals.evidence_strength, excluded.evidence_strength),
     score = greatest(moderation_signals.score, excluded.score),
     recommended_queue = moderation_signals.recommended_queue OR excluded.recommended_queue,
     payload_json = excluded.payload_json,

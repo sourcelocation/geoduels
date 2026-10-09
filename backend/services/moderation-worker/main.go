@@ -83,7 +83,7 @@ func newWorker() (*worker, error) {
 	pool := store.Pool()
 
 	// Insert-only client for producers inside this process.
-	producer, err := jobs.NewClient(pool, nil, nil)
+	producer, err := jobs.NewClient(pool, "", nil, nil)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -117,7 +117,7 @@ func newWorker() (*worker, error) {
 		SeasonResetInterval:    time.Minute,
 		CurationInterval:       time.Minute,
 	})
-	jobsClient, err := jobs.NewClient(pool, workers, periodic)
+	jobsClient, err := jobs.NewClient(pool, river.QueueDefault, workers, periodic)
 	if err != nil {
 		store.Close()
 		return nil, err

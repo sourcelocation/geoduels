@@ -100,7 +100,7 @@ func newWorker() (*worker, error) {
 		store.Close()
 		return nil, err
 	}
-	producer, err := jobs.NewClient(store.Pool(), nil, nil)
+	producer, err := jobs.NewClient(store.Pool(), "", nil, nil)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -126,7 +126,7 @@ func newWorker() (*worker, error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &discordSyncWorker{w: w})
 	river.AddWorker(workers, &discordSyncAllWorker{w: w})
-	jobsClient, err := jobs.NewClient(store.Pool(), workers, nil)
+	jobsClient, err := jobs.NewClient(store.Pool(), jobs.QueueDiscord, workers, nil)
 	if err != nil {
 		store.Close()
 		return nil, err

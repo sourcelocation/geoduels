@@ -108,7 +108,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	jobsClient, err := jobs.NewClient(db.Pool(), nil, nil)
+	jobsClient, err := jobs.NewClient(db.Pool(), "", nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

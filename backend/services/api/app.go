@@ -164,7 +164,7 @@ func newAPI() (*api, error) {
 		return nil, err
 	}
 	socialStore := socialdomain.NewPGStore(pool)
-	jobsClient, err := jobs.NewClient(pool, nil, nil)
+	jobsClient, err := jobs.NewClient(pool, "", nil, nil)
 	if err != nil {
 		store.Close()
 		return nil, err

@@ -20,8 +20,6 @@ cd backend
 go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
 cd ..
 
-docker compose -f backend/dev.yaml up -d postgres redis
-./backend/scripts/migrate.sh up
 docker compose -f backend/dev.yaml up -d
 
 npm --prefix web ci
@@ -36,8 +34,9 @@ The self-hosted stack (`backend/selfhosted.yaml`) runs the published images with
 
 ```sh
 docker compose --env-file backend/beta.secrets.env -f backend/selfhosted.yaml up -d
-docker compose --env-file backend/beta.secrets.env -f backend/selfhosted.yaml run --rm db-migrate
 ```
+
+The `db-migrate` service brings the database to the release's schema before anything that uses it starts.
 
 This pulls the latest release images for amd64 or arm64; set `IMAGE_TAG` (for example `v2.2.4`) to pin a release. To run your own changes, build and push the images with `docker buildx bake` and point `REGISTRY` and `IMAGE_TAG` at them (see [development notes](docs/development.md)).
 

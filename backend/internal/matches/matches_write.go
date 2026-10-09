@@ -17,7 +17,7 @@ import (
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) (contracts.MatchSnapshot, error) {
+func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot) (contracts.MatchSnapshot, error) {
 	if strings.TrimSpace(snap.MatchID) == "" {
 		return snap, errors.New("match id required")
 	}
@@ -51,14 +51,14 @@ func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) 
 	defer tx.Rollback(ctx)
 	q := db.New(tx)
 
-	sessionState, err := q.LockMatchSessionState(ctx, matchUUID)
+	ended, err := q.LockMatchSessionEnded(ctx, matchUUID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return snap, errors.New("match session missing")
 	}
 	if err != nil {
 		return snap, err
 	}
-	if sessionState == db.GdMatchSessionStateEnded {
+	if ended {
 		if err := applyPersistedRatingsToSnapshot(ctx, tx, q, &snap); err != nil {
 			return snap, err
 		}
@@ -94,9 +94,6 @@ func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot, ownerEpoch int64) 
 		}
 	}
 	if err := completeMatchSessionTx(ctx, q, matchUUID); err != nil {
-		return snap, err
-	}
-	if err := recordRuntimeMatchEndedTx(ctx, q, matchUUID, ownerEpoch); err != nil {
 		return snap, err
 	}
 	// Integrity evaluation is durable: a River job is enqueued in this
@@ -279,14 +276,6 @@ func completeMatchSessionTx(ctx context.Context, q *db.Queries, matchID pgtype.U
 		return err
 	}
 	return q.ResetPartyMembersAfterMatch(ctx, matchID)
-}
-
-func recordRuntimeMatchEndedTx(ctx context.Context, q *db.Queries, matchID pgtype.UUID, ownerEpoch int64) error {
-	return q.RecordRuntimeMatchEnded(ctx, db.RecordRuntimeMatchEndedParams{
-		ID:         matchID,
-		State:      db.GdRuntimeState(contracts.MatchEnded),
-		OwnerEpoch: ownerEpoch,
-	})
 }
 
 func rankedSpeedrunnerUsers(snap contracts.MatchSnapshot) map[string]bool {

@@ -36,11 +36,12 @@ import (
 )
 
 const (
-	wsWriteWait          = 10 * time.Second
-	wsPongWait           = 70 * time.Second
-	wsPingPeriod         = 25 * time.Second
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 70 * time.Second
+	wsPingPeriod = 25 * time.Second
+	// A match is live while its lease holds (gd_match_status); see matches.defaultMatchLeaseTTL.
 	matchLeaseRenewEvery = 10 * time.Second
-	matchLeaseTTL        = 45 * time.Second
+	matchLeaseTTL        = 2 * time.Minute
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: httpx.WSOriginAllowed}
@@ -74,11 +75,17 @@ type gameplayNode struct {
 	matchModes   map[string]contracts.MatchMode
 	finalizing   map[string]bool
 	lastTeamPing map[string]time.Time
+	// lastPlayed is when a player last did something in each match: created it, connected, or sent a
+	// command other than a heartbeat. A match is in use until idleAfter passes without that.
+	lastPlayed map[string]time.Time
+	idleAfter  time.Duration
 
 	metrics *observability.RuntimeMetrics
 
 	drain    gameplayDrain
 	drainTTL time.Duration
+	// matchEnded wakes a drain when a match leaves the node.
+	matchEnded chan struct{}
 }
 
 func main() {
@@ -115,9 +122,6 @@ func main() {
 		}
 	}
 	singleplayerTTL := envcfg.Duration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
-	if err := store.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
-		log.Fatal(err)
-	}
 	ticketSecret, err := envcfg.RequiredSecret("GAMEPLAY_TICKET_SECRET", 32)
 	if err != nil {
 		log.Fatal(err)
@@ -160,8 +164,12 @@ func main() {
 		matchModes:   map[string]contracts.MatchMode{},
 		finalizing:   map[string]bool{},
 		lastTeamPing: map[string]time.Time{},
+		lastPlayed:   map[string]time.Time{},
+		idleAfter:    envcfg.Duration("GAMEPLAY_IDLE_AFTER", 15*time.Minute),
 		metrics:      observability.NewRuntimeMetrics(),
-		drainTTL:     envcfg.Duration("GAMEPLAY_DRAIN_TIMEOUT", 9*time.Minute+30*time.Second),
+		// Only a backstop: a drain ends once no match is in use.
+		drainTTL:   envcfg.Duration("GAMEPLAY_DRAIN_TIMEOUT", 2*time.Hour),
+		matchEnded: make(chan struct{}, 1),
 	}
 	defer g.db.Close()
 	defer g.redisCleanup()
@@ -211,10 +219,12 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	observability.Log("info", "gameplay-node startup", map[string]any{"addr": addr, "nodeId": g.nodeID, "route": g.publicRoute})
-	go g.handleShutdown(srv)
+	drained := make(chan struct{})
+	go g.handleShutdown(srv, drained)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
 
 func (g *gameplayNode) createMatch(c echo.Context) error {
@@ -256,12 +266,10 @@ func (g *gameplayNode) createMatch(c echo.Context) error {
 	if err := runtime.CreateMatch(found.MatchID, found.Players, found.Profiles, found.Unranked, found.SeasonID, found.Config, found.Teams); err != nil && !strings.Contains(err.Error(), "already exists") {
 		return httpx.PlainTextError(c, http.StatusBadGateway, err.Error())
 	}
-	if err := g.persist.RecordRuntimeMatch(req.Context(), found.MatchID, string(contracts.MatchLive), g.nodeEpoch, false); err != nil {
-		return httpx.PlainTextError(c, http.StatusBadGateway, "match persistence unavailable")
-	}
 	g.mu.Lock()
 	g.matchUsers[found.MatchID] = append([]string(nil), found.Players...)
 	g.matchModes[found.MatchID] = mode
+	g.lastPlayed[found.MatchID] = time.Now()
 	g.mu.Unlock()
 	return httpx.JSON(c, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -364,6 +372,7 @@ func (g *gameplayNode) ws(c echo.Context) error {
 
 	connID := shortID()
 	g.bindConnection(userID, matchID, connID, conn, writeMu)
+	g.played(matchID)
 	g.touchPresence(userID)
 	defer g.onDisconnect(userID, matchID, connID)
 
@@ -429,6 +438,9 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 		return ack, nil
 	}
 
+	if cmd.Type != "ping" && cmd.Type != "session.leave_match" {
+		g.played(matchID)
+	}
 	switch cmd.Type {
 	case "ping":
 		return ack, nil
@@ -534,7 +546,8 @@ func (g *gameplayNode) sendTeamPing(userID, matchID, roundID string, lat, lng fl
 func (g *gameplayNode) tick() {
 	t := time.NewTicker(1 * time.Second)
 	defer t.Stop()
-	for range t.C {
+	lastRetry := time.Now()
+	for now := range t.C {
 		changed := map[string]bool{}
 		for _, runtime := range g.runtimes {
 			for _, matchID := range runtime.Tick() {
@@ -551,6 +564,59 @@ func (g *gameplayNode) tick() {
 				continue
 			}
 			g.publishRuntimeState(matchID, snap, "")
+		}
+		if now.Sub(lastRetry) >= finalizationRetryEvery {
+			lastRetry = now
+			g.retryFinalization(changed)
+			g.endIdleSolo(now)
+		}
+	}
+}
+
+const finalizationRetryEvery = 10 * time.Second
+
+// endIdleSolo ends singleplayer games nobody played for idleAfter. A solo game has no clock of its
+// own, so without this an abandoned one would stay on the node until it restarts.
+func (g *gameplayNode) endIdleSolo(now time.Time) {
+	type idle struct{ matchID, userID string }
+	var ended []idle
+	g.mu.RLock()
+	for matchID, players := range g.matchUsers {
+		if g.matchModes[matchID] != contracts.ModeSingleplayer || g.finalizing[matchID] || len(players) == 0 {
+			continue
+		}
+		if now.Sub(g.lastPlayed[matchID]) >= g.idleAfter {
+			ended = append(ended, idle{matchID, players[0]})
+		}
+	}
+	g.mu.RUnlock()
+	for _, m := range ended {
+		runtime, ok := g.runtimeForMatch(m.matchID)
+		if !ok {
+			continue
+		}
+		snap, err := runtime.Forfeit(m.matchID, m.userID)
+		if err != nil {
+			continue
+		}
+		g.publishRuntimeState(m.matchID, snap, "")
+	}
+}
+
+// retryFinalization finalizes ended matches again whose last attempt failed: an ended match stops
+// changing, so nothing else would, and it would stay on the node (and hold a drain) forever.
+func (g *gameplayNode) retryFinalization(justPublished map[string]bool) {
+	g.mu.RLock()
+	pending := make([]string, 0)
+	for matchID := range g.matchUsers {
+		if !justPublished[matchID] && !g.finalizing[matchID] {
+			pending = append(pending, matchID)
+		}
+	}
+	g.mu.RUnlock()
+	for _, matchID := range pending {
+		if snap, ok := g.getSnapshot(matchID); ok && snap.State == contracts.MatchEnded {
+			g.terminalize(matchID, snap)
 		}
 	}
 }
@@ -581,7 +647,7 @@ func (g *gameplayNode) terminalize(matchID string, snap *contracts.MatchSnapshot
 	g.finalizing[matchID] = true
 	g.mu.Unlock()
 
-	finalized, err := g.persist.FinalizeMatch(*snap, g.nodeEpoch)
+	finalized, err := g.persist.FinalizeMatch(*snap)
 	if err != nil {
 		g.mu.Lock()
 		delete(g.finalizing, matchID)
@@ -599,12 +665,17 @@ func (g *gameplayNode) terminalize(matchID string, snap *contracts.MatchSnapshot
 	delete(g.finalizing, matchID)
 	delete(g.matchUsers, matchID)
 	delete(g.matchModes, matchID)
+	delete(g.lastPlayed, matchID)
 	for _, userID := range players {
 		if g.userMatch[userID] == matchID {
 			delete(g.userMatch, userID)
 		}
 	}
 	g.mu.Unlock()
+	select {
+	case g.matchEnded <- struct{}{}:
+	default:
+	}
 
 	g.clearQueuedMatchArtifacts(players)
 	if err := g.coord.ClearAssignment(context.Background(), coordinator.Assignment{
@@ -665,7 +736,7 @@ func (g *gameplayNode) registerLoop() {
 			OwnerEpoch:    g.nodeEpoch,
 			PublicRoute:   g.publicRoute,
 			InternalURL:   g.internalURL,
-			ActiveMatches: g.activeMatchCount(),
+			ActiveMatches: g.liveMatchCount(),
 			Draining:      g.drain.isDraining(),
 		})
 		cancel()
@@ -721,16 +792,37 @@ func (g *gameplayNode) getSnapshot(matchID string) (*contracts.MatchSnapshot, bo
 	return nil, false
 }
 
-func (g *gameplayNode) activeMatchCount() int {
+// liveMatchCount is the node's load: every match it holds, whatever its mode.
+func (g *gameplayNode) liveMatchCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	total := 0
+	return len(g.matchUsers)
+}
+
+func (g *gameplayNode) played(matchID string) {
+	g.mu.Lock()
+	if _, ok := g.matchUsers[matchID]; ok {
+		g.lastPlayed[matchID] = time.Now()
+	}
+	g.mu.Unlock()
+}
+
+// matchesInUse counts the matches someone played within idleAfter, and says when the first of them
+// turns idle.
+func (g *gameplayNode) matchesInUse(now time.Time) (count int, nextIdle time.Time) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	for matchID := range g.matchUsers {
-		if contracts.IsPrivatePartyMode(g.matchModes[matchID]) {
-			total++
+		idleAt := g.lastPlayed[matchID].Add(g.idleAfter)
+		if !now.Before(idleAt) {
+			continue
+		}
+		count++
+		if nextIdle.IsZero() || idleAt.Before(nextIdle) {
+			nextIdle = idleAt
 		}
 	}
-	return total
+	return count, nextIdle
 }
 
 func (g *gameplayNode) touchPresence(userID string) {
@@ -854,7 +946,10 @@ func (g *gameplayNode) healthReady(c echo.Context) error {
 	return nil
 }
 
-func (g *gameplayNode) handleShutdown(srv *http.Server) {
+// handleShutdown drains the node: it takes no new matches, waits until none is in use (the
+// deadline is only a backstop), then asks the sockets left to reconnect and stops.
+func (g *gameplayNode) handleShutdown(srv *http.Server, drained chan<- struct{}) {
+	defer close(drained)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
@@ -867,24 +962,60 @@ func (g *gameplayNode) handleShutdown(srv *http.Server) {
 		OwnerEpoch:    g.nodeEpoch,
 		PublicRoute:   g.publicRoute,
 		InternalURL:   g.internalURL,
-		ActiveMatches: g.activeMatchCount(),
+		ActiveMatches: g.liveMatchCount(),
 		Draining:      true,
 	}); err != nil {
 		log.Printf("node drain registration failed: %v", err)
 	}
 	registerCancel()
 
-	for time.Now().Before(deadline) {
-		if g.activeMatchCount() == 0 {
+	// Matches nobody played for idleAfter don't hold the drain; they end with the node.
+	backstop := time.NewTimer(time.Until(deadline))
+	defer backstop.Stop()
+wait:
+	for {
+		inUse, nextIdle := g.matchesInUse(time.Now())
+		if inUse == 0 {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		turnsIdle := time.NewTimer(time.Until(nextIdle))
+		select {
+		case <-g.matchEnded:
+		case <-turnsIdle.C:
+		case <-backstop.C:
+			turnsIdle.Stop()
+			observability.Log("warn", "drain deadline passed with matches in use", map[string]any{
+				"nodeId":  g.nodeID,
+				"matches": inUse,
+			})
+			break wait
+		}
+		turnsIdle.Stop()
 	}
+	if left := g.liveMatchCount(); left > 0 {
+		observability.Log("info", "drain leaves idle matches to end with the node", map[string]any{"nodeId": g.nodeID, "matches": left})
+	}
+	g.closeConnections()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("server shutdown failed: %v", err)
+	}
+}
+
+// closeConnections asks every socket still open to reconnect: Shutdown doesn't close WebSockets.
+func (g *gameplayNode) closeConnections() {
+	g.mu.RLock()
+	conns := make(map[*websocket.Conn]*sync.Mutex, len(g.conns))
+	for userID, conn := range g.conns {
+		conns[conn] = g.connWrite[userID]
+	}
+	g.mu.RUnlock()
+	message := websocket.FormatCloseMessage(websocket.CloseServiceRestart, "restarting")
+	for conn, wm := range conns {
+		g.safeWriteControl(conn, wm, websocket.CloseMessage, message)
+		_ = conn.Close()
 	}
 }
 

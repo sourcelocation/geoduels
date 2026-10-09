@@ -1,3 +1,4 @@
+-- +goose Up
 -- CreatePlayerReportSignal and UpsertRiskEngineSignal use ON CONFLICT against
 -- these indexes. The v2 schema dump created them as non-unique, so every write
 -- failed at planning time (SQLSTATE 42P10). Restore the unique indexes from
@@ -45,3 +46,10 @@ CREATE UNIQUE INDEX idx_moderation_signals_detector_dedupe
     reason_code
   )
   WHERE (source = 'risk_engine'::public.gd_moderation_source);
+
+-- +goose Down
+-- The duplicate signals the Up removed don't come back.
+DROP INDEX IF EXISTS public.idx_moderation_signals_report_dedupe;
+CREATE INDEX idx_moderation_signals_report_dedupe ON public.moderation_signals USING btree (match_id, reporter_user_id, subject_user_id) WHERE ((source = 'player_report'::public.gd_moderation_source) AND (reporter_user_id IS NOT NULL) AND (match_id IS NOT NULL));
+DROP INDEX IF EXISTS public.idx_moderation_signals_detector_dedupe;
+CREATE INDEX idx_moderation_signals_detector_dedupe ON public.moderation_signals USING btree (subject_user_id, COALESCE(match_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(detector_key, ''::text), COALESCE(detector_version, ''::text), reason_code) WHERE (source = 'risk_engine'::public.gd_moderation_source);

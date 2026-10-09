@@ -47,7 +47,7 @@ func (s *PGStore) CleanupStorage(n int) (StorageCleanupResult, error) {
 		rs := []struct {
 			p *int64
 			f func(context.Context, int32) (pgconn.CommandTag, error)
-		}{{&o.ExpiredReplays, q.DeleteExpiredReplays}, {&o.MatchPlans, q.DeleteMatchPlans}, {&o.MatchSessions, q.DeleteMatchSessions}, {&o.RuntimeMatches, q.DeleteRuntimeMatches}, {&o.ChatMessages, q.DeleteChatMessages}, {&o.ChatConversations, q.DeleteChatConversations}, {&o.AuthSessions, q.DeleteAuthSessions}, {&o.Parties, q.DeleteParties}, {&o.MapUploadEvents, q.DeleteMapUploadEvents}, {&o.MapDailyUsers, q.DeleteMapDailyUsers}, {&o.UserNotifications, q.DeleteUserNotifications}}
+		}{{&o.ExpiredReplays, q.DeleteExpiredReplays}, {&o.MatchPlans, q.DeleteMatchPlans}, {&o.MatchSessions, q.DeleteMatchSessions}, {&o.ChatMessages, q.DeleteChatMessages}, {&o.ChatConversations, q.DeleteChatConversations}, {&o.AuthSessions, q.DeleteAuthSessions}, {&o.Parties, q.DeleteParties}, {&o.MapUploadEvents, q.DeleteMapUploadEvents}, {&o.MapDailyUsers, q.DeleteMapDailyUsers}, {&o.UserNotifications, q.DeleteUserNotifications}}
 		for _, r := range rs {
 			t, e := r.f(ctx, int32(n))
 			if e != nil {
@@ -59,38 +59,4 @@ func (s *PGStore) CleanupStorage(n int) (StorageCleanupResult, error) {
 		return e
 	})
 	return o, err
-}
-func (s *PGStore) ReconcileStaleMatchSessions(g time.Duration, n int) (int64, error) {
-	if g <= 0 {
-		g = 5 * time.Minute
-	}
-	if n <= 0 {
-		n = 1000
-	}
-	ctx, c := context.WithTimeout(context.Background(), 15*time.Second)
-	defer c()
-	var out int64
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		q := s.db.WithTx(tx)
-		ids, e := q.ListStaleMatchSessionIDs(ctx, db.ListStaleMatchSessionIDsParams{StaleAfter: pgtype.Interval{Microseconds: g.Microseconds(), Valid: true}, RowLimit: int32(min(n, 10000))})
-		if e != nil {
-			return e
-		}
-		out = int64(len(ids))
-		if len(ids) == 0 {
-			return nil
-		}
-		if e = q.EndMatchSessions(ctx, ids); e != nil {
-			return e
-		}
-		if e = q.EndRuntimeMatches(ctx, ids); e != nil {
-			return e
-		}
-		if e = q.ReopenPartiesForEndedSessions(ctx, ids); e != nil {
-			return e
-		}
-		e = q.ResetPartyMembersForEndedSessions(ctx, ids)
-		return e
-	})
-	return out, err
 }

@@ -71,11 +71,11 @@ func (q *matchCoordinator) chatWS(c echo.Context) error {
 	})
 
 	var writeMu sync.Mutex
-	// Staff reviewers only see team chat after the match has ended; live team
+	// Staff reviewers only see team chat once the match is over; live team
 	// messages are never revealed.
 	revealTeam := false
 	if scope.ReadOnly {
-		if ended, endedErr := q.chat.MatchEnded(r.Context(), scope.MatchID); endedErr == nil && ended {
+		if over, overErr := q.chat.MatchOver(r.Context(), scope.MatchID); overErr == nil && over {
 			revealTeam = true
 		}
 	}

@@ -24,14 +24,6 @@ SELECT count(*) FROM party_members WHERE party_id = $1 AND left_at IS NULL AND u
 INSERT INTO parties (id, invite_code, owner_user_id, state, mode, map_scope, expires_at, map_id)
 VALUES ($1, $2, $3, 'open', $4, $5, $6, $7);
 
--- name: EndSessionsForEndedRuntimeMatches :exec
-UPDATE match_sessions ms
-SET state = 'ended',
-    ended_at = COALESCE(ms.ended_at, now()),
-    updated_at = now()
-FROM runtime_matches rm
-WHERE rm.id = ms.match_id AND rm.state = $1 AND ms.state <> 'ended';
-
 -- name: ExpireOpenParties :execrows
 UPDATE parties SET state = 'expired', updated_at = now()
 WHERE state = 'open' AND expires_at < now();
@@ -161,21 +153,22 @@ END
 WHERE party_id = $1 AND left_at IS NULL;
 
 -- name: ReopenEndedParties :execrows
-WITH ended AS (
-    SELECT l.id, l.active_match_id
+-- Parties whose match is over, ended or interrupted, open again.
+WITH over AS (
+    SELECT l.id, ms.match_id
     FROM parties l
-    JOIN runtime_matches rm ON rm.id = l.active_match_id
-    WHERE l.state IN ('in_match', 'started') AND rm.state = $1
+    JOIN match_sessions ms ON ms.match_id = coalesce(l.active_match_id, l.started_match_id)
+    WHERE l.state IN ('in_match', 'started') AND gd_match_status(ms.ended_at, ms.lease_expires_at) <> 'live'
 ),
 reopened AS (
     UPDATE parties l
     SET state = 'open',
-        last_match_id = ended.active_match_id,
+        last_match_id = over.match_id,
         active_match_id = NULL,
         started_match_id = NULL,
         updated_at = now()
-    FROM ended
-    WHERE l.id = ended.id
+    FROM over
+    WHERE l.id = over.id
     RETURNING l.id
 )
 UPDATE party_members m

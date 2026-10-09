@@ -37,7 +37,27 @@ func nullableSessionUUID(value string) (pgtype.UUID, error) {
 	return profileUUID(value)
 }
 
-const defaultMatchLeaseTTL = 45 * time.Second
+// defaultMatchLeaseTTL is how long a match stays live without its node renewing the lease (every
+// 10s): long enough to ride out a slow database or a pause, short enough that a dead node's matches
+// are seen as interrupted within minutes.
+const defaultMatchLeaseTTL = 2 * time.Minute
+
+// MatchSessionStatus says whether a match is live, ended or interrupted; MatchSessionMissing when
+// it has no session (never launched, or cleaned up).
+func (s *PGStore) MatchSessionStatus(ctx context.Context, matchID string) (contracts.MatchSessionStatus, error) {
+	id, err := profileUUID(matchID)
+	if err != nil {
+		return contracts.MatchSessionMissing, errors.New("matchID required")
+	}
+	status, err := s.db.GetMatchSessionStatus(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return contracts.MatchSessionMissing, nil
+	}
+	if err != nil {
+		return contracts.MatchSessionMissing, err
+	}
+	return contracts.MatchSessionStatus(status), nil
+}
 
 func (s *PGStore) UpsertMatchSession(ctx context.Context, p MatchSessionUpsert) error {
 	f := p.Found

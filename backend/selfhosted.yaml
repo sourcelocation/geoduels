@@ -82,8 +82,8 @@ services:
       APP_ACCESS_TOKEN_TTL: ${APP_ACCESS_TOKEN_TTL:-15m}
       APP_REFRESH_TOKEN_TTL: ${APP_REFRESH_TOKEN_TTL:-720h}
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -111,8 +111,8 @@ services:
         condition: service_healthy
       gameplay-node:
         condition: service_started
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   realtime-gateway:
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-realtime-gateway:${IMAGE_TAG:-latest}
@@ -170,7 +170,10 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
-      - match-coordinator
+      match-coordinator:
+        condition: service_started
+      db-migrate:
+        condition: service_completed_successfully
 
   web:
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-web:${IMAGE_TAG:-latest}
@@ -215,8 +218,8 @@ services:
     ports:
       - "127.0.0.1:8093:8093"
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   discord-worker:
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-discord-worker:${IMAGE_TAG:-latest}
@@ -235,21 +238,16 @@ services:
     ports:
       - "127.0.0.1:8094:8094"
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
-  # One-shot schema migration against the compose postgres. The database is
-  # blank on first run, so v2 baseline (version 2000) and later files apply.
+  # Brings the schema to this release (goose, then River) before anything that uses the database
+  # starts. A blank database gets the v2 baseline (version 2000) and every later migration.
   db-migrate:
-    image: migrate/migrate:v4.18.3
-    profiles: ["tools"]
-    volumes:
-      - ./db/migrations:/migrations:ro
-    command:
-      - -path=/migrations
-      - -database
-      - postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
-      - up
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${IMAGE_TAG:-latest}
+    entrypoint: ["/migrate"]
+    environment:
+      POSTGRES_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy

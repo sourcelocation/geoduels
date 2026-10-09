@@ -1,3 +1,4 @@
+-- +goose Up
 -- Remember the explicitly selected party without reviving older memberships.
 CREATE TABLE current_parties (
     user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -12,3 +13,6 @@ FROM party_members m JOIN parties p ON p.id = m.party_id
 WHERE m.left_at IS NULL AND p.state IN ('open', 'in_match', 'started')
   AND (p.state <> 'open' OR p.expires_at > now())
 ORDER BY m.user_id, m.joined_at DESC, p.created_at DESC, p.id;
+
+-- +goose Down
+DROP TABLE current_parties;

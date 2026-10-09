@@ -1205,14 +1205,21 @@ type NotificationOutboxItem struct {
 	Attempts    int
 }
 
-// Runtime match bookkeeping shared between the match-launch planner and the
-// persistence store.
-type RuntimeMatch struct {
-	MatchID    string
-	State      string
-	OwnerEpoch int64
-	StartedAt  time.Time
-	EndedAt    time.Time
+// MatchSessionStatus is what a match is now, derived from its session and never stored
+// (gd_match_status): ended once finalized, live while its gameplay node renews the lease, and
+// interrupted once the lease lapsed without an end, because its node is gone.
+type MatchSessionStatus string
+
+const (
+	MatchSessionMissing     MatchSessionStatus = ""
+	MatchSessionLive        MatchSessionStatus = "live"
+	MatchSessionEnded       MatchSessionStatus = "ended"
+	MatchSessionInterrupted MatchSessionStatus = "interrupted"
+)
+
+// Over reports whether the match will see no more play: it ended or was interrupted.
+func (s MatchSessionStatus) Over() bool {
+	return s == MatchSessionEnded || s == MatchSessionInterrupted
 }
 
 type MatchSessionUpsert struct {

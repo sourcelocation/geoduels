@@ -31,7 +31,6 @@ import (
 	socialdomain "geoduels/internal/social"
 	staffctx "geoduels/internal/staff"
 	"geoduels/pkg/auth"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
@@ -51,7 +50,6 @@ type api struct {
 	content                *content.Service
 	seasons                *seasons.Service
 	gameplayMaps           maps.Store
-	runtimeStore           matches.Store
 	parties                *parties.Service
 	social                 *socialdomain.Service
 	maps                   *maps.Service
@@ -161,10 +159,6 @@ func newAPI() (*api, error) {
 	matchStore := matches.NewPGStore(pool, nil)
 	partyStore := parties.NewPGStore(pool, mapsStore)
 	partyService := parties.NewService(partyStore)
-	if err := matchStore.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
-		store.Close()
-		return nil, err
-	}
 	if err := partyService.ExpireOpenParties(); err != nil {
 		store.Close()
 		return nil, err
@@ -195,7 +189,6 @@ func newAPI() (*api, error) {
 		content:                content.NewService(contentStore),
 		seasons:                seasons.NewService(seasonStore),
 		gameplayMaps:           mapsStore,
-		runtimeStore:           matchStore,
 		parties:                partyService,
 		social:                 socialdomain.NewService(socialStore),
 		maps:                   mapsService,

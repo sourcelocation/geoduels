@@ -1,3 +1,4 @@
+-- +goose Up
 -- GeoDuels v2 fresh-install schema.
 --
 -- Version 2000 is the convergence point between a fresh v2 database and an
@@ -1532,3 +1533,10 @@ VALUES (
     ),
     now()
 );
+
+-- +goose Down
+-- +goose StatementBegin
+DO $$ BEGIN
+    RAISE EXCEPTION 'the v2 baseline is the oldest schema: restore a backup instead of rolling it back';
+END $$;
+-- +goose StatementEnd

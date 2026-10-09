@@ -22,6 +22,11 @@ const (
 	livePongWait        = 70 * time.Second
 	livePingPeriod      = 20 * time.Second
 	liveSweepPeriod     = 10 * time.Second
+	// Notifications are written by every service, so the hub looks for new ones
+	// rather than waiting to be told. Each look reaches back past the last one,
+	// because a transaction commits after the created_at it stamped.
+	liveAnnouncePeriod   = 2 * time.Second
+	liveAnnounceLookback = 30 * time.Second
 )
 
 type liveConn struct {
@@ -37,13 +42,18 @@ type liveHub struct {
 	subs      map[string]context.CancelFunc
 	upgrader  websocket.Upgrader
 	startOnce sync.Once
+	// announced holds the notifications already sent within the lookback, so a
+	// look that overlaps the previous one sends nothing twice. Only the announce
+	// loop touches it.
+	announced map[int64]time.Time
 }
 
 func newLiveHub(a *api) *liveHub {
 	return &liveHub{
-		api:   a,
-		conns: map[string][]*liveConn{},
-		subs:  map[string]context.CancelFunc{},
+		api:       a,
+		conns:     map[string][]*liveConn{},
+		subs:      map[string]context.CancelFunc{},
+		announced: map[int64]time.Time{},
 		upgrader: websocket.Upgrader{
 			CheckOrigin: apiWSOriginAllowed,
 		},
@@ -60,6 +70,16 @@ func (h *liveHub) start() {
 			defer ticker.Stop()
 			for range ticker.C {
 				h.sweepPresence()
+			}
+		}()
+		go func() {
+			ticker := time.NewTicker(liveAnnouncePeriod)
+			defer ticker.Stop()
+			last := time.Now()
+			for now := range ticker.C {
+				if h.announce(last.Add(-liveAnnounceLookback)) {
+					last = now
+				}
 			}
 		}()
 	})
@@ -276,21 +296,39 @@ func (h *liveHub) publish(userID string, event contracts.LiveEvent) {
 	_ = h.api.redis.Publish(context.Background(), liveUserChannel(userID), body).Err()
 }
 
-func (h *liveHub) publishLatestNotification(userID, notificationType string) {
-	if h == nil || h.api.notificationService == nil || userID == "" {
-		return
+// announce sends the people connected here the notifications written for them
+// since a moment, whichever service wrote them. It reports whether it looked.
+func (h *liveHub) announce(since time.Time) bool {
+	if h.api.notificationService == nil {
+		return false
 	}
-	items, err := h.api.notificationService.List(context.Background(), userID, 10)
+	h.mu.Lock()
+	users := make([]string, 0, len(h.conns))
+	for userID := range h.conns {
+		users = append(users, userID)
+	}
+	h.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), liveAnnouncePeriod)
+	defer cancel()
+	items, err := h.api.notificationService.UnseenSince(ctx, users, since)
 	if err != nil {
-		return
+		return false
 	}
-	for i := range items {
-		if items[i].Type == notificationType {
-			n := items[i]
-			h.publish(userID, contracts.LiveEvent{Type: contracts.LiveNotificationUpsert, Notification: &n})
-			return
+	for _, item := range items {
+		// Writing a notification again keeps its id and moves its created_at.
+		if at, sent := h.announced[item.Notification.ID]; sent && at.Equal(item.Notification.CreatedAt) {
+			continue
+		}
+		h.announced[item.Notification.ID] = item.Notification.CreatedAt
+		notification := item.Notification
+		h.dispatchLocal(item.UserID, contracts.LiveEvent{Type: contracts.LiveNotificationUpsert, Notification: &notification})
+	}
+	for id, createdAt := range h.announced {
+		if createdAt.Before(since) {
+			delete(h.announced, id)
 		}
 	}
+	return true
 }
 
 func (h *liveHub) publishInvalidate(userIDs ...string) {

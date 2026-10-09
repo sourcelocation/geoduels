@@ -117,48 +117,6 @@ export class AuthGateway {
     return this.commit(payload);
   }
 
-  applyNotification(notification: NonNullable<AppBootstrapPayload["activity"]["notifications"][number]>) {
-    const current = this.bootstrapPayload;
-    if (!current) return;
-    const rest = current.activity.notifications.filter((item) => item.id !== notification.id);
-    this.bootstrapPayload = {
-      ...current,
-      activity: { ...current.activity, notifications: [notification, ...rest].slice(0, 10) },
-    };
-    this.bootstrapEpoch += 1;
-    this.publish();
-  }
-
-  applyNotificationRead(notificationId: number) {
-    const current = this.bootstrapPayload;
-    if (!current) return;
-    this.bootstrapPayload = {
-      ...current,
-      activity: {
-        ...current.activity,
-        notifications: current.activity.notifications.filter(
-          (item) => item.id !== notificationId,
-        ),
-      },
-    };
-    this.bootstrapEpoch += 1;
-    this.publish();
-  }
-
-  applyNotificationReadAll() {
-    const current = this.bootstrapPayload;
-    if (!current) return;
-    this.bootstrapPayload = {
-      ...current,
-      activity: {
-        ...current.activity,
-        notifications: [],
-      },
-    };
-    this.bootstrapEpoch += 1;
-    this.publish();
-  }
-
   applyGlobal(global: AppBootstrapPayload["global"]) {
     const current = this.bootstrapPayload;
     if (!current) return;

@@ -12,10 +12,15 @@ FROM match_sessions WHERE match_id = $1;
 -- name: ParticipantJoinedAt :one
 SELECT joined_at FROM party_members WHERE party_id = $1 AND user_id = $2;
 
+-- name: GetMatchSessionStatus :one
+-- ended, live or interrupted (gd_match_status).
+SELECT gd_match_status(ended_at, lease_expires_at)::text AS status
+FROM match_sessions WHERE match_id = $1;
+
 -- name: RenewMatchSessionLeases :exec
 UPDATE match_sessions
 SET lease_expires_at = now() + sqlc.arg(ttl)::interval, updated_at = now()
-WHERE node_id = sqlc.arg(node_id) AND node_epoch = sqlc.arg(node_epoch) AND state = 'live'
+WHERE node_id = sqlc.arg(node_id) AND node_epoch = sqlc.arg(node_epoch) AND ended_at IS NULL
   AND match_id = ANY(sqlc.arg(match_ids)::uuid[]);
 
 -- name: UpsertMatchParticipant :exec
@@ -30,7 +35,7 @@ ON CONFLICT (match_id, user_id) DO UPDATE SET
 -- name: UpsertMatchSession :exec
 
 INSERT INTO match_sessions(
-    match_id, preset_id, mode, state, ranked, source_kind,
+    match_id, preset_id, mode, ranked, source_kind,
     source_party_id, source_party_invite_code,
     node_id, node_epoch, public_route,
     config_json, map_id,
@@ -38,7 +43,7 @@ INSERT INTO match_sessions(
     lease_expires_at, updated_at
 )
 VALUES(
-    sqlc.arg(match_id), sqlc.arg(preset_id), sqlc.arg(mode), 'live', sqlc.arg(ranked), sqlc.arg(source_kind),
+    sqlc.arg(match_id), sqlc.arg(preset_id), sqlc.arg(mode), sqlc.arg(ranked), sqlc.arg(source_kind),
     sqlc.narg(source_party_id), sqlc.narg(source_party_invite_code),
     sqlc.arg(node_id), sqlc.arg(node_epoch), sqlc.arg(public_route),
     convert_from(sqlc.arg(config_json), 'UTF8')::jsonb, sqlc.narg(map_id),
@@ -48,7 +53,6 @@ VALUES(
 ON CONFLICT (match_id) DO UPDATE SET
     preset_id = excluded.preset_id,
     mode = excluded.mode,
-    state = CASE WHEN match_sessions.state = 'ended' THEN match_sessions.state ELSE excluded.state END,
     ranked = excluded.ranked,
     source_kind = excluded.source_kind,
     source_party_id = excluded.source_party_id,
@@ -61,5 +65,5 @@ ON CONFLICT (match_id) DO UPDATE SET
     return_target_kind = excluded.return_target_kind,
     return_target_map_id = excluded.return_target_map_id,
     return_target_party_id = excluded.return_target_party_id,
-    lease_expires_at = CASE WHEN match_sessions.state = 'ended' THEN match_sessions.lease_expires_at ELSE excluded.lease_expires_at END,
+    lease_expires_at = CASE WHEN match_sessions.ended_at IS NOT NULL THEN match_sessions.lease_expires_at ELSE excluded.lease_expires_at END,
     updated_at = now();

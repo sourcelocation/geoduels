@@ -7,7 +7,7 @@ evidence must belong to the subject. The warning card shows the issuer, time,
 acknowledgment, any nickname reset, and withdrawal status.
 
 A warning does not restrict the account or escalate to a mute or ban. Players
-see a prompt and an inbox notification; the prompt waits until an ongoing match
+see a prompt as soon as it is issued; the prompt waits until an ongoing match
 ends, and closing it leaves a reminder until the player acknowledges it.
 
 With **Reset nickname**, the player's public nickname is replaced with a random
@@ -31,11 +31,11 @@ access-management permission.
 - `POST /api/v1/me/warnings/:warningId/acknowledge`: acknowledge one's own warning;
   repeating acknowledgment preserves its first timestamp.
 
-The `moderation_warning` inbox type includes `warningId`, `category`, `reason`,
-and `nicknameReset` when a nickname was reset; withdrawal updates that
-notification with `withdrawn: true`. Older clients keep their generic
-notification fallback.
+The `moderation_warning` notification includes `warningId`, `category`, `reason`,
+and `nicknameReset` when a nickname was reset. The prompt shows the warning
+itself, so the notification only brings it up live; withdrawal writes it again
+with `withdrawn: true`, which the player sees once as a toast.
 
-Apply `002015_moderation_warnings.up.sql` before deploying these backend changes.
-Migrations are applied separately from release deployments. Regenerate sqlc
-before building or testing; no generated files are committed.
+The schema change is `002015_moderation_warnings.sql`, which deployments apply
+before their pods start. Regenerate sqlc before building or testing; no
+generated files are committed.

@@ -45,7 +45,6 @@ func add(a, b storage.StorageCleanupResult) storage.StorageCleanupResult {
 	return storage.StorageCleanupResult{
 		ReplaysCompressed: a.ReplaysCompressed + b.ReplaysCompressed,
 		ExpiredReplays:    a.ExpiredReplays + b.ExpiredReplays,
-		RuntimeMatches:    a.RuntimeMatches + b.RuntimeMatches,
 		MatchSessions:     a.MatchSessions + b.MatchSessions,
 		MatchPlans:        a.MatchPlans + b.MatchPlans,
 		ChatMessages:      a.ChatMessages + b.ChatMessages,

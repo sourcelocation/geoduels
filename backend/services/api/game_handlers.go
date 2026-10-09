@@ -64,7 +64,7 @@ func (a *api) userNotifications(c echo.Context) error {
 			return writeJSON(c, map[string]any{"notifications": notifications})
 		}
 	}
-	notifications, err := a.notificationService.List(r.Context(), claims.Sub, 10)
+	notifications, err := a.notificationService.List(r.Context(), claims.Sub, 20)
 	if err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "notifications unavailable")
 	}
@@ -292,7 +292,7 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 	}
 
 	if !authenticated {
-		if rec, ok, err := a.runtimeStore.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+		if a.matchLive(ctx, targetMatchID) {
 			return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 		}
 		return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
@@ -349,7 +349,6 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 		case matchlaunch.AssignmentPending:
 			if assigned.MatchID == targetMatchID && sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID) == contracts.ModeSingleplayer {
 				_ = a.coord.ClearAssignment(context.Background(), assigned)
-				_ = a.runtimeStore.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 			}
 		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
 		}
@@ -360,10 +359,17 @@ func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticate
 		a.attachReturnTarget(ctx, &resp, userID, authenticated, targetMatchID)
 		return resp, nil
 	}
-	if rec, ok, err := a.runtimeStore.GetRuntimeMatch(ctx, targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+	if a.matchLive(ctx, targetMatchID) {
 		return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 	}
 	return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
+}
+
+// matchLive reports whether a match is being played now. One that ended without history or was
+// interrupted reads as missing: there is nothing to rejoin or show.
+func (a *api) matchLive(ctx context.Context, matchID string) bool {
+	status, err := a.matchStore.MatchSessionStatus(ctx, matchID)
+	return err == nil && status == contracts.MatchSessionLive
 }
 
 func (a *api) attachReturnTarget(ctx context.Context, resp *contracts.MatchSessionResponse, userID string, authenticated bool, matchID string) {
@@ -379,7 +385,7 @@ func (a *api) attachReturnTarget(ctx context.Context, resp *contracts.MatchSessi
 	// Rows written before return targets existed retain party provenance. Keep
 	// those rows usable, but resolve the current party server-side.
 	if target == nil {
-		partyID, _, ok, err := a.runtimeStore.MatchSessionSourceParty(ctx, matchID)
+		partyID, _, ok, err := a.matchStore.MatchSessionSourceParty(ctx, matchID)
 		if err == nil && ok {
 			target = &contracts.MatchReturnTarget{Kind: contracts.MatchReturnParty, PartyID: partyID}
 		}
@@ -564,7 +570,6 @@ func (a *api) startSingleplayerSession(c echo.Context) error {
 				return a.writeSessionConflict(c, "ACTIVE_DUEL_MATCH", "Finish or forfeit your active duel before starting singleplayer.")
 			}
 			_ = a.coord.ClearAssignment(context.Background(), assigned)
-			_ = a.runtimeStore.RecordRuntimeMatch(r.Context(), assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
 		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
 			_ = a.coord.ClearAssignment(context.Background(), assigned)
 		}

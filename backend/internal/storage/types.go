@@ -3,7 +3,6 @@ package storage
 type StorageCleanupResult struct {
 	ReplaysCompressed int64
 	ExpiredReplays    int64
-	RuntimeMatches    int64
 	MatchSessions     int64
 	MatchPlans        int64
 	ChatMessages      int64

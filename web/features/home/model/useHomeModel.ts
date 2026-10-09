@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { RESULT_ANIMATION_CONFIG } from "../../game/lib/round-result-animation-config";
 import { useRuntimeConfig } from "../../../lib/runtime-config-context";
@@ -10,8 +10,6 @@ import {
   requestSupportDonation,
   requestUpdateSelectedBadge,
   requestUpdateNickname,
-  markUserNotificationRead,
-  type UserNotification,
 } from "../../auth/lib/auth-client";
 import {
   type PartyTeamId,
@@ -118,19 +116,6 @@ export function useHomeModel(options?: {
     auth,
     enabled: !isMatchRoute && backgroundDataEnabled,
   });
-
-  const notificationsQuery = useQuery({
-    queryKey: ["notifications", auth.userId || "anonymous"],
-    enabled: false,
-    queryFn: async () => ({ notifications: bootstrap?.activity.notifications || [] }),
-    initialData: { notifications: bootstrap?.activity.notifications || [] },
-  });
-  useEffect(() => {
-    queryClient.setQueryData(
-      ["notifications", auth.userId || "anonymous"],
-      { notifications: bootstrap?.activity.notifications || [] },
-    );
-  }, [auth.userId, bootstrap, queryClient]);
 
   const updateNicknameMutation = useMutation({
     mutationFn: ({
@@ -354,7 +339,6 @@ export function useHomeModel(options?: {
   const homeResumeMatchId = !partyInviteCode
     ? bootstrap?.activity.activeMatch?.matchId || ""
     : "";
-  const notifications = notificationsQuery.data?.notifications || [];
 
   const baseView = deriveHomeModel({
     auth,
@@ -390,7 +374,6 @@ export function useHomeModel(options?: {
     ...baseView,
     overlays: {
       ...baseView.overlays,
-      notifications,
       guestVerification,
     },
     lobby: {
@@ -699,23 +682,6 @@ export function useHomeModel(options?: {
     }
   };
 
-  const dismissNotification = async (notificationId: number) => {
-    const notification = notifications.find((item) => item.id === notificationId);
-    queryClient.setQueryData<{ notifications: UserNotification[] }>(
-      ["notifications", auth.userId || "anonymous"],
-      (current) => ({
-        notifications: (current?.notifications || []).filter(
-          (notification) => notification.id !== notificationId,
-        ),
-      }),
-    );
-    if (!auth.accessToken) return;
-    await markUserNotificationRead(config, auth.accessToken, notificationId);
-    if (notification?.type === "badge_unlocked") {
-      await authGateway.bootstrap({ force: true });
-    }
-  };
-
   const startSupportDonation = async () => {
     const session = await sessionController.ensureFreshSession(60_000);
     if (!session?.accessToken) {
@@ -771,7 +737,6 @@ export function useHomeModel(options?: {
       selectBadge,
       startSupportDonation,
       setNicknameInput: sessionController.setNicknameInputAndClearError,
-      dismissNotification,
       submitGuestVerificationToken,
       markGuestVerificationExpired,
       cancelGuestVerification,

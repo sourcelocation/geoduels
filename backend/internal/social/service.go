@@ -292,7 +292,7 @@ func (s *Service) CreatePartyInvitation(ctx context.Context, partyID, inviterID,
 		invitation.Mode = eligibility.Mode
 		invitation.MemberCount = eligibility.MemberCount
 		if err := store.NotifyUser(ctx, recipientID, "party_invitation_received", "party_invitation:"+invitation.ID,
-			map[string]any{"invitationId": invitation.ID}, inviterID); err != nil {
+			map[string]any{"invitationId": invitation.ID, "expiresAt": invitation.ExpiresAt.UTC().Format(time.RFC3339)}, inviterID); err != nil {
 			return err
 		}
 		out = invitation

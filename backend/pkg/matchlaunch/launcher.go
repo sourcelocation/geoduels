@@ -24,8 +24,7 @@ import (
 // by the persistence store and test doubles.
 type MatchPersistence interface {
 	UpsertMatchSession(ctx context.Context, p contracts.MatchSessionUpsert) error
-	RecordRuntimeMatch(ctx context.Context, matchID, state string, ownerEpoch int64, terminal bool) error
-	GetRuntimeMatch(ctx context.Context, matchID string) (contracts.RuntimeMatch, bool, error)
+	MatchSessionStatus(ctx context.Context, matchID string) (contracts.MatchSessionStatus, error)
 }
 
 type AssignmentStatus string
@@ -55,11 +54,7 @@ func (l Launcher) ValidateAssignment(ctx context.Context, assigned coordinator.A
 	if assigned.MatchID == "" {
 		return AssignmentInvalid
 	}
-	if assigned.RecoverableUntil > 0 && time.Now().UnixMilli() > assigned.RecoverableUntil {
-		_ = l.clearEnded(context.Background(), assigned)
-		return AssignmentInvalid
-	}
-	if l.matchEnded(ctx, assigned.MatchID) {
+	if l.matchOver(ctx, assigned.MatchID) {
 		_ = l.Coord.ClearAssignment(context.Background(), assigned)
 		return AssignmentInvalid
 	}
@@ -69,13 +64,13 @@ func (l Launcher) ValidateAssignment(ctx context.Context, assigned coordinator.A
 	}
 	if !ok {
 		if assigned.NodeEpoch > 0 {
-			_ = l.clearEnded(context.Background(), assigned)
+			_ = l.Coord.ClearAssignment(context.Background(), assigned)
 			return AssignmentAbandoned
 		}
 		return AssignmentPending
 	}
 	if assigned.NodeEpoch > 0 && node.OwnerEpoch != assigned.NodeEpoch {
-		_ = l.clearEnded(context.Background(), assigned)
+		_ = l.Coord.ClearAssignment(context.Background(), assigned)
 		return AssignmentAbandoned
 	}
 	client := l.HTTPClient
@@ -98,7 +93,7 @@ func (l Launcher) ValidateAssignment(ctx context.Context, assigned coordinator.A
 	case http.StatusOK:
 		return AssignmentValid
 	case http.StatusNotFound:
-		_ = l.clearEnded(context.Background(), assigned)
+		_ = l.Coord.ClearAssignment(context.Background(), assigned)
 		return AssignmentAbandoned
 	default:
 		return AssignmentPending
@@ -263,20 +258,14 @@ func (l Launcher) AssignedPayload(userID string, assigned coordinator.Assignment
 	}, true, nil
 }
 
-func (l Launcher) clearEnded(ctx context.Context, assigned coordinator.Assignment) error {
-	_ = l.Coord.ClearAssignment(ctx, assigned)
-	if l.Persist != nil {
-		_ = l.Persist.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
-	}
-	return nil
-}
-
-func (l Launcher) matchEnded(ctx context.Context, matchID string) bool {
+// matchOver reports whether the match's session says it ended or was interrupted. An abandoned
+// assignment needs no write: its match stops being live once the node stops renewing the lease.
+func (l Launcher) matchOver(ctx context.Context, matchID string) bool {
 	if matchID == "" || l.Persist == nil {
 		return false
 	}
-	rec, ok, err := l.Persist.GetRuntimeMatch(ctx, matchID)
-	return err == nil && ok && rec.State == string(contracts.MatchEnded)
+	status, err := l.Persist.MatchSessionStatus(ctx, matchID)
+	return err == nil && status.Over()
 }
 
 func pickLeastLoadedNode(nodes []coordinator.NodeRecord) (coordinator.NodeRecord, bool) {

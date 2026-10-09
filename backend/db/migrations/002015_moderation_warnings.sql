@@ -1,3 +1,4 @@
+-- +goose Up
 ALTER TYPE public.gd_notification_type ADD VALUE IF NOT EXISTS 'moderation_warning';
 
 CREATE TABLE moderation_warnings (
@@ -12,3 +13,7 @@ CREATE TABLE moderation_warnings (
     withdrawn_by uuid REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE INDEX moderation_warnings_user ON moderation_warnings(user_id, id DESC);
+
+-- +goose Down
+-- PostgreSQL can't remove an enum value; 'moderation_warning' stays, unused.
+DROP TABLE moderation_warnings;

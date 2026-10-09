@@ -1,5 +1,4 @@
 import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
-import type { UserNotification } from "../../auth/lib/auth-client";
 import type { PartyRuntimeStatus } from "../../lobby/controllers/party-controller";
 import type { PartySnapshot, PartyTeamId, PartyMode } from "../../lobby/lib/party-client";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
@@ -132,7 +131,6 @@ export type HomeGameView = {
 
 export type HomeOverlaysView = {
   nicknameRequiredOpen: boolean;
-  notifications: UserNotification[];
   guestVerification: {
     open: boolean;
     siteKey: string;
@@ -218,7 +216,6 @@ export type HomeActions = {
   selectBadge: (badgeId: string) => Promise<void>;
   startSupportDonation: () => Promise<void>;
   setNicknameInput: (value: string) => void;
-  dismissNotification: (notificationId: number) => Promise<void>;
   submitGuestVerificationToken: (token: string) => void;
   markGuestVerificationExpired: (message?: string) => void;
   cancelGuestVerification: () => void;

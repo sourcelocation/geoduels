@@ -380,14 +380,7 @@ func (s *PGStore) CloseInactiveOpenParties(ctx context.Context, partyIDs []strin
 }
 
 func (s *PGStore) ReopenEndedParties(ctx context.Context) (int64, error) {
-	tag, err := s.q().ReopenEndedParties(ctx, db.GdRuntimeState(contracts.MatchEnded))
-	if err != nil {
-		return 0, err
-	}
-	if err := s.q().EndSessionsForEndedRuntimeMatches(ctx, db.GdRuntimeState(contracts.MatchEnded)); err != nil {
-		return 0, err
-	}
-	return tag, nil
+	return s.q().ReopenEndedParties(ctx)
 }
 
 // --- snapshot shaping ---

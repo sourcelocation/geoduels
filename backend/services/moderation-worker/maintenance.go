@@ -57,20 +57,16 @@ func (w *guestCleanupWorker) Work(context.Context, *river.Job[jobs.GuestCleanupA
 	return nil
 }
 
-// storageCleanupWorker reconciles stale matches and prunes storage.
+// storageCleanupWorker prunes storage.
 type storageCleanupWorker struct {
 	river.WorkerDefaults[jobs.StorageCleanupArgs]
 	storage storage.Store
-	grace   time.Duration
 	batch   int
 }
 
 func (w *storageCleanupWorker) Work(ctx context.Context, _ *river.Job[jobs.StorageCleanupArgs]) error {
 	if w.storage == nil {
 		return nil
-	}
-	if _, err := w.storage.ReconcileStaleMatchSessions(w.grace, w.batch); err != nil {
-		return err
 	}
 	result, err := w.storage.CleanupStorage(w.batch)
 	if err != nil {
@@ -79,7 +75,6 @@ func (w *storageCleanupWorker) Work(ctx context.Context, _ *river.Job[jobs.Stora
 	if result != (storage.StorageCleanupResult{}) {
 		observability.Log("info", "storage cleanup completed", map[string]any{
 			"expired_replays":    result.ExpiredReplays,
-			"runtime_matches":    result.RuntimeMatches,
 			"match_sessions":     result.MatchSessions,
 			"chat_messages":      result.ChatMessages,
 			"auth_sessions":      result.AuthSessions,

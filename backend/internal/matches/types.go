@@ -27,5 +27,4 @@ type MatchHistoryPage struct {
 	NextMatchID string
 }
 
-type RuntimeMatch = contracts.RuntimeMatch
 type MatchSessionUpsert = contracts.MatchSessionUpsert

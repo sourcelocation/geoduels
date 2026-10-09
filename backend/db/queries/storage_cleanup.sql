@@ -71,11 +71,12 @@ WHERE ctid IN (
 );
 
 -- name: DeleteMatchSessions :execresult
+-- Matches over for an hour: ended, or interrupted (lease lapsed without an end).
 DELETE FROM match_sessions
 WHERE match_id IN (
     SELECT match_id FROM match_sessions
-    WHERE state = 'ended' AND ended_at < now() - interval '1 hour'
-    ORDER BY ended_at
+    WHERE coalesce(ended_at, lease_expires_at) < now() - interval '1 hour'
+    ORDER BY coalesce(ended_at, lease_expires_at)
     LIMIT $1
 );
 
@@ -85,15 +86,6 @@ WHERE id IN (
     SELECT id FROM parties
     WHERE state IN ('closed', 'expired') AND updated_at < now() - interval '24 hours'
     ORDER BY updated_at
-    LIMIT $1
-);
-
--- name: DeleteRuntimeMatches :execresult
-DELETE FROM runtime_matches
-WHERE id IN (
-    SELECT id FROM runtime_matches
-    WHERE ended_at < now() - interval '1 hour'
-    ORDER BY ended_at
     LIMIT $1
 );
 
@@ -116,16 +108,6 @@ WHERE id IN (
     LIMIT $1
 );
 
--- name: EndMatchSessions :exec
-UPDATE match_sessions
-SET state = 'ended', ended_at = COALESCE(ended_at, now()), lease_expires_at = NULL, updated_at = now()
-WHERE match_id = ANY($1::uuid[]);
-
--- name: EndRuntimeMatches :exec
-UPDATE runtime_matches
-SET state = 'ended', ended_at = COALESCE(ended_at, now())
-WHERE id = ANY($1::uuid[]);
-
 -- name: ListLegacyReplays :many
 SELECT match_id, replay_json
 FROM match_history
@@ -141,29 +123,6 @@ FROM map_country_stats
 WHERE map_id = $1
 ORDER BY location_count DESC, country ASC
 LIMIT 64;
-
--- name: ListStaleMatchSessionIDs :many
-SELECT match_id
-FROM match_sessions
-WHERE state = 'live' AND lease_expires_at < now() - sqlc.arg(stale_after)::interval
-ORDER BY lease_expires_at
-LIMIT sqlc.arg(row_limit)
-FOR UPDATE SKIP LOCKED;
-
--- name: ReopenPartiesForEndedSessions :exec
-UPDATE parties
-SET state = 'open',
-    last_match_id = CASE WHEN active_match_id = ANY($1::uuid[]) THEN active_match_id ELSE started_match_id END,
-    active_match_id = NULL,
-    started_match_id = NULL,
-    updated_at = now()
-WHERE active_match_id = ANY($1::uuid[]) OR started_match_id = ANY($1::uuid[]);
-
--- name: ResetPartyMembersForEndedSessions :exec
-UPDATE party_members pm
-SET ready = false
-FROM match_sessions ms
-WHERE ms.match_id = ANY($1::uuid[]) AND pm.party_id = ms.source_party_id;
 
 -- name: TryAdvisoryLock :one
 

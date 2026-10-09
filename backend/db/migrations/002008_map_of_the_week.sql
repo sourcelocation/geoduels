@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE TABLE motw_schedule (
  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
  starts_at timestamptz NOT NULL DEFAULT now(),
@@ -29,3 +30,9 @@ CREATE TABLE motw_awards (
  likes integer NOT NULL DEFAULT 0
 );
 CREATE INDEX motw_awards_map ON motw_awards(map_id,selected_at DESC);
+
+-- +goose Down
+DROP TABLE motw_awards;
+DROP TABLE motw_likes;
+DROP TABLE motw_nominations;
+DROP TABLE motw_schedule;

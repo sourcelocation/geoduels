@@ -15,7 +15,6 @@ import {
   appNavRouteStorageKey,
   type AppNavRoute,
 } from "../navigation";
-import { NotificationCenter } from "../../notifications/components/NotificationCenter";
 import { useOptionalHotkeys } from "../../hotkeys/components/HotkeyProvider";
 import { AppBackground } from "./AppBackground";
 import { AppNavTasks, type AppNavTask } from "./AppNavTasks";
@@ -125,7 +124,6 @@ function AppShellHeader({
           <div aria-hidden="true" className="h-9 w-20 justify-self-end" />
         ) : auth.status === "registered" ? (
           <div className="flex items-center gap-2.5">
-            <NotificationCenter />
             <Tooltip content="Settings" side="bottom">
               <AppChromeIconButton
                 aria-label="Open settings"

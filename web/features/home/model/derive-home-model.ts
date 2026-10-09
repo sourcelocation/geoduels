@@ -496,7 +496,6 @@ export function deriveHomeModel({
     },
     overlays: {
       nicknameRequiredOpen: auth.nicknameRequired && !!auth.userId,
-      notifications: [],
       guestVerification: {
         open: false,
         siteKey: "",

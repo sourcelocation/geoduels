@@ -1,6 +1,5 @@
 import EndMatchOverlay from "../../game/components/overlays/EndMatchOverlay";
 import RequiredNicknameModal from "../../../components/home/RequiredNicknameModal";
-import AppModalShell from "../../../components/ui/AppModalShell";
 import GuestVerificationOverlay from "./GuestVerificationOverlay";
 import type {
   HomeActions,
@@ -8,7 +7,6 @@ import type {
   HomeOverlaysView,
 } from "../model/types";
 import { useHotkey } from "../../hotkeys/hooks/use-hotkey";
-import { Button } from "../../../components/ui/button";
 
 type HomePageOverlaysProps = {
   auth: HomeAuthView;
@@ -21,7 +19,6 @@ type HomePageOverlaysProps = {
     | "leaveGame"
     | "reportPlayer"
     | "startSingleplayer"
-    | "dismissNotification"
     | "submitGuestVerificationToken"
     | "markGuestVerificationExpired"
     | "cancelGuestVerification"
@@ -34,7 +31,6 @@ export default function HomePageOverlays({
   maxHP,
   actions,
 }: HomePageOverlaysProps) {
-  const activeNotification = overlays.notifications?.[0];
   const replayConfig = overlays.endMatch.open
     ? overlays.endMatch.matchConfig
     : undefined;
@@ -66,77 +62,6 @@ export default function HomePageOverlays({
         onExpired={actions.markGuestVerificationExpired}
         onCancel={actions.cancelGuestVerification}
       />
-      {activeNotification?.type === "mmr_refund" ? (
-        <AppModalShell
-          title="Rating refunded"
-          placement="center"
-          showHeader={false}
-          zIndexClassName="z-modal"
-          maxWidthClassName="max-w-sm"
-        >
-          <p className="text-label font-strong uppercase text-status-success">
-            Rating refunded
-          </p>
-          <h2 className="mt-2 text-heading-md font-strong">
-            +{activeNotification.payload.refundDelta || 0} MMR
-          </h2>
-          <p className="mt-3 text-body-sm text-content-secondary">
-            A player you lost to was banned for cheating. Your rating has been
-            recalculated from your current MMR and refunded.
-          </p>
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            onClick={() =>
-              void actions.dismissNotification(activeNotification.id)
-            }
-            className="mt-5 w-full"
-          >
-            Got it
-          </Button>
-        </AppModalShell>
-      ) : null}
-      {activeNotification?.type === "badge_unlocked" &&
-      activeNotification.payload.badge ? (
-        <AppModalShell
-          title="New badge unlocked"
-          placement="center"
-          showHeader={false}
-          zIndexClassName="z-modal"
-          maxWidthClassName="max-w-sm"
-        >
-          <p className="text-label font-strong uppercase text-status-success">
-            New badge unlocked!
-          </p>
-          <div className="mt-5 flex flex-col items-center text-center">
-            <img
-              src={activeNotification.payload.badge.imageUrl}
-              alt=""
-              className="h-24 w-24 object-contain drop-shadow-lg"
-            />
-            <h2 className="mt-4 text-heading-md font-strong">
-              {activeNotification.payload.badge.label}
-            </h2>
-            {activeNotification.payload.badge.description ? (
-              <p className="mt-3 text-body-sm text-content-secondary">
-                {activeNotification.payload.badge.description}
-              </p>
-            ) : null}
-          </div>
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            onClick={() =>
-              void actions.dismissNotification(activeNotification.id)
-            }
-            className="mt-5 w-full"
-          >
-            Claim
-          </Button>
-        </AppModalShell>
-      ) : null}
       {overlays.endMatch.open && (
         <EndMatchOverlay
           onLeaveGame={actions.leaveGame}

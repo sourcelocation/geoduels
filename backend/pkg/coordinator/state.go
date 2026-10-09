@@ -39,7 +39,6 @@ type Assignment struct {
 	PublicRoute           string                       `json:"publicRoute"`
 	Players               []string                     `json:"players"`
 	UpdatedAt             int64                        `json:"updatedAt"`
-	RecoverableUntil      int64                        `json:"recoverableUntil,omitempty"`
 	SourcePartyID         string                       `json:"sourcePartyId,omitempty"`
 	SourcePartyInviteCode string                       `json:"sourcePartyInviteCode,omitempty"`
 	ReturnTarget          *contracts.MatchReturnTarget `json:"returnTarget,omitempty"`
@@ -178,7 +177,6 @@ func (s *Store) SaveAssignment(ctx context.Context, rec Assignment) error {
 	ttl := s.assignmentTTL
 	if rec.Mode == contracts.ModeSingleplayer {
 		ttl = s.singleTTL
-		rec.RecoverableUntil = now.Add(s.singleTTL).UnixMilli()
 	}
 	b, _ := json.Marshal(rec)
 	_, err := s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {

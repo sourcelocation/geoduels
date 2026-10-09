@@ -27,8 +27,7 @@ WHERE stats.user_id = result.user_id;
 
 -- name: CompleteMatchSession :exec
 UPDATE match_sessions
-SET state = 'ended',
-    ended_at = COALESCE(ended_at, now()),
+SET ended_at = COALESCE(ended_at, now()),
     lease_expires_at = NULL,
     updated_at = now()
 WHERE match_id = $1;
@@ -85,9 +84,8 @@ JOIN ranks r
 ORDER BY requested.position
 FOR UPDATE OF r;
 
--- name: LockMatchSessionState :one
-
-SELECT state FROM match_sessions WHERE match_id = $1 FOR UPDATE;
+-- name: LockMatchSessionEnded :one
+SELECT (ended_at IS NOT NULL)::boolean AS ended FROM match_sessions WHERE match_id = $1 FOR UPDATE;
 
 -- name: MatchBelongsToParty :one
 SELECT exists(
@@ -111,14 +109,6 @@ WHERE mp.match_id = sqlc.arg(match_id)::uuid
   AND mp.user_id IN (
     SELECT value::uuid FROM jsonb_array_elements_text(convert_from(sqlc.arg(user_ids_json), 'UTF8')::jsonb)
   );
-
--- name: RecordRuntimeMatchEnded :exec
-INSERT INTO runtime_matches(id, state, owner_epoch, started_at, ended_at)
-VALUES($1, $2, $3, now(), now())
-ON CONFLICT (id) DO UPDATE SET
-    state = excluded.state,
-    owner_epoch = excluded.owner_epoch,
-    ended_at = now();
 
 -- name: ReopenPartiesAfterMatch :exec
 UPDATE parties

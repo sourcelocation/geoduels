@@ -91,6 +91,8 @@ export const socialClient = {
       "/api/party-invitations",
       { method: "POST", body: JSON.stringify({ userId }) },
     ),
+  partyInvitations: (config: RuntimeConfig, token: string) =>
+    socialFetch<{ invitations: PartyInvitation[] }>(config, token, "/api/me/party-invitations"),
   respondPartyInvite: (
     config: RuntimeConfig,
     token: string,

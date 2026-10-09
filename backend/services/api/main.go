@@ -35,13 +35,16 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	observability.Log("info", "api startup", map[string]any{"addr": addr})
-	go handleAPIShutdown(a, srv)
+	drained := make(chan struct{})
+	go handleAPIShutdown(a, srv, drained)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
 
-func handleAPIShutdown(a *api, srv *http.Server) {
+func handleAPIShutdown(a *api, srv *http.Server, drained chan<- struct{}) {
+	defer close(drained)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)

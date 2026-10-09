@@ -396,9 +396,6 @@ func (q *matchCoordinator) clearSupersededAssignment(ctx context.Context, assign
 		q.terminateSupersededMatch(ctx, assigned)
 	}
 	_ = q.state.ClearAssignment(ctx, assigned)
-	if q.matches != nil && sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID) == contracts.ModeSingleplayer {
-		_ = q.matches.RecordRuntimeMatch(ctx, assigned.MatchID, string(contracts.MatchEnded), assigned.NodeEpoch, true)
-	}
 }
 
 func (q *matchCoordinator) terminateSupersededMatch(ctx context.Context, assigned coordinator.Assignment) {

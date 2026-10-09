@@ -40,7 +40,7 @@ func (a *api) close() {
 func (a *api) launcher() matchlaunch.Launcher {
 	l := matchlaunch.Launcher{
 		Coord:          a.coord,
-		Persist:        a.runtimeStore,
+		Persist:        a.matchStore,
 		HTTPClient:     a.httpClient,
 		TicketSecret:   a.ticketAuth,
 		InternalSecret: a.internalSecret,

@@ -112,6 +112,6 @@ func (a *PGStore) NotifyWarning(ctx context.Context, userID string, id int64, pa
 	if err != nil {
 		return err
 	}
-	var notificationID int64
-	return storekit.UpsertUserNotificationTx(ctx, tx, userID, "moderation_warning", fmt.Sprintf("warning:%d", id), payload, "", &notificationID)
+	_, err = storekit.UpsertUserNotificationTx(ctx, tx, userID, "moderation_warning", fmt.Sprintf("warning:%d", id), payload, "", time.Time{})
+	return err
 }

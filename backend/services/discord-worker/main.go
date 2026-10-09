@@ -78,10 +78,12 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	observability.Log("info", "discord worker startup", map[string]any{"addr": addr})
-	go handleWorkerShutdown(w, srv, cancel)
+	drained := make(chan struct{})
+	go handleWorkerShutdown(w, srv, cancel, drained)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
 
 func newWorker() (*worker, error) {
@@ -461,7 +463,8 @@ func (w *worker) healthReady(rw http.ResponseWriter, _ *http.Request) {
 	_, _ = rw.Write([]byte("ready"))
 }
 
-func handleWorkerShutdown(w *worker, srv *http.Server, cancel context.CancelFunc) {
+func handleWorkerShutdown(w *worker, srv *http.Server, cancel context.CancelFunc, drained chan<- struct{}) {
+	defer close(drained)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)

@@ -27,6 +27,22 @@ services:
     ports:
       - "6379:6379"
 
+  # Brings the schema to the checkout's migrations (goose, then River) before the services start.
+  # After adding a migration: docker compose -f backend/dev.yaml run --rm db-migrate
+  db-migrate:
+    image: golang:1.26
+    working_dir: /app
+    volumes:
+      - .:/app
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    command: ["go", "run", "./cmd/migrate"]
+    environment:
+      - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   gameplay-node:
     image: golang:1.26
     working_dir: /app
@@ -53,8 +69,8 @@ services:
       - APP_ACCESS_TOKEN_TTL=${APP_ACCESS_TOKEN_TTL}
       - APP_REFRESH_TOKEN_TTL=${APP_REFRESH_TOKEN_TTL}
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
     ports:
@@ -85,8 +101,8 @@ services:
         condition: service_started
       gameplay-node:
         condition: service_started
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   realtime-gateway:
     image: golang:1.26
@@ -149,7 +165,10 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - match-coordinator
+      match-coordinator:
+        condition: service_started
+      db-migrate:
+        condition: service_completed_successfully
 
   moderation-worker:
     image: golang:1.26
@@ -171,8 +190,8 @@ services:
     ports:
       - "8093:8093"
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   discord-worker:
     image: golang:1.26
@@ -192,8 +211,8 @@ services:
     ports:
       - "8094:8094"
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:

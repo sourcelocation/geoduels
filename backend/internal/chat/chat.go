@@ -67,14 +67,15 @@ func (s *PGStore) ListChatMessages(id string, n int) ([]ChatMessage, error) {
 func (s *PGStore) ListChatMessagesForUser(id, u string, n int, revealTeam bool) ([]ChatMessage, error) {
 	return s.listChatMessages(id, strings.TrimSpace(u), n, revealTeam)
 }
-func (s *PGStore) MatchEnded(ctx context.Context, matchID string) (bool, error) {
+// MatchOver reports whether a match will see no more play: it ended or was interrupted.
+func (s *PGStore) MatchOver(ctx context.Context, matchID string) (bool, error) {
 	matchID = strings.TrimSpace(matchID)
 	if matchID == "" {
 		return false, nil
 	}
 	ctx, c := context.WithTimeout(ctx, 3*time.Second)
 	defer c()
-	return s.db.MatchEnded(ctx, chatUUID(matchID))
+	return s.db.MatchOver(ctx, chatUUID(matchID))
 }
 func (s *PGStore) listChatMessages(id, u string, n int, revealTeam bool) ([]ChatMessage, error) {
 	id = strings.TrimSpace(id)

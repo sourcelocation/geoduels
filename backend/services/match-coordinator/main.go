@@ -95,9 +95,6 @@ func main() {
 	accountsStore := accounts.NewPGStore(pool, nil)
 	accountsService := accounts.NewService(accountsStore)
 	singleplayerTTL := envcfg.Duration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
-	if err := matchStore.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
-		log.Fatal(err)
-	}
 	if err := partyService.ExpireOpenParties(); err != nil {
 		log.Fatal(err)
 	}
@@ -196,10 +193,12 @@ func main() {
 		envcfg.Duration("MATCHMAKING_INTERVAL", 500*time.Millisecond),
 		envcfg.Int("MATCHMAKING_BATCH_SIZE", 50),
 	)
-	go q.handleShutdown(srv)
+	drained := make(chan struct{})
+	go q.handleShutdown(srv, drained)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
 
 func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize int) {
@@ -486,7 +485,7 @@ func (q *matchCoordinator) queue(c echo.Context) error {
 			}
 		}
 		if found != nil {
-			if q.matchEnded(found.MatchID) {
+			if q.matchOver(found.MatchID) {
 				q.clearQueuedMatch(context.Background(), found.Players)
 				found = nil
 				continue
@@ -595,16 +594,17 @@ func parseLegacyQueueRulesets(raw string) []matchstore.QueueVariant {
 	return out
 }
 
-func (q *matchCoordinator) matchEnded(matchID string) bool {
+// matchOver reports whether a match already ended or was interrupted.
+func (q *matchCoordinator) matchOver(matchID string) bool {
 	if matchID == "" {
 		return false
 	}
-	rec, ok, err := q.matches.GetRuntimeMatch(context.Background(), matchID)
+	status, err := q.matches.MatchSessionStatus(context.Background(), matchID)
 	if err != nil {
-		log.Printf("runtime match lookup failed for %s: %v", matchID, err)
+		log.Printf("match status lookup failed for %s: %v", matchID, err)
 		return false
 	}
-	return ok && rec.State == string(contracts.MatchEnded)
+	return status.Over()
 }
 
 func (q *matchCoordinator) clearQueuedMatch(ctx context.Context, players []string) {
@@ -763,7 +763,8 @@ func maintenanceQueueMessage(status maintenance.Status) string {
 	}
 }
 
-func (q *matchCoordinator) handleShutdown(srv *http.Server) {
+func (q *matchCoordinator) handleShutdown(srv *http.Server, drained chan<- struct{}) {
+	defer close(drained)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)

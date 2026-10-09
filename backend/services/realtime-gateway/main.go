@@ -25,12 +25,15 @@ import (
 )
 
 type realtimeGateway struct {
-	state         *coordinator.Store
-	redis         *redis.Client
-	metrics       *observability.APIMetrics
-	draining      atomic.Bool
-	activeSockets atomic.Int64
-	drainTTL      time.Duration
+	state    *coordinator.Store
+	redis    *redis.Client
+	metrics  *observability.APIMetrics
+	draining atomic.Bool
+	// drainSpread is how long a drain takes to close every socket, so clients don't all reconnect at once.
+	drainSpread time.Duration
+
+	socketsMu sync.Mutex
+	sockets   map[*websocket.Conn]func()
 }
 
 var wsProxyUpgrader = websocket.Upgrader{CheckOrigin: httpx.WSOriginAllowed}
@@ -41,10 +44,11 @@ func main() {
 		log.Fatal(err)
 	}
 	g := &realtimeGateway{
-		state:    coordinator.NewStore(rdb, envcfg.Duration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, 24*time.Hour, 5*time.Second),
-		redis:    rdb,
-		metrics:  observability.NewAPIMetrics(),
-		drainTTL: envcfg.Duration("REALTIME_GATEWAY_DRAIN_TIMEOUT", 18*time.Minute),
+		state:       coordinator.NewStore(rdb, envcfg.Duration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, 24*time.Hour, 5*time.Second),
+		redis:       rdb,
+		metrics:     observability.NewAPIMetrics(),
+		drainSpread: envcfg.Duration("REALTIME_GATEWAY_DRAIN_SPREAD", 10*time.Second),
+		sockets:     map[*websocket.Conn]func(){},
 	}
 	defer redisCleanup()
 
@@ -84,10 +88,12 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	observability.Log("info", "realtime-gateway startup", map[string]any{"addr": addr})
-	go g.handleShutdown(srv)
+	drained := make(chan struct{})
+	go g.handleShutdown(srv, drained)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
 
 func (g *realtimeGateway) wsProxy(c echo.Context) error {
@@ -122,8 +128,6 @@ func (g *realtimeGateway) wsProxy(c echo.Context) error {
 		return nil
 	}
 	defer clientConn.Close()
-	g.activeSockets.Add(1)
-	defer g.activeSockets.Add(-1)
 
 	var once sync.Once
 	closeBoth := func() {
@@ -132,6 +136,11 @@ func (g *realtimeGateway) wsProxy(c echo.Context) error {
 			_ = backendConn.Close()
 		})
 	}
+	if !g.track(clientConn, closeBoth) {
+		sendRestart(clientConn)
+		return nil
+	}
+	defer g.untrack(clientConn)
 
 	errc := make(chan error, 2)
 	go proxyWS(errc, closeBoth, clientConn, backendConn)
@@ -165,19 +174,56 @@ func (g *realtimeGateway) healthReady(c echo.Context) error {
 	return nil
 }
 
-func (g *realtimeGateway) handleShutdown(srv *http.Server) {
+// track registers a proxied socket for the drain, or refuses it once the drain has begun.
+func (g *realtimeGateway) track(clientConn *websocket.Conn, closeBoth func()) bool {
+	g.socketsMu.Lock()
+	defer g.socketsMu.Unlock()
+	if g.draining.Load() {
+		return false
+	}
+	g.sockets[clientConn] = closeBoth
+	return true
+}
+
+func (g *realtimeGateway) untrack(clientConn *websocket.Conn) {
+	g.socketsMu.Lock()
+	delete(g.sockets, clientConn)
+	g.socketsMu.Unlock()
+}
+
+// handleShutdown drains the gateway. It holds no match state, so it doesn't wait for matches: it
+// asks every client to reconnect (1012, spread over drainSpread), and clients come back through
+// another gateway to the same gameplay node, which resumes them.
+func (g *realtimeGateway) handleShutdown(srv *http.Server, drained chan<- struct{}) {
+	defer close(drained)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
 
 	<-sigCh
+	g.socketsMu.Lock()
 	g.draining.Store(true)
-	deadline := time.Now().Add(g.drainTTL)
-	for time.Now().Before(deadline) {
-		if g.activeSockets.Load() == 0 {
-			break
+	sockets := make(map[*websocket.Conn]func(), len(g.sockets))
+	for conn, closeBoth := range g.sockets {
+		sockets[conn] = closeBoth
+	}
+	g.socketsMu.Unlock()
+
+	if len(sockets) > 0 {
+		pause := g.drainSpread / time.Duration(len(sockets))
+		first := true
+		for conn := range sockets {
+			if !first {
+				time.Sleep(pause)
+			}
+			first = false
+			sendRestart(conn)
 		}
-		time.Sleep(250 * time.Millisecond)
+		// Clients that haven't answered the close frame within a second are cut.
+		time.Sleep(time.Second)
+		for _, closeBoth := range sockets {
+			closeBoth()
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -185,6 +231,12 @@ func (g *realtimeGateway) handleShutdown(srv *http.Server) {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("realtime-gateway shutdown failed: %v", err)
 	}
+}
+
+// sendRestart asks a client to reconnect. gorilla/websocket allows WriteControl alongside the proxy's writes.
+func sendRestart(conn *websocket.Conn) {
+	message := websocket.FormatCloseMessage(websocket.CloseServiceRestart, "restarting")
+	_ = conn.WriteControl(websocket.CloseMessage, message, time.Now().Add(time.Second))
 }
 
 func websocketTarget(baseURL, requestURI string) string {
@@ -226,6 +278,7 @@ func isExpectedWSClose(err error) bool {
 		websocket.CloseNormalClosure,
 		websocket.CloseGoingAway,
 		websocket.CloseNoStatusReceived,
+		websocket.CloseServiceRestart,
 	)
 }
 

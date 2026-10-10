@@ -1,5 +1,5 @@
 import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { normalizeWSBase } from "../../../lib/runtime-config";
+import { apiSocketURL } from "../../../lib/http";
 import type { MatchConfig } from "../../matchmaking/lib/queue-client";
 import type { PartyEvent, PartyMode, PartyTeamId } from "./party-client";
 
@@ -27,8 +27,7 @@ export class PartySocket {
   private sequence = 0;
 
   constructor(config: RuntimeConfig, partyId: string, accessToken: string, signal: AbortSignal, onEvent: (event: PartyEvent) => void) {
-    const base = normalizeWSBase(config.queueURL).replace(/\/$/, "");
-    this.ws = new WebSocket(`${base}/parties/v2/${encodeURIComponent(partyId)}/ws?accessToken=${encodeURIComponent(accessToken)}`);
+    this.ws = new WebSocket(`${apiSocketURL(config, `/api/v2/parties/${encodeURIComponent(partyId)}/ws`)}?accessToken=${encodeURIComponent(accessToken)}`);
     this.closed = new Promise<void>((resolve, reject) => {
       let settled = false;
       const snapshotTimeout = setTimeout(() => finish(new Error("Party connection timed out")), 10000);
@@ -74,8 +73,10 @@ export class PartySocket {
             case "party_patch":
               onEvent({ type: "party_patch", patch: payload });
               break;
-            case "match_assigned":
-              onEvent({ type: "match_assigned", assignment: payload });
+            case "match_found":
+              if (typeof payload.matchId === "string" && payload.matchId) {
+                onEvent({ type: "match_found", matchId: payload.matchId });
+              }
               break;
             case "party_error":
               this.ready = false;

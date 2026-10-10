@@ -14,6 +14,7 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/pgnotify"
 )
 
 const (
@@ -21,7 +22,6 @@ const (
 	liveWriteWait       = 8 * time.Second
 	livePongWait        = 70 * time.Second
 	livePingPeriod      = 20 * time.Second
-	liveSweepPeriod     = 10 * time.Second
 	// Notifications are written by every service, so the hub looks for new ones
 	// rather than waiting to be told. Each look reaches back past the last one,
 	// because a transaction commits after the created_at it stamped.
@@ -65,13 +65,6 @@ func (h *liveHub) start() {
 		return
 	}
 	h.startOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(liveSweepPeriod)
-			defer ticker.Stop()
-			for range ticker.C {
-				h.sweepPresence()
-			}
-		}()
 		go func() {
 			ticker := time.NewTicker(liveAnnouncePeriod)
 			defer ticker.Stop()
@@ -245,29 +238,16 @@ func (h *liveHub) enqueue(session *liveConn, event contracts.LiveEvent) {
 	}
 }
 
+// subscribeUser forwards the user's events, whichever process published them, to their sockets here.
 func (h *liveHub) subscribeUser(userID string) context.CancelFunc {
-	if h.api.redis == nil {
-		return func() {}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	pubsub := h.api.redis.Subscribe(ctx, liveUserChannel(userID))
+	events, cancel := h.api.events.Subscribe(pgnotify.LiveTopic(userID))
 	go func() {
-		defer pubsub.Close()
-		ch := pubsub.Channel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-ch:
-				if !ok {
-					return
-				}
-				var event contracts.LiveEvent
-				if json.Unmarshal([]byte(msg.Payload), &event) != nil || event.Type == "" {
-					continue
-				}
-				h.dispatchLocal(userID, event)
+		for message := range events {
+			var event contracts.LiveEvent
+			if message.Resync || json.Unmarshal(message.Data, &event) != nil || event.Type == "" {
+				continue
 			}
+			h.dispatchLocal(userID, event)
 		}
 	}()
 	return cancel
@@ -281,19 +261,14 @@ func (h *liveHub) dispatchLocal(userID string, event contracts.LiveEvent) {
 	}
 }
 
+// publish sends the event to the user's sockets in every process.
 func (h *liveHub) publish(userID string, event contracts.LiveEvent) {
 	if strings.TrimSpace(userID) == "" {
 		return
 	}
-	h.dispatchLocal(userID, event)
-	if h.api.redis == nil {
-		return
+	if err := pgnotify.Publish(context.Background(), h.api.db.Pool(), pgnotify.LiveTopic(userID), event); err != nil {
+		h.dispatchLocal(userID, event)
 	}
-	body, err := json.Marshal(event)
-	if err != nil {
-		return
-	}
-	_ = h.api.redis.Publish(context.Background(), liveUserChannel(userID), body).Err()
 }
 
 // announce sends the people connected here the notifications written for them
@@ -344,139 +319,6 @@ func (h *liveHub) publishInvalidate(userIDs ...string) {
 		seen[userID] = struct{}{}
 		h.publish(userID, event)
 	}
-}
-
-func (h *liveHub) notePresence(ctx context.Context, userID string) {
-	if h == nil || userID == "" || h.api.coord == nil {
-		return
-	}
-	status := "online"
-	activity := ""
-	if assigned, ok, err := h.api.coord.GetAssignmentByUser(ctx, userID); err == nil && ok && assigned.MatchID != "" {
-		activity = "in_match"
-	}
-	if h.api.social != nil {
-		if settings, err := h.api.social.GetSocialSettings(ctx, userID); err == nil && !settings.PresenceVisible {
-			return
-		}
-	}
-	previous, _ := h.presenceState(ctx, userID)
-	now := time.Now().UTC()
-	next := presenceState{Status: status, Activity: activity, LastSeenAt: now}
-	if err := h.writePresenceState(ctx, userID, next); err != nil {
-		return
-	}
-	_ = h.setAnnounced(ctx, userID)
-	if previous.Status == next.Status && previous.Activity == next.Activity {
-		return
-	}
-	h.fanoutPresence(userID, contracts.LivePresencePatch{
-		UserID:         userID,
-		PresenceStatus: status,
-		Activity:       activity,
-		LastSeenAt:     &now,
-	})
-}
-
-func (h *liveHub) sweepPresence() {
-	if h == nil || h.api.coord == nil || h.api.redis == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if _, err := h.api.coord.CountPresentUsers(ctx); err != nil {
-		return
-	}
-	ids, err := h.api.redis.SMembers(ctx, announcedPresenceKey()).Result()
-	if err != nil || len(ids) == 0 {
-		return
-	}
-	present, err := h.api.coord.PresentUsers(ctx, ids)
-	if err != nil {
-		return
-	}
-	for _, userID := range ids {
-		if present[userID] {
-			h.notePresence(ctx, userID)
-			continue
-		}
-		previous, _ := h.presenceState(ctx, userID)
-		_ = h.api.redis.SRem(ctx, announcedPresenceKey(), userID).Err()
-		_ = h.api.redis.Del(ctx, presenceStateKey(userID)).Err()
-		if previous.Status == "offline" || previous.Status == "" {
-			continue
-		}
-		lastSeenAt := previous.LastSeenAt
-		if lastSeenAt.IsZero() {
-			lastSeenAt = time.Now().UTC()
-		}
-		h.fanoutPresence(userID, contracts.LivePresencePatch{
-			UserID:         userID,
-			PresenceStatus: "offline",
-			LastSeenAt:     &lastSeenAt,
-		})
-	}
-}
-
-func (h *liveHub) fanoutPresence(userID string, patch contracts.LivePresencePatch) {
-	if h.api.social == nil {
-		return
-	}
-	// Presence fanout is an autonomous hub operation, not an HTTP request.
-	friends, err := h.api.social.ListFriends(context.Background(), userID, 100)
-	if err != nil {
-		return
-	}
-	event := contracts.LiveEvent{Type: contracts.LivePresenceEvent, Presence: &patch}
-	for _, friend := range friends {
-		h.publish(friend.UserID, event)
-	}
-}
-
-type presenceState struct {
-	Status     string    `json:"status"`
-	Activity   string    `json:"activity,omitempty"`
-	LastSeenAt time.Time `json:"lastSeenAt,omitempty"`
-}
-
-func (h *liveHub) presenceState(ctx context.Context, userID string) (presenceState, error) {
-	var state presenceState
-	if h.api.redis == nil {
-		return state, nil
-	}
-	raw, err := h.api.redis.Get(ctx, presenceStateKey(userID)).Bytes()
-	if err != nil {
-		return state, err
-	}
-	_ = json.Unmarshal(raw, &state)
-	return state, nil
-}
-
-func (h *liveHub) writePresenceState(ctx context.Context, userID string, state presenceState) error {
-	if h.api.redis == nil {
-		return nil
-	}
-	body, _ := json.Marshal(state)
-	return h.api.redis.Set(ctx, presenceStateKey(userID), body, 2*time.Minute).Err()
-}
-
-func (h *liveHub) setAnnounced(ctx context.Context, userID string) error {
-	if h.api.redis == nil {
-		return nil
-	}
-	return h.api.redis.SAdd(ctx, announcedPresenceKey(), userID).Err()
-}
-
-func liveUserChannel(userID string) string {
-	return "live:user:" + userID
-}
-
-func announcedPresenceKey() string {
-	return "rt:presence:announced"
-}
-
-func presenceStateKey(userID string) string {
-	return "rt:presence:state:" + userID
 }
 
 func apiWSOriginAllowed(r *http.Request) bool {

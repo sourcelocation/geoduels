@@ -1,6 +1,6 @@
 import type { ChatAudience, ChatEmote, ChatMessage } from "../model/types";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { normalizeWSBase } from "../../../lib/runtime-config";
+import { apiSocketURL } from "../../../lib/http";
 
 export type ChatEvent =
   | { type: "chat.history"; conversationId: string; messages: ChatMessage[] }
@@ -14,7 +14,7 @@ export type ChatConnection = {
 };
 
 function chatWSTarget(config: RuntimeConfig, conversationId: string, accessToken: string) {
-  return `${normalizeWSBase(config.queueURL).replace(/\/$/, "")}/chat/ws?conversationId=${encodeURIComponent(conversationId)}&accessToken=${encodeURIComponent(accessToken)}`;
+  return `${apiSocketURL(config, "/api/v2/chat/ws")}?conversationId=${encodeURIComponent(conversationId)}&accessToken=${encodeURIComponent(accessToken)}`;
 }
 
 export function connectChat(

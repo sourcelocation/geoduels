@@ -6,7 +6,10 @@ import { initialMatchmakingState, matchmakingReducer, type MatchmakingAction, ty
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
 import { GameplaySocketClient } from '../lib/gameplay-socket-client';
-import { fetchMatchSession, startSingleplayerSession, streamQueue, type MatchConfig, type MatchReturnTarget, type QueueVariant } from '../lib/queue-client';
+import { fetchMatchView, isOpenMatch, startSoloMatch, streamQueue, type MatchConfig, type MatchReturnTarget, type QueueVariant } from '../lib/queue-client';
+
+// Where the player goes after a match and which party it came from, as its view says.
+export type MatchSource = { sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget };
 
 type SendGameCommandOptions = {
   silent?: boolean;
@@ -289,34 +292,34 @@ export class MatchController extends ObservableStore<MatchState> {
         this.markUnavailable('Session expired. Please sign in again.');
         return;
       }
-      const resolved = await fetchMatchSession(this.config, session.accessToken, targetMatchID, controller.signal);
+      const view = await fetchMatchView(this.config, targetMatchID, controller.signal, session.accessToken);
       if (!isCurrent()) return;
-      if (resolved.status === 'live_connectable') {
+      if (isOpenMatch(view) && view.playing) {
         this.recoverAbort = null;
         this.dispatchMatchmaking({ type: 'set_status', status: 'matched_connecting' });
-        this.connectToAssignedGame(session, resolved.node, resolved.wsPath, resolved.ticket, resolved.matchId, {
-          sourcePartyId: resolved.sourcePartyId,
-          sourcePartyInviteCode: resolved.sourcePartyInviteCode,
-          returnTarget: resolved.returnTarget
+        this.connectToMatch(session, view.matchId, {
+          sourcePartyId: view.party?.id,
+          sourcePartyInviteCode: view.party?.inviteCode,
+          returnTarget: view.returnTarget
         });
         return;
       }
-      if (resolved.status === 'history') {
+      if (view.status === 'ended' && view.result) {
         this.stopConnection();
         this.patchState({
           connected: false,
-          snapshot: resolved.snapshot,
-          lastFinalizedMatchId: resolved.matchId,
-          activeMatchId: resolved.matchId,
+          snapshot: view.result,
+          lastFinalizedMatchId: view.matchId,
+          activeMatchId: view.matchId,
           connectionIssue: '',
-          returnTarget: resolved.returnTarget || { kind: 'home' }
+          returnTarget: view.returnTarget || { kind: 'home' }
         });
         this.dispatchMatchmaking({ type: 'set_status', status: 'ready' });
         return;
       }
-      const message = resolved.status === 'live_auth_required'
+      const message = view.signInRequired
         ? 'Session expired. Please sign in again.'
-        : resolved.status === 'replaced'
+        : view.currentMatchId
           ? 'This match was replaced by another session.'
           : 'Match unavailable.';
       this.markUnavailable(message);
@@ -331,43 +334,33 @@ export class MatchController extends ObservableStore<MatchState> {
     }
   }
 
-  private connectToAssignedGame(
-    session: AuthSessionSnapshot,
-    node: string,
-    wsPath: string,
-    ticket: string,
-    matchId?: string,
-    source?: { sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget }
-  ) {
-    if (!session.userId || !session.accessToken) return;
+  private connectToMatch(session: AuthSessionSnapshot, matchId: string, source?: MatchSource) {
+    if (!session.userId || !session.accessToken || !matchId) return;
     this.activeSession = session;
     this.connectionWanted = true;
     this.awaitingSnapshot = true;
     this.patchState({
       connected: false,
-      activeMatchId: matchId || this.state.activeMatchId,
+      activeMatchId: matchId,
       lastFinalizedMatchId: '',
       sourcePartyId: source?.sourcePartyId || '',
       sourcePartyInviteCode: source?.sourcePartyInviteCode || '',
       returnTarget: source?.returnTarget || this.state.returnTarget || { kind: 'home' }
     });
     try {
-      this.socketClient.connect(node, wsPath, ticket);
+      this.socketClient.connect(matchId, session.accessToken);
       this.armResponseTimeout(10_000);
     } catch {
       this.beginRecovery();
     }
   }
 
-  resumeResolvedMatch = async (
-    assignment: { matchId: string; node: string; wsPath: string; ticket: string; sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget },
-    options?: { playMatchFoundSfx?: boolean }
-  ) => {
+  resumeMatch = async (matchId: string, source?: MatchSource, options?: { playMatchFoundSfx?: boolean }) => {
     this.stopConnection();
     this.queueAbort?.abort();
     const generation = this.connectionGeneration;
     const session = this.sessionController.getSessionSnapshot() || (await this.sessionController.ensureFreshSession());
-    if (this.destroyed || generation !== this.connectionGeneration || !session || !assignment.node || !assignment.ticket) {
+    if (this.destroyed || generation !== this.connectionGeneration || !session || !matchId) {
       return false;
     }
     this.patchState({ queueError: '', connectionIssue: '' });
@@ -375,11 +368,7 @@ export class MatchController extends ObservableStore<MatchState> {
     if (options?.playMatchFoundSfx) {
       this.playMatchFoundSfx();
     }
-    this.connectToAssignedGame(session, assignment.node, assignment.wsPath, assignment.ticket, assignment.matchId, {
-      sourcePartyId: assignment.sourcePartyId,
-      sourcePartyInviteCode: assignment.sourcePartyInviteCode,
-      returnTarget: assignment.returnTarget
-    });
+    this.connectToMatch(session, matchId, source);
     return true;
   };
 
@@ -406,18 +395,12 @@ export class MatchController extends ObservableStore<MatchState> {
             this.dispatchMatchmaking({ type: 'queue_status', status: event.status, queuedAt: event.queuedAt });
             return;
           }
-          if (event.type === 'match_assigned') {
+          if (event.type === 'match_found') {
             this.dispatchMatchmaking({ type: 'match_found' });
             this.queueAbort = null;
             this.patchState({ queueError: '' });
             this.playMatchFoundSfx();
-            if (event.node && event.ticket) {
-              this.connectToAssignedGame(session, event.node, event.wsPath, event.ticket, event.matchId, {
-                sourcePartyId: event.sourcePartyId,
-                sourcePartyInviteCode: event.sourcePartyInviteCode,
-                returnTarget: event.returnTarget
-              });
-            }
+            this.connectToMatch(session, event.matchId, { returnTarget: { kind: 'home' } });
             return;
           }
           throw new Error(event.message);
@@ -456,21 +439,21 @@ export class MatchController extends ObservableStore<MatchState> {
         this.dispatchMatchmaking({ type: 'set_status', status: 'ready' });
         return '';
       }
-      const assignment = await startSingleplayerSession(
+      const view = await startSoloMatch(
         this.config,
         session.accessToken,
         controller.signal,
         matchConfig,
         returnTarget || { kind: 'home' },
       );
-      if (!assignment.node || !assignment.ticket) {
+      if (!view.matchId || !isOpenMatch(view)) {
         throw new Error('Singleplayer unavailable');
       }
       if (controller.signal.aborted || this.destroyed || this.queueAbort !== controller) {
         return '';
       }
-      this.connectToAssignedGame(session, assignment.node, assignment.wsPath, assignment.ticket, assignment.matchId, { returnTarget: assignment.returnTarget });
-      return assignment.matchId;
+      this.connectToMatch(session, view.matchId, { returnTarget: view.returnTarget });
+      return view.matchId;
     } catch (error: any) {
       if (error?.name === 'AbortError') {
         return '';

@@ -138,9 +138,17 @@ export type RatingDeltaPreview = {
   draw: number;
 };
 
+// MatchKind is what a match is; only ranked duels are rated.
+export type MatchKind = "ranked_duel" | "private_duel" | "team_duel" | "free_for_all" | "solo";
+
+export function isRatedKind(kind: MatchKind | undefined) {
+  return kind === "ranked_duel";
+}
+
 export type Snapshot = {
   matchId: string;
   mode?: "duel" | "singleplayer" | "team_duel" | "free_for_all";
+  kind?: MatchKind;
   config?: {
     ruleset?: "moving" | "no_move" | "nmpz";
     streetNames?: "shown" | "hidden";
@@ -152,7 +160,6 @@ export type Snapshot = {
     pressureTimeLimitMs?: number;
     multiplierMode?: "shared" | "individual";
   };
-  unranked?: boolean;
   state: string;
   phase: "live" | "round_result" | "ended";
   roundPhase:

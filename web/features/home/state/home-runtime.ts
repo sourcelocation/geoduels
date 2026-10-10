@@ -46,7 +46,7 @@ function createHomeRuntime(config: RuntimeConfig): HomeRuntime {
   runtime.partyController = new PartyController({
     config,
     sessionController: runtime.sessionController,
-    onMatchAssigned: (assignment) => runtime.matchRouteController.acceptPartyAssignment(assignment)
+    onMatchFound: (matchId) => runtime.matchRouteController.acceptPartyMatch(matchId)
   });
   runtime.matchRouteController = new MatchRouteController({
     config,

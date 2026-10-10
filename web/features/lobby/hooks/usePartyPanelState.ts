@@ -38,9 +38,9 @@ export function usePartyPanelState({
       ? `${window.location.origin}/party/${party.inviteCode}`
       : "";
   const members = party.snapshot?.members || [];
-  const activeMatchId = party.snapshot?.activeMatchId || party.snapshot?.startedMatchId || "";
+  const activeMatchId = party.snapshot?.activeMatchId || "";
   const matchInProgress =
-    party.snapshot?.state === "in_match" || party.snapshot?.state === "started";
+    party.snapshot?.state === "in_match";
   const currentMember = members.find((member) => member.userId === userId);
   const config = party.snapshot?.config || defaultPartyConfig;
   const mode = party.snapshot?.mode || "duel";

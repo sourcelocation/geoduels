@@ -3,14 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 
 	"geoduels/pkg/maintenance"
 )
@@ -90,24 +88,13 @@ func TestShutdownWithoutMaintenanceStillDrains(t *testing.T) {
 }
 
 func TestMaintenanceDrainsAdmissionButKeepsRolloutReady(t *testing.T) {
-	hook := &maintenanceRedisHook{value: `{"phase":"active"}`}
-	rdb := redis.NewClient(&redis.Options{})
-	t.Cleanup(func() { _ = rdb.Close() })
-	rdb.AddHook(hook)
-	g := gameplayNode{redis: rdb, coordAuth: "test-secret"}
+	status, readErr := maintenance.Status{Phase: maintenance.PhaseActive}, error(nil)
+	g := gameplayNode{readMaintenance: func(context.Context) (maintenance.Status, error) { return status, readErr }}
 	g.refreshMaintenanceDrain()
-
+	if g.admitting() {
+		t.Fatal("maintenance admitted new matches")
+	}
 	e := echo.New()
-	request := httptest.NewRequest(http.MethodPost, "/internal/matches", nil)
-	request.Header.Set("X-Coordinator-Secret", g.coordAuth)
-	recorder := httptest.NewRecorder()
-	ctx := e.NewContext(request, recorder)
-	if err := g.createMatch(ctx); err != nil {
-		e.HTTPErrorHandler(err, ctx)
-	}
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("maintenance admitted new match: HTTP %d", recorder.Code)
-	}
 	checkReady := func(want int) {
 		t.Helper()
 		recorder := httptest.NewRecorder()
@@ -120,47 +107,11 @@ func TestMaintenanceDrainsAdmissionButKeepsRolloutReady(t *testing.T) {
 		}
 	}
 	checkReady(http.StatusOK)
-	hook.err = errors.New("Redis unavailable")
+	status, readErr = maintenance.DefaultStatus(), errors.New("database unavailable")
 	g.refreshMaintenanceDrain()
 	if !g.drain.isDraining() {
-		t.Fatal("Redis failure cleared maintenance drain")
+		t.Fatal("a failed maintenance read cleared the drain")
 	}
-	hook.err = nil
 	g.drain.startShutdown(time.Now())
 	checkReady(http.StatusServiceUnavailable)
-}
-
-// Answer Redis commands in memory; no database or network is used.
-type maintenanceRedisHook struct {
-	value string
-	err   error
-}
-
-func (h *maintenanceRedisHook) DialHook(redis.DialHook) redis.DialHook {
-	return func(context.Context, string, string) (net.Conn, error) {
-		return nil, errors.New("unexpected Redis connection")
-	}
-}
-
-func (h *maintenanceRedisHook) ProcessHook(redis.ProcessHook) redis.ProcessHook {
-	return func(_ context.Context, cmd redis.Cmder) error {
-		if h.err != nil {
-			return h.err
-		}
-		switch cmd := cmd.(type) {
-		case *redis.StringCmd:
-			cmd.SetVal(h.value)
-		case *redis.StatusCmd:
-			cmd.SetVal("PONG")
-		default:
-			return errors.New("unexpected Redis command")
-		}
-		return nil
-	}
-}
-
-func (h *maintenanceRedisHook) ProcessPipelineHook(redis.ProcessPipelineHook) redis.ProcessPipelineHook {
-	return func(context.Context, []redis.Cmder) error {
-		return errors.New("unexpected Redis pipeline")
-	}
 }

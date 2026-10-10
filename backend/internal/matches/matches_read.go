@@ -3,8 +3,11 @@ package matches
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"geoduels/internal/storekit"
+	"geoduels/pkg/contracts"
+	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -16,7 +19,10 @@ func mu(s string) (pgtype.UUID, error) {
 	e := u.Scan(s)
 	return u, e
 }
-func (s *PGStore) GetFinalMatchSnapshot(id string) ([]byte, bool, error) {
+
+// FinalMatchSnapshot returns a recorded match's final snapshot, with its kind: a match recorded
+// before kinds existed gets the kind its history row describes.
+func (s *PGStore) FinalMatchSnapshot(id string) (*contracts.MatchSnapshot, bool, error) {
 	if id == "" {
 		return nil, false, errors.New("matchID required")
 	}
@@ -31,23 +37,30 @@ func (s *PGStore) GetFinalMatchSnapshot(id string) ([]byte, bool, error) {
 	if e != nil {
 		return nil, false, e
 	}
-	if len(r.ReplayZstd) == 0 {
-		if len(r.ReplayJson) == 0 {
-			return nil, false, nil
+	raw := r.ReplayJson
+	if len(r.ReplayZstd) > 0 {
+		raw, e = decompressReplay(r.ReplayZstd, int(r.ReplayCodec), int(r.ReplayUncompressedBytes))
+		if e != nil {
+			return nil, false, e
 		}
-		return r.ReplayJson, true, nil
+		if len(r.ReplaySha256) == sha256.Size {
+			h := sha256.Sum256(raw)
+			if !equalBytes(h[:], r.ReplaySha256) {
+				return nil, false, errors.New("replay checksum mismatch")
+			}
+		}
 	}
-	raw, e := decompressReplay(r.ReplayZstd, int(r.ReplayCodec), int(r.ReplayUncompressedBytes))
-	if e != nil {
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	var snap contracts.MatchSnapshot
+	if e := json.Unmarshal(raw, &snap); e != nil {
 		return nil, false, e
 	}
-	if len(r.ReplaySha256) == sha256.Size {
-		h := sha256.Sum256(raw)
-		if !equalBytes(h[:], r.ReplaySha256) {
-			return nil, false, errors.New("replay checksum mismatch")
-		}
+	if snap.Kind == "" {
+		snap.Kind = matchkind.FromHistory(contracts.MatchMode(r.Mode), r.Ranked)
 	}
-	return raw, true, nil
+	return &snap, true, nil
 }
 func equalBytes(a, b []byte) bool {
 	if len(a) != len(b) {

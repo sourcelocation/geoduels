@@ -12,7 +12,7 @@ import (
 // unique states to include available, pending, running and scheduled.
 func PeriodicJobs(cfg PeriodicConfig) []*river.PeriodicJob {
 	unique := &river.InsertOpts{UniqueOpts: river.UniqueOpts{
-		ByArgs:  true,
+		ByArgs: true,
 		ByState: []rivertype.JobState{
 			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable,
 			rivertype.JobStateRunning, rivertype.JobStateScheduled,

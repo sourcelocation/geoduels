@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 
-	"geoduels/internal/httpx"
+	"geoduels/internal/chat"
 	"geoduels/pkg/contentfilter"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	"geoduels/pkg/observability"
+	"geoduels/pkg/pgnotify"
 	pkgstaff "geoduels/pkg/staff"
 )
 
@@ -41,22 +41,29 @@ type chatClientCommand struct {
 	Payload map[string]any `json:"payload"`
 }
 
-func (q *matchCoordinator) chatWS(c echo.Context) error {
+func (a *api) chatWS(c echo.Context) error {
 	r := c.Request()
-	claims, identity, err := q.requireActiveAccount(c)
+	claims, err := a.liveClaims(r)
 	if err != nil {
-		return err
+		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
+	}
+	identity, err := a.accounts.GetIdentity(claims.Sub)
+	if err != nil {
+		return plainTextError(c, http.StatusUnauthorized, "identity not found")
+	}
+	if identity.IsBanned {
+		return writeAPIError(c, http.StatusForbidden, "account_banned", "user is banned")
 	}
 	staffViewer := identity.StaffActor().Can(pkgstaff.CapReviewReports) || identity.StaffActor().Can(pkgstaff.CapManageAccess)
-	scope, err := q.authorizeChatConversation(r.Context(), strings.TrimSpace(c.QueryParam("conversationId")), claims.Sub, staffViewer)
+	scope, err := a.authorizeChatConversation(r.Context(), strings.TrimSpace(c.QueryParam("conversationId")), claims.Sub, staffViewer)
 	if err != nil {
-		return httpx.PlainTextError(c, http.StatusForbidden, "forbidden")
+		return plainTextError(c, http.StatusForbidden, "forbidden")
 	}
-	profile, err := q.profiles.GetProfile(claims.Sub)
+	profile, err := a.profiles.GetProfile(claims.Sub)
 	if err != nil {
-		return httpx.PlainTextError(c, http.StatusBadGateway, "profile unavailable")
+		return plainTextError(c, http.StatusBadGateway, "profile unavailable")
 	}
-	conn, err := partyUpgrader.Upgrade(c.Response().Writer, r, nil)
+	conn, err := a.live.upgrader.Upgrade(c.Response().Writer, r, nil)
 	if err != nil {
 		return nil
 	}
@@ -70,32 +77,28 @@ func (q *matchCoordinator) chatWS(c echo.Context) error {
 		return conn.SetReadDeadline(time.Now().Add(70 * time.Second))
 	})
 
-	var writeMu sync.Mutex
+	w := &socketWriter{conn: conn}
 	// Staff reviewers only see team chat once the match is over; live team
 	// messages are never revealed.
 	revealTeam := false
 	if scope.ReadOnly {
-		if over, overErr := q.chat.MatchOver(r.Context(), scope.MatchID); overErr == nil && over {
+		if over, overErr := a.chat.MatchOver(r.Context(), scope.MatchID); overErr == nil && over {
 			revealTeam = true
 		}
 	}
-	if messages, err := q.chat.ListChatMessagesForUser(scope.ConversationID, claims.Sub, 100, revealTeam); err == nil && len(messages) > 0 {
-		q.writeQueueMessage(conn, &writeMu, "chat.history", map[string]any{
+	if messages, err := a.chat.ListChatMessagesForUser(scope.ConversationID, claims.Sub, 100, revealTeam); err == nil && len(messages) > 0 {
+		w.send("chat.history", map[string]any{
 			"conversationId": scope.ConversationID,
 			"messages":       messages,
 			"readOnly":       scope.ReadOnly,
 		})
 	}
 
-	var chatEvents <-chan *redis.Message
-	if q.redis != nil && !scope.ReadOnly {
-		pubsub := q.redis.Subscribe(ctx, chatChannel(scope.ConversationID))
-		defer pubsub.Close()
-		if _, err := pubsub.Receive(ctx); err != nil {
-			observability.Log("warn", "chat subscribe failed", map[string]any{"conversationId": scope.ConversationID, "error": err.Error()})
-		} else {
-			chatEvents = pubsub.Channel()
-		}
+	var chatEvents <-chan pgnotify.Event
+	if !scope.ReadOnly {
+		events, unsubscribe := a.events.Subscribe(pgnotify.ChatTopic(scope.ConversationID))
+		defer unsubscribe()
+		chatEvents = events
 	}
 
 	go func() {
@@ -107,55 +110,55 @@ func (q *matchCoordinator) chatWS(c echo.Context) error {
 			}
 			_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
 			if scope.ReadOnly {
-				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat is read-only for reviewers"})
+				w.send("chat.error", map[string]string{"message": "chat is read-only for reviewers"})
 				continue
 			}
-			restriction, restricted, err := q.chat.GetActiveChatRestriction(claims.Sub)
+			restriction, restricted, err := a.chat.GetActiveChatRestriction(claims.Sub)
 			if err != nil {
 				observability.Log("warn", "chat restriction lookup failed", map[string]any{
 					"conversationId": scope.ConversationID,
 					"userId":         claims.Sub,
 					"error":          err.Error(),
 				})
-				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat unavailable"})
+				w.send("chat.error", map[string]string{"message": "chat unavailable"})
 				continue
 			}
 			if restricted {
-				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": chatRestrictionErrorMessage(restriction)})
+				w.send("chat.error", map[string]string{"message": chatRestrictionErrorMessage(restriction)})
 				continue
 			}
-			message, err := q.buildCoordinatorChatMessage(scope, claims.Sub, profile.DisplayName, cmd)
+			message, err := a.buildChatMessage(scope, claims.Sub, profile.DisplayName, cmd)
 			if err != nil {
-				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": err.Error()})
+				w.send("chat.error", map[string]string{"message": err.Error()})
 				continue
 			}
 			if message.Audience == contracts.ChatAudienceTeam {
-				matchID, teamID, ok, teamErr := q.resolveChatTeam(scope, claims.Sub)
+				matchID, teamID, ok, teamErr := a.resolveChatTeam(scope, claims.Sub)
 				if teamErr != nil {
-					q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat unavailable"})
+					w.send("chat.error", map[string]string{"message": "chat unavailable"})
 					continue
 				}
 				if !ok {
-					q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "team chat is only available during a team duel"})
+					w.send("chat.error", map[string]string{"message": "team chat is only available during a team duel"})
 					continue
 				}
 				message.MatchID, message.TeamID, message.SenderTeamID = matchID, teamID, teamID
 			}
 			if message.Audience == contracts.ChatAudienceAll {
-				_, teamID, ok, err := q.resolveChatTeam(scope, claims.Sub)
+				_, teamID, ok, err := a.resolveChatTeam(scope, claims.Sub)
 				if err != nil {
-					q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat unavailable"})
+					w.send("chat.error", map[string]string{"message": "chat unavailable"})
 					continue
 				}
 				if ok {
 					message.SenderTeamID = teamID
 				}
 			}
-			if !q.allowChatSend(scope.ConversationID, claims.Sub, time.Now()) {
-				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat is moving too fast"})
+			if !a.chatLimits.allow(scope.ConversationID, claims.Sub, time.Now()) {
+				w.send("chat.error", map[string]string{"message": "chat is moving too fast"})
 				continue
 			}
-			if err := q.chat.RecordChatMessage(scope.ConversationID, scope.Kind, scope.ID, message); err != nil {
+			if err := a.chat.RecordChatMessage(scope.ConversationID, scope.Kind, scope.ID, message); err != nil {
 				observability.Log("error", "chat message persistence failed", map[string]any{
 					"conversationId": scope.ConversationID,
 					"scopeKind":      scope.Kind,
@@ -163,14 +166,10 @@ func (q *matchCoordinator) chatWS(c echo.Context) error {
 					"userId":         claims.Sub,
 					"error":          err.Error(),
 				})
-				q.writeQueueMessage(conn, &writeMu, "chat.error", map[string]string{"message": "chat unavailable"})
+				w.send("chat.error", map[string]string{"message": "chat unavailable"})
 				continue
 			}
-			if q.redis == nil {
-				q.writeQueueMessage(conn, &writeMu, contracts.EventChatMessage, message)
-				continue
-			}
-			q.publishChatMessage(ctx, scope.ConversationID, message)
+			a.publishChatMessage(ctx, scope.ConversationID, message, w)
 		}
 	}()
 
@@ -184,25 +183,22 @@ func (q *matchCoordinator) chatWS(c echo.Context) error {
 			if !ok {
 				return nil
 			}
-			if event == nil || strings.TrimSpace(event.Payload) == "" {
-				continue
-			}
 			var message contracts.ChatMessage
-			if err := json.Unmarshal([]byte(event.Payload), &message); err != nil {
+			if event.Resync || json.Unmarshal(event.Data, &message) != nil {
 				continue
 			}
-			if q.canViewChatMessage(claims.Sub, message) {
-				q.writeQueueMessage(conn, &writeMu, contracts.EventChatMessage, message)
+			if a.canViewChatMessage(claims.Sub, message) {
+				w.send(contracts.EventChatMessage, message)
 			}
 		case <-pingTicker.C:
-			if !q.writeQueuePing(conn, &writeMu) {
+			if !w.ping() {
 				return nil
 			}
 		}
 	}
 }
 
-func (q *matchCoordinator) authorizeChatConversation(ctx context.Context, conversationID, userID string, staffViewer bool) (chatScope, error) {
+func (a *api) authorizeChatConversation(ctx context.Context, conversationID, userID string, staffViewer bool) (chatScope, error) {
 	kind, id, ok := strings.Cut(conversationID, ":")
 	if !ok || strings.TrimSpace(id) == "" {
 		return chatScope{}, errors.New("invalid conversation")
@@ -210,21 +206,17 @@ func (q *matchCoordinator) authorizeChatConversation(ctx context.Context, conver
 	scope := chatScope{ConversationID: conversationID, Kind: kind, ID: id}
 	switch kind {
 	case "party":
-		snap, found, err := q.parties.GetPartyByID(id)
+		snap, found, err := a.parties.GetPartyByID(id)
 		if err != nil || !found || !partyHasMember(snap, userID) {
 			return chatScope{}, errors.New("forbidden")
 		}
 		return scope, nil
 	case "match":
 		scope.MatchID = id
-		if assigned, found, err := q.state.GetAssignmentByMatch(ctx, id); err == nil && found {
-			for _, playerID := range assigned.Players {
-				if playerID == userID {
-					return scope, nil
-				}
-			}
+		if session, found, err := a.matchStore.GetSession(ctx, id); err == nil && found && session.Seated(userID) {
+			return scope, nil
 		}
-		if participated, err := q.matches.PlayerParticipatedInMatch(userID, id); err == nil && participated {
+		if participated, err := a.matchStore.PlayerParticipatedInMatch(userID, id); err == nil && participated {
 			return scope, nil
 		}
 		if staffViewer {
@@ -237,7 +229,7 @@ func (q *matchCoordinator) authorizeChatConversation(ctx context.Context, conver
 	}
 }
 
-func (q *matchCoordinator) buildCoordinatorChatMessage(scope chatScope, userID, displayName string, cmd chatClientCommand) (contracts.ChatMessage, error) {
+func (a *api) buildChatMessage(scope chatScope, userID, displayName string, cmd chatClientCommand) (contracts.ChatMessage, error) {
 	message := contracts.ChatMessage{
 		ID:                entityid.New(),
 		ConversationID:    scope.ConversationID,
@@ -270,7 +262,7 @@ func (q *matchCoordinator) buildCoordinatorChatMessage(scope chatScope, userID, 
 		message.Kind = contracts.ChatMessageText
 		if cmd.Payload != nil {
 			if body, ok := cmd.Payload["body"].(string); ok {
-				message.Body = sanitizeCoordinatorChatBody(body)
+				message.Body = sanitizeChatBody(body)
 			}
 		}
 		if message.Body == "" {
@@ -286,7 +278,7 @@ func (q *matchCoordinator) buildCoordinatorChatMessage(scope chatScope, userID, 
 				message.Emote = contracts.ChatEmote(strings.TrimSpace(emote))
 			}
 		}
-		if !validCoordinatorChatEmote(message.Emote) {
+		if !validChatEmote(message.Emote) {
 			return contracts.ChatMessage{}, errors.New("unsupported emote")
 		}
 	default:
@@ -295,26 +287,26 @@ func (q *matchCoordinator) buildCoordinatorChatMessage(scope chatScope, userID, 
 	return message, nil
 }
 
-func (q *matchCoordinator) resolveChatTeam(scope chatScope, userID string) (string, string, bool, error) {
+func (a *api) resolveChatTeam(scope chatScope, userID string) (string, string, bool, error) {
 	if scope.Kind == "party" {
-		return q.chat.ActivePartyChatTeam(scope.ID, userID)
+		return a.chat.ActivePartyChatTeam(scope.ID, userID)
 	}
 	if scope.Kind == "match" {
-		teamID, ok, err := q.chat.ChatTeamForMatch(scope.MatchID, userID)
+		teamID, ok, err := a.chat.ChatTeamForMatch(scope.MatchID, userID)
 		return scope.MatchID, teamID, ok, err
 	}
 	return "", "", false, nil
 }
 
-func (q *matchCoordinator) canViewChatMessage(userID string, message contracts.ChatMessage) bool {
+func (a *api) canViewChatMessage(userID string, message contracts.ChatMessage) bool {
 	if message.Audience != contracts.ChatAudienceTeam {
 		return true
 	}
-	teamID, ok, err := q.chat.ChatTeamForMatch(message.MatchID, userID)
+	teamID, ok, err := a.chat.ChatTeamForMatch(message.MatchID, userID)
 	return err == nil && ok && teamID == message.TeamID
 }
 
-func chatRestrictionErrorMessage(restriction chatRestriction) string {
+func chatRestrictionErrorMessage(restriction chat.ChatRestriction) string {
 	switch restriction.ActionType {
 	case "temporary_ban", "permanent_ban":
 		if restriction.EndsAt.IsZero() {
@@ -329,11 +321,11 @@ func chatRestrictionErrorMessage(restriction chatRestriction) string {
 	}
 }
 
-func sanitizeCoordinatorChatBody(body string) string {
+func sanitizeChatBody(body string) string {
 	return contentfilter.NormalizeText(body, chatMaxBodyLen)
 }
 
-func validCoordinatorChatEmote(emote contracts.ChatEmote) bool {
+func validChatEmote(emote contracts.ChatEmote) bool {
 	switch emote {
 	case contracts.ChatEmoteSkull, contracts.ChatEmoteSob, contracts.ChatEmoteThinking, contracts.ChatEmoteSunglasses, contracts.ChatEmoteWave:
 		return true
@@ -342,15 +334,22 @@ func validCoordinatorChatEmote(emote contracts.ChatEmote) bool {
 	}
 }
 
-func (q *matchCoordinator) allowChatSend(conversationID, userID string, now time.Time) bool {
+// chatRateLimiter allows a few messages per conversation and player in a short window. Each process
+// counts its own sockets; a player's chat socket lives in one of them.
+type chatRateLimiter struct {
+	mu     sync.Mutex
+	recent map[string][]time.Time
+}
+
+func (l *chatRateLimiter) allow(conversationID, userID string, now time.Time) bool {
 	key := conversationID + ":" + userID
 	cutoff := now.Add(-chatRateLimitWindow)
-	q.chatMu.Lock()
-	defer q.chatMu.Unlock()
-	if q.chatRecent == nil {
-		q.chatRecent = map[string][]time.Time{}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.recent == nil {
+		l.recent = map[string][]time.Time{}
 	}
-	recent := q.chatRecent[key]
+	recent := l.recent[key]
 	kept := recent[:0]
 	for _, ts := range recent {
 		if ts.After(cutoff) {
@@ -358,24 +357,18 @@ func (q *matchCoordinator) allowChatSend(conversationID, userID string, now time
 		}
 	}
 	if len(kept) >= chatRateLimitBurst {
-		q.chatRecent[key] = kept
+		l.recent[key] = kept
 		return false
 	}
-	q.chatRecent[key] = append(kept, now)
+	l.recent[key] = append(kept, now)
 	return true
 }
 
-func (q *matchCoordinator) publishChatMessage(ctx context.Context, conversationID string, message contracts.ChatMessage) {
-	if q.redis == nil {
-		return
+// publishChatMessage sends a message to everyone in the conversation, in every process; it falls
+// back to the sender alone if it cannot be published.
+func (a *api) publishChatMessage(ctx context.Context, conversationID string, message contracts.ChatMessage, sender *socketWriter) {
+	if err := pgnotify.Publish(ctx, a.db.Pool(), pgnotify.ChatTopic(conversationID), message); err != nil {
+		observability.Log("warn", "chat publish failed", map[string]any{"conversationId": conversationID, "error": err.Error()})
+		sender.send(contracts.EventChatMessage, message)
 	}
-	body, err := json.Marshal(message)
-	if err != nil {
-		return
-	}
-	_ = q.redis.Publish(ctx, chatChannel(conversationID), string(body)).Err()
-}
-
-func chatChannel(conversationID string) string {
-	return "chat:" + conversationID
 }

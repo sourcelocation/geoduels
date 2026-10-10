@@ -52,6 +52,8 @@ func handleAPIShutdown(a *api, srv *http.Server, drained chan<- struct{}) {
 	<-sigCh
 	a.draining.Store(true)
 	time.Sleep(apiDrainTimeout)
+	// Shutdown leaves WebSockets open: proxied games are asked to reconnect through another pod.
+	a.proxied.drain(apiDrainTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
 	defer cancel()

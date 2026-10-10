@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/matchkind"
 )
 
 // MemberRole is the policy-level party role used when composing membership
@@ -73,7 +74,7 @@ func (s *Service) CreateParty(ownerUserID string, mode contracts.MatchMode, mapS
 	if mode == "" {
 		mode = contracts.ModeDuel
 	}
-	if !contracts.IsPrivatePartyMode(mode) {
+	if _, ok := matchkind.ForParty(mode); !ok {
 		return contracts.PartySnapshot{}, errors.New("unsupported party mode")
 	}
 	if strings.TrimSpace(mapScope) == "" {
@@ -136,17 +137,26 @@ func (s *Service) GetPartyByInviteCode(inviteCode string) (contracts.PartySnapsh
 	return s.store.GetPartyByInviteCode(ctx, inviteCode)
 }
 
-func (s *Service) GetPartyByMatchID(matchID string) (contracts.PartySnapshot, bool, error) {
+// TouchMemberSeen records that the member has the party open, reporting whether their presence
+// changed.
+func (s *Service) TouchMemberSeen(partyID, userID string) (bool, error) {
 	ctx, cancel := s.op()
 	defer cancel()
-	return s.store.GetPartyByMatchID(ctx, matchID)
+	return s.store.TouchMemberSeen(ctx, partyID, userID)
+}
+
+// ClearMemberSeen marks the member as gone from the party, reporting whether they were there.
+func (s *Service) ClearMemberSeen(partyID, userID string) (bool, error) {
+	ctx, cancel := s.op()
+	defer cancel()
+	return s.store.ClearMemberSeen(ctx, partyID, userID)
 }
 
 // SetPartyMode owns the party-open check and the team-shuffle decision that
 // runs when switching into team duel.
 func (s *Service) SetPartyMode(lobbyID string, mode contracts.MatchMode) error {
 	partyID := strings.TrimSpace(lobbyID)
-	if partyID == "" || !contracts.IsPrivatePartyMode(mode) {
+	if _, ok := matchkind.ForParty(mode); partyID == "" || !ok {
 		return errors.New("invalid party mode")
 	}
 	ctx, cancel := s.op()
@@ -255,7 +265,7 @@ func (s *Service) LeaveParty(lobbyID, userID string) (contracts.PartySnapshot, e
 			return err
 		}
 		state := party.State
-		if state != contracts.PartyOpen && state != contracts.PartyInMatch && state != contracts.PartyStarted {
+		if state != contracts.PartyOpen && state != contracts.PartyInMatch {
 			return errors.New("party is not joinable")
 		}
 		if party.OwnerUserID == userID && state != contracts.PartyOpen {
@@ -430,28 +440,6 @@ func (s *Service) TransferPartyOwner(lobbyID, ownerUserID, targetUserID string) 
 	return snap, err
 }
 
-func (s *Service) MarkPartyInMatch(lobbyID, matchID string) (contracts.PartySnapshot, error) {
-	partyID := strings.TrimSpace(lobbyID)
-	ctx, cancel := s.op()
-	defer cancel()
-	err := s.store.WithinTx(ctx, func(store Store) error {
-		return store.MarkPartyInMatch(ctx, partyID, matchID)
-	})
-	if err != nil {
-		return contracts.PartySnapshot{}, err
-	}
-	snap, _, err := s.store.GetPartyByID(ctx, partyID)
-	return snap, err
-}
-
-func (s *Service) ExpireOpenParties() error {
-	ctx, cancel := s.op()
-	defer cancel()
-	return s.store.WithinTx(ctx, func(store Store) error {
-		return store.ExpireOpenParties(ctx)
-	})
-}
-
 func (s *Service) ListOpenPartyIDs() ([]string, error) {
 	ctx, cancel := s.op()
 	defer cancel()
@@ -471,21 +459,6 @@ func (s *Service) CloseInactiveOpenParties(lobbyIDs []string, inactiveFor time.D
 		return nil
 	})
 	return closed, err
-}
-
-func (s *Service) ReopenEndedParties() (int64, error) {
-	ctx, cancel := s.op()
-	defer cancel()
-	var reopened int64
-	err := s.store.WithinTx(ctx, func(store Store) error {
-		n, err := store.ReopenEndedParties(ctx)
-		if err != nil {
-			return err
-		}
-		reopened = n
-		return nil
-	})
-	return reopened, err
 }
 
 // authorizeOwner is the shared ownership gate: the party must be open and the
@@ -526,7 +499,7 @@ func (s *Service) requireJoinable(ctx context.Context, store Store, partyID stri
 	if err != nil {
 		return err
 	}
-	if party.State != contracts.PartyOpen && party.State != contracts.PartyInMatch && party.State != contracts.PartyStarted {
+	if party.State != contracts.PartyOpen && party.State != contracts.PartyInMatch {
 		return errors.New("party is not joinable")
 	}
 	if s.now().After(party.ExpiresAt) {

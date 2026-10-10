@@ -12,6 +12,16 @@ export function apiPath(config: Pick<RuntimeConfig, "apiURL">, path: string): st
   return new URL(normalizedPath, base.endsWith("/") ? base : `${base}/`).toString();
 }
 
+// apiSocketURL is the WebSocket address of an API path: ws(s) on the API's host, or on this page's
+// host when the API is served from it.
+export function apiSocketURL(config: Pick<RuntimeConfig, "apiURL">, path: string): string {
+  const target = apiPath(config, path);
+  const absolute = /^https?:\/\//.test(target)
+    ? target
+    : new URL(target, typeof window === "undefined" ? "http://localhost" : window.location.origin).toString();
+  return absolute.replace(/^http/, "ws");
+}
+
 export function apiFetchPath(config: Pick<RuntimeConfig, "apiURL">, path: string): string {
   const browserPath = apiPath(config, path);
   if (config.apiURL.trim()) {

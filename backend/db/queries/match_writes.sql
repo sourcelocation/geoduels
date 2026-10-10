@@ -26,11 +26,15 @@ FROM (
 WHERE stats.user_id = result.user_id;
 
 -- name: CompleteMatchSession :exec
-UPDATE match_sessions
-SET ended_at = COALESCE(ended_at, now()),
-    lease_expires_at = NULL,
-    updated_at = now()
-WHERE match_id = $1;
+-- Ends a played match and frees its players' seats.
+WITH ended AS (
+    UPDATE match_sessions s
+    SET ended_at = COALESCE(s.ended_at, now()), outcome = COALESCE(s.outcome, 'finished')
+    WHERE s.match_id = $1
+    RETURNING s.match_id
+)
+UPDATE match_participants mp SET active = false
+FROM ended WHERE mp.match_id = ended.match_id AND mp.active;
 
 -- name: EnsureMatchRankedStats :exec
 INSERT INTO ranked_stats (user_id, mode, season_id, games_played, wins)
@@ -56,22 +60,12 @@ SELECT input.user_id, NULL, input.display_name, NULL
 FROM jsonb_to_recordset(convert_from(sqlc.arg(players_json), 'UTF8')::jsonb) AS input(user_id uuid, display_name text)
 ON CONFLICT (id) DO NOTHING;
 
--- name: FindPartyIDByMatchID :one
-SELECT id AS party_id
-FROM parties
-WHERE active_match_id = $1 OR started_match_id = $1 OR last_match_id = $1
-LIMIT 1;
-
 -- name: GetMatchRoundPlanMapID :one
 SELECT map_id AS map_id
 FROM match_round_plans
 WHERE match_id = $1
 ORDER BY round_index
 LIMIT 1;
-
--- name: GetMatchSourcePartyID :one
-SELECT source_party_id AS source_party_id
-FROM match_sessions WHERE match_id = $1;
 
 -- name: LockDuelRatings :many
 SELECT u.id, gd_is_guest(u.id) AS is_guest, r.mmr, r.rd, r.updated_at
@@ -84,16 +78,9 @@ JOIN ranks r
 ORDER BY requested.position
 FOR UPDATE OF r;
 
--- name: LockMatchSessionEnded :one
-SELECT (ended_at IS NOT NULL)::boolean AS ended FROM match_sessions WHERE match_id = $1 FOR UPDATE;
-
--- name: MatchBelongsToParty :one
-SELECT exists(
-    SELECT 1 FROM match_sessions WHERE match_id = $1 AND source_kind = 'party'
-) OR exists(
-    SELECT 1 FROM parties
-    WHERE active_match_id = $1 OR started_match_id = $1 OR last_match_id = $1
-) AS private_party_match;
+-- name: LockMatchSessionForFinalize :one
+SELECT (ended_at IS NOT NULL)::boolean AS ended, kind, source_party_id
+FROM match_sessions WHERE match_id = $1 FOR UPDATE;
 
 -- name: MatchPlayerPersistedRatings :many
 SELECT
@@ -109,21 +96,6 @@ WHERE mp.match_id = sqlc.arg(match_id)::uuid
   AND mp.user_id IN (
     SELECT value::uuid FROM jsonb_array_elements_text(convert_from(sqlc.arg(user_ids_json), 'UTF8')::jsonb)
   );
-
--- name: ReopenPartiesAfterMatch :exec
-UPDATE parties
-SET state = 'open',
-    last_match_id = $1,
-    active_match_id = NULL,
-    started_match_id = NULL,
-    updated_at = now()
-WHERE active_match_id = $1 OR started_match_id = $1;
-
--- name: ResetPartyMembersAfterMatch :exec
-UPDATE party_members pm
-SET ready = false
-FROM match_sessions ms
-WHERE ms.match_id = $1 AND pm.party_id = ms.source_party_id;
 
 -- name: SetMatchPlayerRatingDeltas :exec
 UPDATE match_players players

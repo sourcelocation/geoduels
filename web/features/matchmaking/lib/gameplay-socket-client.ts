@@ -1,6 +1,6 @@
 import type { Snapshot, TeamPing } from '../../game/model/types';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
-import { normalizeWSBase } from '../../../lib/runtime-config';
+import { matchSocketURL } from './queue-client';
 
 type Handlers = {
   onOpen: () => void;
@@ -23,10 +23,8 @@ export class GameplaySocketClient {
     this.handlers = handlers;
   }
 
-  connect(node: string, wsPath: string, ticket: string) {
-    const base = normalizeWSBase(this.config.realtimeBaseURL).replace(/\/$/, '');
-    const path = (wsPath || `/ws/${node}`).startsWith('/') ? (wsPath || `/ws/${node}`) : `/${wsPath || `ws/${node}`}`;
-    const target = `${base}${path}?ticket=${encodeURIComponent(ticket)}`;
+  connect(matchId: string, accessToken: string) {
+    const target = matchSocketURL(this.config, matchId, accessToken);
     this.close();
     const ws = new WebSocket(target);
     this.socket = ws;

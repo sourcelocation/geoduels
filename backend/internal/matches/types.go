@@ -2,8 +2,6 @@ package matches
 
 import (
 	"time"
-
-	"geoduels/pkg/contracts"
 )
 
 type MatchHistorySummary struct {
@@ -26,5 +24,3 @@ type MatchHistoryPage struct {
 	NextEndedAt time.Time
 	NextMatchID string
 }
-
-type MatchSessionUpsert = contracts.MatchSessionUpsert

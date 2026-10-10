@@ -11,6 +11,7 @@ import (
 	"geoduels/internal/rating"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 )
 
 const (
@@ -36,12 +37,14 @@ type Guess struct {
 }
 
 type Match struct {
-	ID                 string
-	Mode               contracts.MatchMode
-	SeasonID           string
-	Config             contracts.MatchConfig
-	State              contracts.MatchState
-	Unranked           bool
+	ID       string
+	Mode     contracts.MatchMode
+	Kind     contracts.MatchKind
+	SeasonID string
+	Config   contracts.MatchConfig
+	State    contracts.MatchState
+	// Rated matches preview rating changes and forfeit a player who stays disconnected.
+	Rated              bool
 	Players            map[string]*contracts.PlayerState
 	Teams              map[string]*contracts.TeamState
 	CurrentLocation    contracts.LocationPoint
@@ -84,23 +87,21 @@ func NewWithClock(roundProvider RoundProvider, now func() time.Time) *Engine {
 	return &Engine{matches: map[string]*Match{}, roundProvider: roundProvider, now: now}
 }
 
+// CreateMatch creates a ranked duel.
 func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile) (*Match, error) {
-	return e.CreateMatchWithOptions(matchID, playerIDs, profiles, MatchOptions{})
+	return e.CreateMatchWithOptions(matchID, playerIDs, profiles, MatchOptions{Kind: matchkind.RankedDuel})
 }
 
 type MatchOptions struct {
-	Unranked bool
+	Kind     contracts.MatchKind
 	SeasonID string
 	Config   contracts.MatchConfig
-	Mode     contracts.MatchMode
 	Teams    map[string]string
 }
 
 func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, opts MatchOptions) (*Match, error) {
-	mode := opts.Mode
-	if mode == "" {
-		mode = contracts.ModeDuel
-	}
+	spec := matchkind.Of(opts.Kind)
+	mode := spec.Mode
 	switch mode {
 	case contracts.ModeDuel:
 		if len(playerIDs) != 2 {
@@ -164,10 +165,11 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 	m := &Match{
 		ID:              matchID,
 		Mode:            mode,
+		Kind:            spec.Kind,
 		SeasonID:        opts.SeasonID,
 		Config:          cfg,
 		State:           contracts.MatchLive,
-		Unranked:        opts.Unranked,
+		Rated:           spec.Rated,
 		Players:         players,
 		Teams:           teams,
 		CurrentLocation: firstRound,
@@ -181,7 +183,7 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 		now:             e.now,
 	}
 	e.startRoundTimer(m)
-	if m.Mode == contracts.ModeDuel && !m.Unranked {
+	if m.Rated {
 		m.RatingPreview = ratingPreview(playerIDs, players, e.now())
 	}
 	e.matches[matchID] = m
@@ -293,7 +295,7 @@ func (e *Engine) Tick() []string {
 		if e.roundExpired(m, now) {
 			e.resolveRound(m)
 		}
-		if !m.Unranked {
+		if m.Rated {
 			allDisconnected := true
 			maxDue := int64(0)
 			for _, p := range m.Players {
@@ -350,7 +352,7 @@ func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnaps
 		return nil, errors.New("player not in match")
 	}
 	p.Disconnected = true
-	if m.Unranked {
+	if !m.Rated {
 		p.DisconnectDue = 0
 	} else {
 		p.DisconnectDue = e.now().Add(disconnectGrace).UnixMilli()
@@ -402,6 +404,35 @@ func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, erro
 	m.LastActivity = e.now()
 	m.EventSeq++
 	return m.snapshot(), nil
+}
+
+// Abandon ends a match nobody plays any more as a draw: every player's HP goes to zero.
+func (e *Engine) Abandon(matchID string) (*contracts.MatchSnapshot, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m, ok := e.matches[matchID]
+	if !ok {
+		return nil, errors.New("match not found")
+	}
+	if m.State == contracts.MatchLive {
+		for _, p := range m.Players {
+			p.HP = 0
+			p.Finalized = false
+		}
+		m.PendingAdvance = false
+		m.IntermissionUntil = time.Time{}
+		m.State = contracts.MatchEnded
+		m.LastActivity = e.now()
+		m.EventSeq++
+	}
+	return m.snapshot(), nil
+}
+
+// Remove forgets a match, once it is recorded or no longer this engine's.
+func (e *Engine) Remove(matchID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.matches, matchID)
 }
 
 func (e *Engine) resolveRound(m *Match) {
@@ -742,9 +773,9 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 	return &contracts.MatchSnapshot{
 		MatchID:         m.ID,
 		Mode:            m.Mode,
+		Kind:            m.Kind,
 		SeasonID:        m.SeasonID,
 		Config:          contracts.NormalizeMatchConfig(m.Config),
-		Unranked:        m.Unranked,
 		State:           m.State,
 		Phase:           phase,
 		RoundPhase:      roundPhase,

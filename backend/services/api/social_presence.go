@@ -2,90 +2,101 @@ package main
 
 import (
 	"context"
-	"log"
+	"sync"
 	"time"
 
 	"geoduels/internal/social"
 )
 
-const lastSeenWriteInterval = 5 * time.Minute
+// A connected player is recorded as online every half minute, well within the presence window, and
+// their "last seen" on their profile every five minutes.
+const (
+	presenceWriteEvery = 30 * time.Second
+	lastSeenWriteEvery = 5 * time.Minute
+)
 
-type lastSeenWriter interface {
-	TouchLastSeen(ctx context.Context, userID string, seenAt time.Time) error
+// throttle remembers when this process last did something for each player.
+type throttle struct {
+	mu   sync.Mutex
+	last map[string]time.Time
 }
 
-func (a *api) touchViewerPresence(ctx context.Context, userID string) {
-	if userID == "" {
-		return
+func (t *throttle) due(userID string, now time.Time, every time.Duration) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.last == nil {
+		t.last = map[string]time.Time{}
 	}
-	if a.coord != nil {
-		_ = a.coord.TouchPresence(ctx, userID)
+	if now.Sub(t.last[userID]) < every {
+		return false
 	}
-	a.scheduleLastSeenWrite(ctx, userID, time.Now().UTC())
-	if a.live != nil {
-		a.live.notePresence(ctx, userID)
-	}
-}
-
-func (a *api) scheduleLastSeenWrite(ctx context.Context, userID string, seenAt time.Time) {
-	writer := a.lastSeen
-	if writer == nil {
-		return
-	}
-	if a.redis != nil {
-		acquired, err := a.redis.SetNX(ctx, lastSeenWriteKey(userID), seenAt.Format(time.RFC3339Nano), lastSeenWriteInterval).Result()
-		if err != nil || !acquired {
-			return
+	t.last[userID] = now
+	for id, at := range t.last {
+		if now.Sub(at) > 2*every {
+			delete(t.last, id)
 		}
+	}
+	return true
+}
+
+// presenceThrottle paces the two presence writes.
+type presenceThrottle struct {
+	online, lastSeen throttle
+}
+
+// touchViewerPresence records that a player is here: any open socket of theirs calls it. Friends see
+// it when their friends list next refreshes.
+func (a *api) touchViewerPresence(ctx context.Context, userID string) {
+	if userID == "" || a.presence == nil {
+		return
+	}
+	now := time.Now().UTC()
+	online := a.presenceWrites.online.due(userID, now, presenceWriteEvery)
+	lastSeen := a.presenceWrites.lastSeen.due(userID, now, lastSeenWriteEvery)
+	if !online && !lastSeen {
+		return
 	}
 	go func() {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
-		if err := writer.TouchLastSeen(writeCtx, userID, seenAt); err != nil {
-			log.Printf("last seen write failed for %s: %v", userID, err)
-			if a.redis != nil {
-				cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = a.redis.Del(cleanupCtx, lastSeenWriteKey(userID)).Err()
-			}
+		if online {
+			_ = a.presence.TouchPresence(writeCtx, userID)
+		}
+		if lastSeen {
+			_ = a.presence.TouchLastSeen(writeCtx, userID, now)
 		}
 	}()
 }
 
-func lastSeenWriteKey(userID string) string {
-	return "rt:presence:last-seen-write:" + userID
-}
-
 func (a *api) applySocialPresence(ctx context.Context, players []social.CompactPlayer) {
-	if len(players) == 0 {
+	if len(players) == 0 || a.presence == nil {
 		return
 	}
 	ids := make([]string, 0, len(players))
 	for _, player := range players {
-		if player.LastSeenAt == nil {
-			continue
+		if player.LastSeenAt != nil {
+			ids = append(ids, player.UserID)
 		}
-		ids = append(ids, player.UserID)
 	}
-	present := map[string]bool{}
-	if a.coord != nil && len(ids) > 0 {
-		if next, err := a.coord.PresentUsers(ctx, ids); err == nil {
-			present = next
-		}
+	online, err := a.presence.Online(ctx, ids)
+	if err != nil {
+		return
+	}
+	playing, err := a.matchStore.UsersInLiveMatches(ctx, ids)
+	if err != nil {
+		playing = map[string]bool{}
 	}
 	for i := range players {
 		if players[i].LastSeenAt == nil {
 			continue
 		}
-		if !present[players[i].UserID] {
+		if !online[players[i].UserID] {
 			players[i].PresenceStatus = "offline"
 			continue
 		}
 		players[i].PresenceStatus = "online"
-		if a.coord != nil {
-			if assigned, ok, err := a.coord.GetAssignmentByUser(ctx, players[i].UserID); err == nil && ok && assigned.MatchID != "" {
-				players[i].Activity = "in_match"
-			}
+		if playing[players[i].UserID] {
+			players[i].Activity = "in_match"
 		}
 	}
 }

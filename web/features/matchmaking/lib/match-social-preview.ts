@@ -1,4 +1,5 @@
-import type { Snapshot } from "../../game/model/types";
+import { isRatedKind, type Snapshot } from "../../game/model/types";
+import type { MatchViewStatus } from "./queue-client";
 import { toPublicEntityId } from "../../../lib/entity-id";
 import {
   SOCIAL_ICON_IMAGE,
@@ -22,20 +23,20 @@ const RULESET_LABELS: Record<string, string> = {
 
 export function buildMatchSocialPreview(
   snapshot: Snapshot | null,
-  status: string,
+  status: MatchViewStatus,
   routeId: string,
 ): SocialPreview {
   const canonicalPath = routeId
     ? `/match/${encodeURIComponent(toPublicEntityId(routeId))}`
     : "/";
-  if (status === "live_auth_required") {
+  if (status === "starting" || status === "live") {
     return {
       ...GENERIC_MATCH,
       canonicalPath,
       description: "This GeoDuels match is live.",
     };
   }
-  if (status !== "history" || !snapshot) {
+  if (status !== "ended" || !snapshot) {
     return { ...GENERIC_MATCH, canonicalPath };
   }
 
@@ -56,9 +57,9 @@ function matchCopy(snapshot: Snapshot) {
     : "";
   const ranked =
     snapshot.mode === "duel" || snapshot.mode === "team_duel"
-      ? snapshot.unranked
-        ? "Unranked"
-        : "Ranked"
+      ? isRatedKind(snapshot.kind)
+        ? "Ranked"
+        : "Unranked"
       : "";
   const suffix = [mapName, ruleset, ranked].filter(Boolean);
 

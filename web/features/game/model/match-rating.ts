@@ -1,4 +1,4 @@
-import type { RatingDeltaPreview, Snapshot } from "./types";
+import { isRatedKind, type RatingDeltaPreview, type Snapshot } from "./types";
 
 export type MatchRatingOutcome = "win" | "lose" | "draw";
 
@@ -30,7 +30,7 @@ export function deriveDuelRatingDeltas(params: {
   if (
     !snapshot ||
     snapshot.mode !== "duel" ||
-    snapshot.unranked ||
+    !isRatedKind(snapshot.kind) ||
     snapshot.state !== "ended"
   ) {
     return {};

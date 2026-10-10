@@ -45,6 +45,19 @@ select badge_code,coalesce(level,1)::smallint level,coalesce(extra,0)::smallint 
 -- name: TouchLastSeen :exec
 update users set last_seen_at=greatest(coalesce(last_seen_at,$2),$2) where id=$1;
 
+-- name: TouchPresence :exec
+insert into presence (user_id, seen_at) values ($1, now())
+on conflict (user_id) do update set seen_at = excluded.seen_at;
+
+-- name: CountOnlineUsers :one
+-- Players seen within the presence window.
+select count(*) from presence where seen_at > now() - (sqlc.arg(window_seconds)::double precision * interval '1 second');
+
+-- name: ListOnlineUsers :many
+select user_id from presence
+where user_id = any(sqlc.arg(user_ids)::uuid[])
+  and seen_at > now() - (sqlc.arg(window_seconds)::double precision * interval '1 second');
+
 -- name: UpdateSelectedBadge :exec
 update users set selected_badge_code=nullif(sqlc.arg(badge_code),0) where id=sqlc.arg(user_id);
 

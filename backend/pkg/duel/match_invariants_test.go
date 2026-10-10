@@ -26,6 +26,7 @@ var invariantSeeds = []int64{1, 7, 42, 1337, 90210}
 type simMode struct {
 	name    string
 	mode    contracts.MatchMode
+	kind    contracts.MatchKind
 	players []string
 	teams   map[string]string
 }
@@ -175,9 +176,9 @@ func applyCommand(t *testing.T, eng *duel.Engine, m *simMode, rng *rand.Rand, no
 
 func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 	modes := []simMode{
-		{name: "duel", mode: contracts.ModeDuel, players: []string{"p1", "p2"}},
-		{name: "team_duel", mode: contracts.ModeTeamDuel, players: []string{"p1", "p2", "p3", "p4"}, teams: map[string]string{"p1": "a", "p3": "a", "p2": "b", "p4": "b"}},
-		{name: "free_for_all", mode: contracts.ModeFreeForAll, players: []string{"p1", "p2", "p3"}},
+		{name: "duel", mode: contracts.ModeDuel, kind: contracts.KindRankedDuel, players: []string{"p1", "p2"}},
+		{name: "team_duel", mode: contracts.ModeTeamDuel, kind: contracts.KindTeamDuel, players: []string{"p1", "p2", "p3", "p4"}, teams: map[string]string{"p1": "a", "p3": "a", "p2": "b", "p4": "b"}},
+		{name: "free_for_all", mode: contracts.ModeFreeForAll, kind: contracts.KindFreeForAll, players: []string{"p1", "p2", "p3"}},
 	}
 	for _, s := range modes {
 		for _, seed := range invariantSeeds {
@@ -189,7 +190,7 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 					return contracts.LocationPoint{Lat: rng.Float64()*140 - 70, Lng: rng.Float64()*360 - 180, Country: "xx"}, nil
 				}, func() time.Time { return now })
 				if _, err := eng.CreateMatchWithOptions("sim", s.players, nil, duel.MatchOptions{
-					Mode: s.mode, Teams: s.teams,
+					Kind: s.kind, Teams: s.teams,
 					Config: contracts.MatchConfig{RoundTimerMode: contracts.RoundTimerFixed, RoundTimeLimitMS: 45_000},
 				}); err != nil {
 					t.Fatalf("create match: %v", err)
@@ -254,5 +255,31 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Abandoning a match ends it as a draw, and a removed match is gone from the engine.
+func TestAbandonAndRemove(t *testing.T) {
+	eng := duel.New(func(string, int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{Lat: 1, Lng: 2, Country: "xx"}, nil
+	})
+	if _, err := eng.CreateMatchWithOptions("m", []string{"a", "b"}, nil, duel.MatchOptions{Kind: contracts.KindRankedDuel}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := eng.Abandon("m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State != contracts.MatchEnded {
+		t.Fatalf("state = %s, want ended", snap.State)
+	}
+	for id, player := range snap.Players {
+		if player.HP != 0 {
+			t.Errorf("%s has %d HP after abandon, want a draw at zero", id, player.HP)
+		}
+	}
+	eng.Remove("m")
+	if _, err := eng.GetSnapshot("m"); err == nil {
+		t.Fatal("removed match still in the engine")
 	}
 }

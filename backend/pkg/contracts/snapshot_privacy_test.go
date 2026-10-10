@@ -14,7 +14,7 @@ import (
 // permittedTopLevelKeys is the privacy allowlist for serialized client
 // snapshots. Anything outside this set is a leak.
 var permittedTopLevelKeys = map[string]bool{
-	"matchId": true, "mode": true, "config": true, "unranked": true,
+	"matchId": true, "mode": true, "kind": true, "config": true,
 	"state": true, "phase": true, "roundPhase": true,
 	"phaseStartedAt": true, "phaseEndsAt": true,
 	"currentRound": true, "lastRoundResult": true, "roundResults": true,
@@ -26,6 +26,7 @@ var permittedTopLevelKeys = map[string]bool{
 type scenario struct {
 	name          string
 	mode          contracts.MatchMode
+	kind          contracts.MatchKind
 	players       []string
 	teams         map[string]string
 	useSoloEngine bool
@@ -94,7 +95,7 @@ func runScenario(t *testing.T, s scenario) map[string]harness {
 
 	eng := duel.NewWithClock(locationProvider, clock)
 	capture := captureFrom(func() (*contracts.MatchSnapshot, error) { return eng.GetSnapshot("m1") })
-	if _, err := eng.CreateMatchWithOptions("m1", s.players, nil, duel.MatchOptions{Mode: s.mode, Teams: s.teams}); err != nil {
+	if _, err := eng.CreateMatchWithOptions("m1", s.players, nil, duel.MatchOptions{Kind: s.kind, Teams: s.teams}); err != nil {
 		t.Fatalf("create match: %v", err)
 	}
 	currentRoundID := func() string {
@@ -253,9 +254,9 @@ func roundNumberOf(snap *contracts.MatchSnapshot) int {
 
 func TestSnapshotPrivacyAcrossModesAndPhases(t *testing.T) {
 	scenarios := []scenario{
-		{name: "duel", mode: contracts.ModeDuel, players: []string{"alice", "bob"}},
-		{name: "team_duel", mode: contracts.ModeTeamDuel, players: []string{"alice", "bob", "carol", "dave"}, teams: map[string]string{"alice": "a", "carol": "a", "bob": "b", "dave": "b"}},
-		{name: "free_for_all", mode: contracts.ModeFreeForAll, players: []string{"alice", "bob", "carol"}},
+		{name: "duel", mode: contracts.ModeDuel, kind: contracts.KindRankedDuel, players: []string{"alice", "bob"}},
+		{name: "team_duel", mode: contracts.ModeTeamDuel, kind: contracts.KindTeamDuel, players: []string{"alice", "bob", "carol", "dave"}, teams: map[string]string{"alice": "a", "carol": "a", "bob": "b", "dave": "b"}},
+		{name: "free_for_all", mode: contracts.ModeFreeForAll, kind: contracts.KindFreeForAll, players: []string{"alice", "bob", "carol"}},
 		{name: "singleplayer", useSoloEngine: true, players: []string{"alice"}},
 	}
 	for _, s := range scenarios {
@@ -290,7 +291,7 @@ func TestSerializationDoesNotMutateAuthoritativeState(t *testing.T) {
 	eng := duel.NewWithClock(prov, clock)
 	teams := map[string]string{"alice": "a", "bob": "a", "carol": "b", "dave": "b"}
 	cfg := contracts.MatchConfig{RoundTimerMode: contracts.RoundTimerFixed, RoundTimeLimitMS: 45_000}
-	if _, err := eng.CreateMatchWithOptions("m1", []string{"alice", "bob", "carol", "dave"}, nil, duel.MatchOptions{Mode: contracts.ModeTeamDuel, Teams: teams, Config: cfg}); err != nil {
+	if _, err := eng.CreateMatchWithOptions("m1", []string{"alice", "bob", "carol", "dave"}, nil, duel.MatchOptions{Kind: contracts.KindTeamDuel, Teams: teams, Config: cfg}); err != nil {
 		t.Fatalf("create match: %v", err)
 	}
 	nowMs += 5000

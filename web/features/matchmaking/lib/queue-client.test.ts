@@ -35,9 +35,9 @@ class FakeSocket {
 }
 
 const session = { accessToken: 'token' } as AuthSessionSnapshot;
-const assigned: Script = (ws) => {
+const found: Script = (ws) => {
   ws.send('queue_status', { status: 'queueing' });
-  ws.send('match_assigned', { matchId: 'm1', node: 'n', ticket: 't', wsPath: '/ws' });
+  ws.send('match_found', { matchId: 'm1', kind: 'ranked_duel', status: 'starting' });
   ws.close();
 };
 const restarting: Script = (ws) => {
@@ -73,11 +73,11 @@ describe('streamQueue', () => {
   }
 
   it('reconnects when a restarting server asks, and keeps queueing', async () => {
-    const { result, events } = await run([restarting, unreachable, assigned]);
+    const { result, events } = await run([restarting, unreachable, found]);
     expect(result).toBe('resolved');
     expect(FakeSocket.opened).toBe(3);
     expect(events.filter((e) => e.type === 'queue_error')).toHaveLength(0);
-    expect(events.at(-1)).toMatchObject({ type: 'match_assigned', matchId: 'm1' });
+    expect(events.at(-1)).toMatchObject({ type: 'match_found', matchId: 'm1' });
   });
 
   it('gives up after six tries that reach no server', async () => {

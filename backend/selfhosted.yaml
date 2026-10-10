@@ -38,27 +38,6 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  redis:
-    image: redis:7
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 3s
-    command: ["sh", "-c", "exec redis-server --save '' --appendonly no --requirepass \"$REDIS_PASSWORD\""]
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "2"
-    ports:
-      - "127.0.0.1:6379:6379"
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - redis-data:/data
-
   gameplay-node:
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-gameplay-node:${IMAGE_TAG:-latest}
     restart: unless-stopped
@@ -72,68 +51,12 @@ services:
     environment:
       GAMEPLAY_NODE_ADDR: :8091
       GAMEPLAY_NODE_ID: game-1
-      GAMEPLAY_PUBLIC_ROUTE: game-1
       GAMEPLAY_INTERNAL_URL: http://gameplay-node:8091
       POSTGRES_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      APP_AUTH_SECRET: ${APP_AUTH_SECRET}
-      GAMEPLAY_TICKET_SECRET: ${GAMEPLAY_TICKET_SECRET}
       COORDINATOR_INTERNAL_SECRET: ${COORDINATOR_INTERNAL_SECRET}
-      APP_ACCESS_TOKEN_TTL: ${APP_ACCESS_TOKEN_TTL:-15m}
-      APP_REFRESH_TOKEN_TTL: ${APP_REFRESH_TOKEN_TTL:-720h}
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-
-  match-coordinator:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-match-coordinator:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 5s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "2"
-    environment:
-      MATCH_COORDINATOR_ADDR: :8090
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      POSTGRES_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
-      APP_AUTH_SECRET: ${APP_AUTH_SECRET}
-      GAMEPLAY_TICKET_SECRET: ${GAMEPLAY_TICKET_SECRET}
-      COORDINATOR_INTERNAL_SECRET: ${COORDINATOR_INTERNAL_SECRET}
-    ports:
-      - "127.0.0.1:8090:8090"
-    depends_on:
-      redis:
-        condition: service_healthy
-      gameplay-node:
-        condition: service_started
-      db-migrate:
-        condition: service_completed_successfully
-
-  realtime-gateway:
-    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-realtime-gateway:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 5s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "2"
-    environment:
-      REALTIME_GATEWAY_ADDR: :8092
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-    ports:
-      - "127.0.0.1:8092:8092"
-    depends_on:
-      redis:
-        condition: service_healthy
-      gameplay-node:
-        condition: service_started
 
   api:
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${IMAGE_TAG:-latest}
@@ -146,11 +69,8 @@ services:
         max-size: "10m"
         max-file: "2"
     environment:
-      MATCH_COORDINATOR_URL: http://match-coordinator:8090
       POSTGRES_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       APP_AUTH_SECRET: ${APP_AUTH_SECRET}
-      GAMEPLAY_TICKET_SECRET: ${GAMEPLAY_TICKET_SECRET}
       COORDINATOR_INTERNAL_SECRET: ${COORDINATOR_INTERNAL_SECRET}
       APP_ACCESS_TOKEN_TTL: ${APP_ACCESS_TOKEN_TTL:-15m}
       APP_REFRESH_TOKEN_TTL: ${APP_REFRESH_TOKEN_TTL:-720h}
@@ -170,7 +90,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
-      match-coordinator:
+      gameplay-node:
         condition: service_started
       db-migrate:
         condition: service_completed_successfully
@@ -189,8 +109,6 @@ services:
       PORT: "3000"
       NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-      NEXT_PUBLIC_QUEUE_URL: ${NEXT_PUBLIC_QUEUE_URL}
-      NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL}
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: ${NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS}
       NEXT_PUBLIC_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
@@ -254,4 +172,3 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:

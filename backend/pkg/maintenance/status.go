@@ -7,10 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/jackc/pgx/v5"
+
+	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-const RedisKey = "system:maintenance"
+// settingKey is the site setting that holds the status.
+const settingKey = "maintenance"
 
 type Phase string
 
@@ -55,23 +58,17 @@ func (s Status) PlayBlocked() bool {
 	return s.PlayPaused
 }
 
-func Read(ctx context.Context, rdb *redis.Client) (Status, error) {
-	return ReadKey(ctx, rdb, RedisKey)
-}
-
-func ReadKey(ctx context.Context, rdb *redis.Client, key string) (Status, error) {
-	if rdb == nil {
+// Read returns the maintenance status every service follows; normal when none was set.
+func Read(ctx context.Context, q db.DBTX) (Status, error) {
+	raw, err := db.New(q).GetSetting(ctx, settingKey)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return DefaultStatus(), nil
 	}
-	raw, err := rdb.Get(ctx, key).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return DefaultStatus(), nil
-		}
 		return DefaultStatus(), err
 	}
 	var status Status
-	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+	if err := json.Unmarshal(raw, &status); err != nil {
 		return DefaultStatus(), err
 	}
 	return status.Normalized(), nil

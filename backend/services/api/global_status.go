@@ -54,12 +54,12 @@ func (h *globalStatusHub) start() {
 }
 
 func (h *globalStatusHub) refresh() {
-	if h.api.coord == nil {
+	if h.api.presence == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	online, err := h.api.coord.CountPresentUsers(ctx)
+	online, err := h.api.presence.CountOnline(ctx)
 	if err != nil {
 		return
 	}

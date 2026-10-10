@@ -28,8 +28,8 @@ func (a *api) healthReady(c echo.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)
 	defer cancel()
-	if err := a.redis.Ping(ctx).Err(); err != nil {
-		return plainTextError(c, http.StatusServiceUnavailable, "redis not ready")
+	if err := a.db.Pool().Ping(ctx); err != nil {
+		return plainTextError(c, http.StatusServiceUnavailable, "database not ready")
 	}
 	c.Response().WriteHeader(http.StatusOK)
 	_, _ = c.Response().Write([]byte("ready"))

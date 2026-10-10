@@ -305,10 +305,7 @@ export function useHomeModel(options?: {
     void queryClient.invalidateQueries({ queryKey: ["map-details"] });
   }, [match.snapshot, queryClient]);
 
-  const routeSourcePartyId =
-    matchRoute.replacement && "sourcePartyId" in matchRoute.replacement
-      ? matchRoute.replacement.sourcePartyId || ""
-      : "";
+  const routeSourcePartyId = matchRoute.view?.party?.id || "";
   const routeFallbackChatConversationId =
     isMatchRoute && routeSourcePartyId
       ? `party:${routeSourcePartyId}`

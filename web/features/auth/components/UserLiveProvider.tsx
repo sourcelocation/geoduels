@@ -5,7 +5,6 @@ import { getAuthGateway } from "../auth-gateway";
 import type { UserNotification } from "../lib/auth-client";
 import { unseenNotificationsKey } from "../../notifications/lib/unseen";
 import { connectUserLive, type LiveEvent } from "../lib/user-live-client";
-import type { FriendsPage } from "../../social/lib/social-client";
 import { useAuthState } from "./AuthProvider";
 
 const socialNotifications = new Set(["friend_request_received", "friendship_accepted", "party_invitation_received"]);
@@ -32,25 +31,6 @@ export function UserLiveProvider({ children }: { children: React.ReactNode }) {
       if (event.type === "notification.read") updateUnseen((items) => items.filter((item) => item.id !== event.notificationId));
       if (event.type === "notification.read_all") updateUnseen(() => []);
       if (event.type === "global_status.changed") gateway.applyGlobal(event.global);
-      if (event.type === "presence.patch") {
-        queryClient.setQueriesData<FriendsPage>({ queryKey: ["social", "friends-page"] }, (current) => {
-          if (!current) return current;
-          const patchPlayer = (player: FriendsPage["friends"][number]) =>
-            player.userId === event.presence.userId
-              ? {
-                  ...player,
-                  presenceStatus: event.presence.presenceStatus,
-                  activity: event.presence.activity || undefined,
-                  lastSeenAt: event.presence.lastSeenAt || player.lastSeenAt,
-                }
-              : player;
-          return {
-            ...current,
-            friends: current.friends.map(patchPlayer),
-            recentPlayers: current.recentPlayers.map(patchPlayer),
-          };
-        });
-      }
       if (event.type === "invalidate" && event.resources.includes("friends-page")) {
         void queryClient.invalidateQueries({ queryKey: ["social"] });
       }

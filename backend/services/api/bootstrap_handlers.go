@@ -8,8 +8,6 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
-	"geoduels/pkg/matchlaunch"
-	"geoduels/pkg/sessionpolicy"
 )
 
 func (a *api) bootstrap(c echo.Context) error {
@@ -79,7 +77,7 @@ func (a *api) bootstrapVersion(c echo.Context, version int) error {
 		}
 		response.Activity.CurrentParty = party
 	}
-	response.Activity.ActiveMatch = a.activeMatch(r, record.UserID)
+	response.Activity.ActiveMatch = a.activeMatch(r.Context(), record.UserID)
 	if !profile.IsGuest {
 		a.touchViewerPresence(r.Context(), record.UserID)
 	}
@@ -89,21 +87,6 @@ func (a *api) bootstrapVersion(c echo.Context, version int) error {
 		}
 	}
 	return writeJSON(c, response)
-}
-
-func (a *api) activeMatch(r *http.Request, userID string) *contracts.ResumableSessionResponse {
-	if a.coord == nil {
-		return nil
-	}
-	assigned, ok, err := a.coord.GetAssignmentByUser(r.Context(), userID)
-	if err != nil || !ok {
-		return nil
-	}
-	mode := sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)
-	if mode != contracts.ModeDuel || a.launcher().ValidateAssignment(r.Context(), assigned) != matchlaunch.AssignmentValid {
-		return nil
-	}
-	return &contracts.ResumableSessionResponse{Status: "match", MatchID: assigned.MatchID, Mode: string(mode)}
 }
 
 func (a *api) issueReadOnlyAuthSessionPayload(identity Identity, sessionID string) (contracts.AuthSessionPayload, error) {

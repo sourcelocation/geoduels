@@ -54,7 +54,8 @@ export type AppBootstrapPayload = {
   preferences: { revision: number; value: unknown } | null;
   activity: {
     currentParty?: { id: string; inviteCode: string } | null;
-    activeMatch: { status: "match"; matchId: string; mode?: string } | null;
+    // The open match the player can return to, of any kind.
+    activeMatch: { matchId: string; kind?: string; mode?: string; status?: "starting" | "live" } | null;
     notifications: UserNotification[];
   };
   global: {

@@ -59,12 +59,10 @@ export const getServerSideProps: GetServerSideProps<MatchPageProps> = async (ctx
   const routeId =
     typeof ctx.params?.id === "string" ? ctx.params.id.trim() : "";
   const resolved = await loadPublicMatchPreview(readServerConfig(), routeId);
-  const snapshot =
-    resolved?.status === "history" ? resolved.snapshot : null;
   return {
     props: {
       preview: buildMatchSocialPreview(
-        snapshot,
+        resolved?.result || null,
         resolved?.status || "missing",
         routeId,
       ),
@@ -183,10 +181,7 @@ export default function MatchPage({ preview }: MatchPageProps) {
   });
   const config = useRuntimeConfig();
   const routeSession = useMatchRouteSession(routeMatchId || null);
-  const replacementReturnTarget =
-    routeSession.replacement && "returnTarget" in routeSession.replacement
-      ? routeSession.replacement.returnTarget
-      : undefined;
+  const replacementReturnTarget = routeSession.view?.returnTarget;
   const returnTarget =
     model.view.meta.returnTarget || replacementReturnTarget;
   const { href: backHref, label: backLabel } =
@@ -262,9 +257,7 @@ export default function MatchPage({ preview }: MatchPageProps) {
     }
   }, [routeSession.status]);
   const replacementMatchId =
-    routeSession.replacement?.status === "replaced"
-      ? routeSession.replacement.replacementMatchId
-      : "";
+    routeSession.status === "replaced" ? routeSession.view?.currentMatchId || "" : "";
 
   return (
     <>
@@ -332,9 +325,7 @@ export default function MatchPage({ preview }: MatchPageProps) {
                 <h1 className="mt-3 text-heading-lg font-strong tracking-heading">
                   {loadingLabel}
                 </h1>
-                {routeSession.status === "replaced" &&
-                routeSession.replacement?.status === "replaced" &&
-                routeSession.replacement.replacement ? (
+                {routeSession.status === "replaced" && replacementMatchId ? (
                   <Button
                     type="button"
                     onClick={() =>

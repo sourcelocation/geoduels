@@ -640,12 +640,3 @@ func (s *PGStore) RespondPartyInvitation(ctx context.Context, userID, invitation
 	}
 	return PartyInvitation{ID: storekit.UUIDVal(row.InvitationID), PartyID: storekit.UUIDVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
 }
-
-// TouchLastSeen records the viewer's last-seen timestamp for presence.
-func (s *PGStore) TouchLastSeen(ctx context.Context, userID string, seenAt time.Time) error {
-	id, err := storekit.ProfileUUID(userID)
-	if err != nil {
-		return err
-	}
-	return s.q().TouchLastSeen(ctx, db.TouchLastSeenParams{ID: id, LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: true}})
-}

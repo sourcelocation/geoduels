@@ -54,5 +54,11 @@ func add(a, b storage.StorageCleanupResult) storage.StorageCleanupResult {
 		MapUploadEvents:   a.MapUploadEvents + b.MapUploadEvents,
 		MapDailyUsers:     a.MapDailyUsers + b.MapDailyUsers,
 		UserNotifications: a.UserNotifications + b.UserNotifications,
+		Leases:            a.Leases + b.Leases,
+		RateLimitWindows:  a.RateLimitWindows + b.RateLimitWindows,
+		Presence:          a.Presence + b.Presence,
+		// The sweep and party expiry finish in the first batch; later batches find nothing.
+		InterruptedMatches: a.InterruptedMatches + b.InterruptedMatches,
+		ExpiredParties:     a.ExpiredParties + b.ExpiredParties,
 	}
 }

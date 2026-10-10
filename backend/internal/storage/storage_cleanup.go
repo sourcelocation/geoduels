@@ -47,13 +47,19 @@ func (s *PGStore) CleanupStorage(n int) (StorageCleanupResult, error) {
 		rs := []struct {
 			p *int64
 			f func(context.Context, int32) (pgconn.CommandTag, error)
-		}{{&o.ExpiredReplays, q.DeleteExpiredReplays}, {&o.MatchPlans, q.DeleteMatchPlans}, {&o.MatchSessions, q.DeleteMatchSessions}, {&o.ChatMessages, q.DeleteChatMessages}, {&o.ChatConversations, q.DeleteChatConversations}, {&o.AuthSessions, q.DeleteAuthSessions}, {&o.Parties, q.DeleteParties}, {&o.MapUploadEvents, q.DeleteMapUploadEvents}, {&o.MapDailyUsers, q.DeleteMapDailyUsers}, {&o.UserNotifications, q.DeleteUserNotifications}}
+		}{{&o.ExpiredReplays, q.DeleteExpiredReplays}, {&o.MatchPlans, q.DeleteMatchPlans}, {&o.MatchSessions, q.DeleteMatchSessions}, {&o.ChatMessages, q.DeleteChatMessages}, {&o.ChatConversations, q.DeleteChatConversations}, {&o.AuthSessions, q.DeleteAuthSessions}, {&o.Parties, q.DeleteParties}, {&o.MapUploadEvents, q.DeleteMapUploadEvents}, {&o.MapDailyUsers, q.DeleteMapDailyUsers}, {&o.UserNotifications, q.DeleteUserNotifications}, {&o.Leases, q.DeleteStaleLeases}, {&o.RateLimitWindows, q.DeleteRateLimitWindows}, {&o.Presence, q.DeletePresence}}
 		for _, r := range rs {
 			t, e := r.f(ctx, int32(n))
 			if e != nil {
 				return e
 			}
 			*r.p = t.RowsAffected()
+		}
+		if o.InterruptedMatches, e = matches.EndInterruptedMatchesTx(ctx, tx); e != nil {
+			return e
+		}
+		if o.ExpiredParties, e = q.ExpireParties(ctx); e != nil {
+			return e
 		}
 		_, e = q.DeleteUserEvents(ctx, int32(n))
 		return e

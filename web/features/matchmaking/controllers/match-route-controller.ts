@@ -1,13 +1,13 @@
-import type { PartyAssignment } from '../../lobby/lib/party-client';
 import type { Snapshot } from '../../game/model/types';
 import { ObservableStore } from '../../../lib/observable-store';
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
 import type { MatchController } from './match-controller';
 import {
-  bootstrapMatchSession,
-  resolveMatchRoute,
-  type MatchSessionResponse
+  bootstrapMatchView,
+  fetchMatchView,
+  isOpenMatch,
+  type MatchView
 } from '../lib/queue-client';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 
@@ -25,14 +25,15 @@ export type MatchRouteState = {
   targetMatchId: string;
   status: MatchRouteStatus;
   historySnapshot: Snapshot | null;
-  replacement: MatchSessionResponse | null;
+  // view is the target match as the viewer last read it.
+  view: MatchView | null;
 };
 
 const initialState: MatchRouteState = {
   targetMatchId: '',
   status: 'idle',
   historySnapshot: null,
-  replacement: null
+  view: null
 };
 
 export class MatchRouteController extends ObservableStore<MatchRouteState> {
@@ -87,38 +88,29 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     const nextMatchId = typeof matchId === 'string' ? matchId.trim() : '';
     if (!nextMatchId) {
       this.clearPendingWork();
-      this.patchState({
-        targetMatchId: '',
-        status: 'missing',
-        historySnapshot: null,
-        replacement: null
-      });
+      this.patchState({ targetMatchId: '', status: 'missing', historySnapshot: null, view: null });
       return;
     }
     if (this.state.targetMatchId === nextMatchId && this.state.status !== 'missing') {
       return;
     }
     this.clearPendingWork();
-    this.patchState({
-      targetMatchId: nextMatchId,
-      status: 'idle',
-      historySnapshot: null,
-      replacement: null
-    });
+    this.patchState({ targetMatchId: nextMatchId, status: 'idle', historySnapshot: null, view: null });
     void this.resolve(nextMatchId);
   };
 
-  acceptPartyAssignment = async (assignment: PartyAssignment) => {
+  // acceptPartyMatch joins the match a party just started, which its member is seated in.
+  acceptPartyMatch = async (matchId: string) => {
     this.clearPendingWork();
     const seq = this.resolveSeq;
-    this.patchState({ targetMatchId: assignment.matchId, status: 'awaiting_first_snapshot', historySnapshot: null, replacement: null });
+    this.patchState({ targetMatchId: matchId, status: 'awaiting_first_snapshot', historySnapshot: null, view: null });
     const current = this.matchController.getState();
     // A refresh on the live match may already have established its connection.
-    if (current.activeMatchId === assignment.matchId && current.connected) {
-      if (current.snapshot?.matchId === assignment.matchId) this.patchState({ status: 'idle' });
+    if (current.activeMatchId === matchId && current.connected) {
+      if (current.snapshot?.matchId === matchId) this.patchState({ status: 'idle' });
       return true;
     }
-    const ok = await this.matchController.resumeResolvedMatch(assignment, { playMatchFoundSfx: true });
+    const ok = await this.matchController.resumeMatch(matchId, undefined, { playMatchFoundSfx: true });
     if (!ok && seq === this.resolveSeq) this.patchState({ status: 'missing' });
     return ok;
   };
@@ -141,20 +133,6 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     this.requestController = null;
   }
 
-  private buildSessionSnapshot(auth: {
-    accessToken?: string;
-    nicknameRequired?: boolean;
-    suggestedNickname?: string;
-    user?: { id?: string };
-  }): AuthSessionSnapshot {
-    return {
-      userId: typeof auth.user?.id === 'string' ? auth.user.id : '',
-      accessToken: auth.accessToken || '',
-      nicknameRequired: !!auth.nicknameRequired,
-      nicknameInput: auth.suggestedNickname || ''
-    };
-  }
-
   private applyBootstrappedAuth(auth: {
     accessToken?: string;
     nicknameRequired?: boolean;
@@ -164,7 +142,12 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
       isGuest?: boolean;
     };
   }) {
-    const sessionSnapshot = this.buildSessionSnapshot(auth);
+    const sessionSnapshot: AuthSessionSnapshot = {
+      userId: typeof auth.user?.id === 'string' ? auth.user.id : '',
+      accessToken: auth.accessToken || '',
+      nicknameRequired: !!auth.nicknameRequired,
+      nicknameInput: auth.suggestedNickname || ''
+    };
     this.sessionController.applySessionSnapshot(sessionSnapshot, {
       isGuest: typeof auth.user?.isGuest === 'boolean' ? auth.user.isGuest : false,
       leaderboard: null,
@@ -173,40 +156,27 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     });
   }
 
-  private async handleResolvedMatch(matchId: string, resolved: MatchSessionResponse, seq: number) {
+  private async handleView(matchId: string, view: MatchView, seq: number) {
     if (seq !== this.resolveSeq || this.state.targetMatchId !== matchId) return;
-    switch (resolved.status) {
-      case 'live_connectable': {
-        const ok = await this.matchController.resumeResolvedMatch({
-          matchId: resolved.matchId,
-          node: resolved.node,
-          wsPath: resolved.wsPath,
-          ticket: resolved.ticket,
-          ...(resolved.sourcePartyInviteCode
-            ? {
-                sourcePartyId: resolved.sourcePartyId,
-                sourcePartyInviteCode: resolved.sourcePartyInviteCode
-              }
-            : {}),
-          ...(resolved.returnTarget ? { returnTarget: resolved.returnTarget } : {})
-        });
-        if (seq !== this.resolveSeq || this.state.targetMatchId !== matchId) return;
-        this.patchState({ status: ok ? 'awaiting_first_snapshot' : 'missing' });
-        return;
-      }
-      case 'history':
-        this.patchState({ status: 'history', historySnapshot: resolved.snapshot, replacement: resolved });
-        return;
-      case 'replaced':
-        this.patchState({ status: 'replaced', replacement: resolved, historySnapshot: null });
-        return;
-      case 'live_auth_required':
-      case 'forbidden':
-        this.patchState({ status: 'forbidden', historySnapshot: null, replacement: null });
-        return;
-      default:
-        this.patchState({ status: 'missing', historySnapshot: null, replacement: null });
+    if (isOpenMatch(view) && view.playing) {
+      const ok = await this.matchController.resumeMatch(view.matchId, {
+        sourcePartyId: view.party?.id,
+        sourcePartyInviteCode: view.party?.inviteCode,
+        returnTarget: view.returnTarget
+      });
+      if (seq !== this.resolveSeq || this.state.targetMatchId !== matchId) return;
+      this.patchState({ status: ok ? 'awaiting_first_snapshot' : 'missing', view });
+      return;
     }
+    if (view.status === 'ended' && view.result) {
+      this.patchState({ status: 'history', historySnapshot: view.result, view });
+      return;
+    }
+    if (view.status === 'forbidden' || isOpenMatch(view)) {
+      this.patchState({ status: 'forbidden', historySnapshot: null, view });
+      return;
+    }
+    this.patchState({ status: view.currentMatchId ? 'replaced' : 'missing', historySnapshot: null, view });
   }
 
   private async resolve(matchId: string) {
@@ -214,20 +184,20 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     const seq = ++this.resolveSeq;
     const requestController = new AbortController();
     this.requestController = requestController;
-    this.patchState({ historySnapshot: null, replacement: null });
+    this.patchState({ historySnapshot: null, view: null });
 
     try {
       const existingSession = this.sessionController.getSessionSnapshot();
       this.patchState({ status: 'resolving' });
-      const publicResolved = await resolveMatchRoute(this.config, matchId, requestController.signal, existingSession?.accessToken);
-      if (publicResolved.status !== 'live_auth_required') {
-        await this.handleResolvedMatch(matchId, publicResolved, seq);
+      const publicView = await fetchMatchView(this.config, matchId, requestController.signal, existingSession?.accessToken);
+      if (!publicView.signInRequired) {
+        await this.handleView(matchId, publicView, seq);
         return;
       }
 
       if (!this.sessionController.getSessionSnapshot()) {
         this.patchState({ status: 'bootstrapping_auth' });
-        const bootstrapped = await bootstrapMatchSession(this.config, matchId, requestController.signal);
+        const bootstrapped = await bootstrapMatchView(this.config, matchId, requestController.signal);
         if (!bootstrapped) {
           if (seq === this.resolveSeq && this.state.targetMatchId === matchId) {
             this.patchState({ status: 'forbidden' });
@@ -235,7 +205,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
           return;
         }
         this.applyBootstrappedAuth(bootstrapped.auth);
-        await this.handleResolvedMatch(matchId, bootstrapped.match, seq);
+        await this.handleView(matchId, bootstrapped.match, seq);
         return;
       }
 
@@ -248,8 +218,8 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
       }
 
       this.patchState({ status: 'resolving' });
-      const resolved = await resolveMatchRoute(this.config, matchId, requestController.signal, session.accessToken);
-      await this.handleResolvedMatch(matchId, resolved, seq);
+      const view = await fetchMatchView(this.config, matchId, requestController.signal, session.accessToken);
+      await this.handleView(matchId, view, seq);
     } catch (error: any) {
       if (error?.name === 'AbortError') return;
       if (seq === this.resolveSeq && this.state.targetMatchId === matchId) {

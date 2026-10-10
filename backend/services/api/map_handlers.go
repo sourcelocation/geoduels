@@ -13,76 +13,48 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/ratelimit"
 	pkgstaff "geoduels/pkg/staff"
 )
 
 const maxMapUploadBytes = int64(128 << 20)
 
-func (a *api) allowMapUploadAttempt(userID string) (bool, time.Duration, error) {
-	if a.redis == nil {
-		return false, 0, errors.New("map upload rate limit unavailable")
+// allowHits counts one hit against each limit in turn, stopping at the first one exceeded.
+func (a *api) allowHits(ctx context.Context, limits ...rateLimit) (bool, time.Duration, error) {
+	for _, limit := range limits {
+		allowed, retryAfter, err := ratelimit.Hit(ctx, a.db.Pool(), limit.key, limit.max, limit.window)
+		if err != nil || !allowed {
+			return allowed, retryAfter, err
+		}
 	}
+	return true, 0, nil
+}
+
+type rateLimit struct {
+	key    string
+	max    int
+	window time.Duration
+}
+
+func (a *api) allowMapUploadAttempt(userID string) (bool, time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	result, err := guestSignupRateLimitScript.Run(ctx, a.redis, []string{
-		"api:ratelimit:map_upload:hour:" + userID,
-		"api:ratelimit:map_upload:day:" + userID,
-	}, time.Hour.Milliseconds(), 10, (24 * time.Hour).Milliseconds(), 30).Slice()
-	if err != nil {
-		return false, 0, err
-	}
-	if len(result) != 2 {
-		return false, 0, errors.New("unexpected map upload rate limit response")
-	}
-	allowed, err := redisInt64(result[0])
-	if err != nil {
-		return false, 0, err
-	}
-	ttl, err := redisInt64(result[1])
-	if err != nil {
-		return false, 0, err
-	}
-	return allowed == 1, time.Duration(ttl) * time.Millisecond, nil
+	return a.allowHits(ctx,
+		rateLimit{"api:ratelimit:map_upload:hour:" + userID, 10, time.Hour},
+		rateLimit{"api:ratelimit:map_upload:day:" + userID, 30, 24 * time.Hour},
+	)
 }
 
 func (a *api) allowMapComment(userID, mapID string) (bool, time.Duration, error) {
-	if a.redis == nil {
-		return false, 0, errors.New("comment rate limit unavailable")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	check := func(keys []string, args ...any) (bool, time.Duration, error) {
-		result, err := guestSignupRateLimitScript.Run(ctx, a.redis, keys, args...).Slice()
-		if err != nil {
-			return false, 0, err
-		}
-		if len(result) != 2 {
-			return false, 0, errors.New("unexpected comment rate limit response")
-		}
-		allowed, err := redisInt64(result[0])
-		if err != nil {
-			return false, 0, err
-		}
-		ttl, err := redisInt64(result[1])
-		if err != nil {
-			return false, 0, err
-		}
-		return allowed == 1, time.Duration(ttl) * time.Millisecond, nil
-	}
 	userID = strings.TrimSpace(userID)
 	mapID = strings.TrimSpace(mapID)
-	allowed, retryAfter, err := check(
-		[]string{"api:ratelimit:map_comment:min:" + userID, "api:ratelimit:map_comment:day:" + userID},
-		time.Minute.Milliseconds(), 5,
-		(24 * time.Hour).Milliseconds(), 100,
-	)
-	if err != nil || !allowed {
-		return allowed, retryAfter, err
-	}
-	return check(
-		[]string{"api:ratelimit:map_comment:hour:" + userID, "api:ratelimit:map_comment:maphour:" + userID + ":" + mapID},
-		time.Hour.Milliseconds(), 30,
-		time.Hour.Milliseconds(), 10,
+	return a.allowHits(ctx,
+		rateLimit{"api:ratelimit:map_comment:min:" + userID, 5, time.Minute},
+		rateLimit{"api:ratelimit:map_comment:day:" + userID, 100, 24 * time.Hour},
+		rateLimit{"api:ratelimit:map_comment:hour:" + userID, 30, time.Hour},
+		rateLimit{"api:ratelimit:map_comment:maphour:" + userID + ":" + mapID, 10, time.Hour},
 	)
 }
 

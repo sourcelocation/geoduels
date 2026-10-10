@@ -9,11 +9,6 @@ import (
 	"geoduels/pkg/singleplayer"
 )
 
-type matchConfigRegistry struct {
-	mu      sync.RWMutex
-	configs map[string]contracts.MatchConfig
-}
-
 type roundPlanRegistry struct {
 	mu    sync.RWMutex
 	plans map[string][]contracts.LocationPoint
@@ -23,15 +18,15 @@ func newRoundPlanRegistry() *roundPlanRegistry {
 	return &roundPlanRegistry{plans: map[string][]contracts.LocationPoint{}}
 }
 
-func (r *roundPlanRegistry) Set(matchID string, rounds []contracts.PlannedRound) {
-	points := make([]contracts.LocationPoint, len(rounds))
-	for _, round := range rounds {
-		if round.RoundIndex >= 0 && round.RoundIndex < len(points) {
-			points[round.RoundIndex] = round.Location
-		}
-	}
+func (r *roundPlanRegistry) Set(matchID string, rounds []contracts.LocationPoint) {
 	r.mu.Lock()
-	r.plans[matchID] = points
+	r.plans[matchID] = rounds
+	r.mu.Unlock()
+}
+
+func (r *roundPlanRegistry) Delete(matchID string) {
+	r.mu.Lock()
+	delete(r.plans, matchID)
 	r.mu.Unlock()
 }
 
@@ -45,121 +40,115 @@ func (r *roundPlanRegistry) Get(matchID string, roundIndex int) (contracts.Locat
 	return points[roundIndex], nil
 }
 
-func newMatchConfigRegistry() *matchConfigRegistry {
-	return &matchConfigRegistry{configs: map[string]contracts.MatchConfig{}}
+// newMatch is what an engine needs to create a match.
+type newMatch struct {
+	MatchID  string
+	Kind     contracts.MatchKind
+	Players  []string
+	Profiles map[string]contracts.PlayerProfile
+	Teams    map[string]string
+	SeasonID string
+	Config   contracts.MatchConfig
 }
 
-func (r *matchConfigRegistry) Set(matchID string, cfg contracts.MatchConfig) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.configs[matchID] = contracts.NormalizeMatchConfig(cfg)
-}
-
-func (r *matchConfigRegistry) Get(matchID string) contracts.MatchConfig {
-	if r == nil {
-		return contracts.NormalizeMatchConfig(contracts.MatchConfig{})
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return contracts.NormalizeMatchConfig(r.configs[matchID])
-}
-
+// gameplayRuntime is one engine, as the node drives it.
 type gameplayRuntime interface {
-	Mode() contracts.MatchMode
-	CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error
+	CreateMatch(m newMatch) error
 	GetSnapshot(matchID string) (*contracts.MatchSnapshot, error)
 	SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error)
 	AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error)
 	Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error)
+	// Abandon ends a match nobody plays any more.
+	Abandon(matchID, userID string) (*contracts.MatchSnapshot, error)
 	MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error)
 	MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error)
+	Remove(matchID string)
 	Tick() []string
 }
 
-type duelRuntime struct {
-	mode    contracts.MatchMode
-	engine  *duel.Engine
-	configs *matchConfigRegistry
+// versusRuntime runs every kind with opponents: duels, team duels and free-for-alls.
+type versusRuntime struct {
+	engine *duel.Engine
 }
 
-func (r duelRuntime) Mode() contracts.MatchMode {
-	if r.mode == "" {
-		return contracts.ModeDuel
-	}
-	return r.mode
-}
-
-func (r duelRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error {
-	config = contracts.NormalizeMatchConfig(config)
-	r.configs.Set(matchID, config)
-	_, err := r.engine.CreateMatchWithOptions(matchID, playerIDs, profiles, duel.MatchOptions{Unranked: unranked, SeasonID: seasonID, Config: config, Mode: r.Mode(), Teams: teams})
+func (r versusRuntime) CreateMatch(m newMatch) error {
+	_, err := r.engine.CreateMatchWithOptions(m.MatchID, m.Players, m.Profiles, duel.MatchOptions{
+		Kind: m.Kind, SeasonID: m.SeasonID, Config: contracts.NormalizeMatchConfig(m.Config), Teams: m.Teams,
+	})
 	return err
 }
 
-func (r duelRuntime) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
+func (r versusRuntime) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.GetSnapshot(matchID)
 }
 
-func (r duelRuntime) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error) {
+func (r versusRuntime) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error) {
 	return r.engine.SubmitGuess(g)
 }
 
-func (r duelRuntime) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r versusRuntime) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return nil, errors.New("advance round is not supported for duel")
 }
 
-func (r duelRuntime) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r versusRuntime) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.Forfeit(matchID, userID)
 }
 
-func (r duelRuntime) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r versusRuntime) Abandon(matchID, _ string) (*contracts.MatchSnapshot, error) {
+	return r.engine.Abandon(matchID)
+}
+
+func (r versusRuntime) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.MarkDisconnected(matchID, userID)
 }
 
-func (r duelRuntime) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r versusRuntime) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.MarkResumed(matchID, userID)
 }
 
-func (r duelRuntime) Tick() []string {
+func (r versusRuntime) Remove(matchID string) { r.engine.Remove(matchID) }
+
+func (r versusRuntime) Tick() []string {
 	return r.engine.Tick()
 }
 
-type singleplayerRuntime struct {
+type soloRuntime struct {
 	engine *singleplayer.Engine
 }
 
-func (r singleplayerRuntime) Mode() contracts.MatchMode { return contracts.ModeSingleplayer }
-
-func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error {
-	_, err := r.engine.CreateMatchWithConfig(matchID, playerIDs, profiles, config)
+func (r soloRuntime) CreateMatch(m newMatch) error {
+	_, err := r.engine.CreateMatchWithConfig(m.MatchID, m.Players, m.Profiles, m.Config)
 	return err
 }
 
-func (r singleplayerRuntime) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
+func (r soloRuntime) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.GetSnapshot(matchID)
 }
 
-func (r singleplayerRuntime) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error) {
+func (r soloRuntime) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error) {
 	return r.engine.SubmitGuess(g)
 }
 
-func (r singleplayerRuntime) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r soloRuntime) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.AdvanceRound(matchID, userID)
 }
 
-func (r singleplayerRuntime) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r soloRuntime) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.Forfeit(matchID, userID)
 }
 
-func (r singleplayerRuntime) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r soloRuntime) Abandon(matchID, userID string) (*contracts.MatchSnapshot, error) {
+	return r.engine.Forfeit(matchID, userID)
+}
+
+func (r soloRuntime) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.MarkDisconnected(matchID, userID)
 }
 
-func (r singleplayerRuntime) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (r soloRuntime) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	return r.engine.MarkResumed(matchID, userID)
 }
 
-func (r singleplayerRuntime) Tick() []string { return nil }
+func (r soloRuntime) Remove(matchID string) { r.engine.Remove(matchID) }
+
+func (r soloRuntime) Tick() []string { return nil }

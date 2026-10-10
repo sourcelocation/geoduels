@@ -67,6 +67,7 @@ func (s *PGStore) ListChatMessages(id string, n int) ([]ChatMessage, error) {
 func (s *PGStore) ListChatMessagesForUser(id, u string, n int, revealTeam bool) ([]ChatMessage, error) {
 	return s.listChatMessages(id, strings.TrimSpace(u), n, revealTeam)
 }
+
 // MatchOver reports whether a match will see no more play: it ended or was interrupted.
 func (s *PGStore) MatchOver(ctx context.Context, matchID string) (bool, error) {
 	matchID = strings.TrimSpace(matchID)

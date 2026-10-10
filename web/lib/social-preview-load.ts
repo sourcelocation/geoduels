@@ -1,7 +1,7 @@
 import type { MapDetails } from "../features/maps/lib/maps-client";
 import {
-  resolveMatchRoute,
-  type MatchSessionResponse,
+  fetchMatchView,
+  type MatchView,
 } from "../features/matchmaking/lib/queue-client";
 import type { PublicPlayerProfile } from "../features/players/types";
 import { apiFetch } from "./http";
@@ -47,10 +47,10 @@ export async function loadPublicProfilePreview(
 export async function loadPublicMatchPreview(
   config: RuntimeConfig,
   matchId: string,
-): Promise<MatchSessionResponse | null> {
+): Promise<MatchView | null> {
   if (!matchId) return null;
   try {
-    return await resolveMatchRoute(
+    return await fetchMatchView(
       config,
       matchId,
       AbortSignal.timeout(PREVIEW_TIMEOUT_MS),

@@ -47,21 +47,6 @@ export type PartyInvitation = {
   expiresAt: string;
 };
 
-export type SocialNotification = {
-  id: number;
-  type: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-};
-
-export type SocialSummary = {
-  incomingRequests: FriendRequest[];
-  outgoingRequests: FriendRequest[];
-  partyInvitations: PartyInvitation[];
-  notifications: SocialNotification[];
-  unreadCount: number;
-};
-
 export type SocialSettings = {
   discoverable: boolean;
   presenceVisible: boolean;

@@ -19,13 +19,21 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  redis:
-    image: redis:7
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    init: true
-    stop_grace_period: 3s
-    ports:
-      - "6379:6379"
+  # Brings the schema to the checkout's migrations (goose, then River) before the services start.
+  # After adding a migration: docker compose -f backend/dev.yaml run --rm db-migrate
+  db-migrate:
+    image: golang:1.26
+    working_dir: /app
+    volumes:
+      - .:/app
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    command: ["go", "run", "./cmd/migrate"]
+    environment:
+      - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   gameplay-node:
     image: golang:1.26
@@ -43,72 +51,14 @@ services:
       - DEV_MAP_DATASET=/datasets/a-source-world.sample.json
       - GAMEPLAY_NODE_ADDR=:8091
       - GAMEPLAY_NODE_ID=game-1
-      - GAMEPLAY_PUBLIC_ROUTE=game-1
       - GAMEPLAY_INTERNAL_URL=http://gameplay-node:8091
       - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
-      - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
-      - APP_AUTH_SECRET=${APP_AUTH_SECRET}
-      - GAMEPLAY_TICKET_SECRET=${GAMEPLAY_TICKET_SECRET}
       - COORDINATOR_INTERNAL_SECRET=${COORDINATOR_INTERNAL_SECRET}
-      - APP_ACCESS_TOKEN_TTL=${APP_ACCESS_TOKEN_TTL}
-      - APP_REFRESH_TOKEN_TTL=${APP_REFRESH_TOKEN_TTL}
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      db-migrate:
+        condition: service_completed_successfully
     ports:
       - "8091:8091"
-
-  match-coordinator:
-    image: golang:1.26
-    working_dir: /app
-    init: true
-    stop_grace_period: 5s
-    volumes:
-      - .:/app
-      - go-build-cache:/root/.cache/go-build
-      - go-mod-cache:/go/pkg/mod
-    command: ["sh", "./scripts/air-run.sh", "./services/match-coordinator", "match-coordinator"]
-    environment:
-      - AIR_VERSION=v1.61.7
-      - MATCH_COORDINATOR_ADDR=:8090
-      - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
-      - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
-      - APP_AUTH_SECRET=${APP_AUTH_SECRET}
-      - GAMEPLAY_TICKET_SECRET=${GAMEPLAY_TICKET_SECRET}
-      - COORDINATOR_INTERNAL_SECRET=${COORDINATOR_INTERNAL_SECRET}
-    ports:
-      - "8090:8090"
-    depends_on:
-      redis:
-        condition: service_started
-      gameplay-node:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-
-  realtime-gateway:
-    image: golang:1.26
-    working_dir: /app
-    init: true
-    stop_grace_period: 5s
-    volumes:
-      - .:/app
-      - go-build-cache:/root/.cache/go-build
-      - go-mod-cache:/go/pkg/mod
-    command: ["sh", "./scripts/air-run.sh", "./services/realtime-gateway", "realtime-gateway"]
-    environment:
-      - AIR_VERSION=v1.61.7
-      - REALTIME_GATEWAY_ADDR=:8092
-      - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
-    ports:
-      - "8092:8092"
-    depends_on:
-      redis:
-        condition: service_started
-      gameplay-node:
-        condition: service_started
 
   api:
     image: golang:1.26
@@ -122,11 +72,8 @@ services:
     command: ["sh", "./scripts/air-run.sh", "./services/api", "api"]
     environment:
       - AIR_VERSION=v1.61.7
-      - MATCH_COORDINATOR_URL=${DOCKER_MATCH_COORDINATOR_URL:-http://match-coordinator:8090}
       - POSTGRES_URL=${DOCKER_POSTGRES_URL:-postgres://geoduels:geoduels@postgres:5432/geoduels?sslmode=disable}
-      - REDIS_URL=${DOCKER_REDIS_URL:-redis://redis:6379}
       - APP_AUTH_SECRET=${APP_AUTH_SECRET}
-      - GAMEPLAY_TICKET_SECRET=${GAMEPLAY_TICKET_SECRET}
       - COORDINATOR_INTERNAL_SECRET=${COORDINATOR_INTERNAL_SECRET}
       - APP_ACCESS_TOKEN_TTL=${APP_ACCESS_TOKEN_TTL}
       - APP_REFRESH_TOKEN_TTL=${APP_REFRESH_TOKEN_TTL}
@@ -149,7 +96,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - match-coordinator
+      db-migrate:
+        condition: service_completed_successfully
 
   moderation-worker:
     image: golang:1.26
@@ -171,8 +119,8 @@ services:
     ports:
       - "8093:8093"
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   discord-worker:
     image: golang:1.26
@@ -192,8 +140,8 @@ services:
     ports:
       - "8094:8094"
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:

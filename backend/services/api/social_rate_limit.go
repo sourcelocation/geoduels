@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
+
+	"geoduels/pkg/ratelimit"
 )
 
 type socialRatePolicy struct {
@@ -26,38 +27,24 @@ var socialRatePolicies = map[string]socialRatePolicy{
 	"socket_connect": {Name: "socket_connect", AccountLimit: 30, IPLimit: 60, Window: time.Minute},
 }
 
-var socialRateScript = redis.NewScript(`
-local function consume(key, limit, ttl)
-  local count = redis.call("INCR", key)
-  if count == 1 then redis.call("PEXPIRE", key, ttl) end
-  if count > limit then return redis.call("PTTL", key) end
-  return 0
-end
-local account_ttl = consume(KEYS[1], tonumber(ARGV[1]), tonumber(ARGV[3]))
-if account_ttl > 0 then return account_ttl end
-return consume(KEYS[2], tonumber(ARGV[2]), tonumber(ARGV[3]))
-`)
-
 func (a *api) allowSocialAction(r *http.Request, userID, policyName string) (bool, time.Duration, error) {
 	policy, ok := socialRatePolicies[policyName]
 	if !ok {
 		return false, 0, errors.New("unknown social rate policy")
 	}
-	if a.redis == nil {
-		// Tests and local store-only use stay operable; production always supplies Redis.
+	if a.db == nil {
+		// Store-only tests stay operable; production always has the database.
 		return true, 0, nil
 	}
 	ip := a.clientIP(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 400*time.Millisecond)
 	defer cancel()
-	ttl, err := socialRateScript.Run(ctx, a.redis, []string{
-		"api:ratelimit:social:" + policy.Name + ":account:" + userID,
-		"api:ratelimit:social:" + policy.Name + ":ip:" + ip,
-	}, policy.AccountLimit, policy.IPLimit, policy.Window.Milliseconds()).Int64()
-	if err != nil {
-		return false, 0, err
+	prefix := "api:ratelimit:social:" + policy.Name
+	allowed, retryAfter, err := ratelimit.Hit(ctx, a.db.Pool(), prefix+":account:"+userID, policy.AccountLimit, policy.Window)
+	if err != nil || !allowed {
+		return allowed, retryAfter, err
 	}
-	return ttl <= 0, time.Duration(ttl) * time.Millisecond, nil
+	return ratelimit.Hit(ctx, a.db.Pool(), prefix+":ip:"+ip, policy.IPLimit, policy.Window)
 }
 
 func writeSocialRateLimited(c echo.Context, retryAfter time.Duration) error {

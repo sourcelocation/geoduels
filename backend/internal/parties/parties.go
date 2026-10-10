@@ -60,29 +60,7 @@ func (s *PGStore) GetPartyByInviteCode(ctx context.Context, inviteCode string) (
 		return partySnapshotRow{
 			ID: row.ID, OwnerUserID: row.OwnerUserID, InviteCode: row.InviteCode,
 			State: string(row.State), Mode: string(row.Mode), MapScope: row.MapScope,
-			ActiveMatchID: anyText(row.ActiveMatchID), LastMatchID: anyText(row.LastMatchID), StartedMatchID: anyText(row.StartedMatchID),
-			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
-			ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
-			MapName: row.DisplayName, MapLocationCount: row.LocationCount,
-		}, err
-	})
-}
-
-func (s *PGStore) GetPartyByMatchID(ctx context.Context, matchID string) (contracts.PartySnapshot, bool, error) {
-	matchID = strings.TrimSpace(matchID)
-	if matchID == "" {
-		return contracts.PartySnapshot{}, false, nil
-	}
-	return s.getParty(ctx, func(ctx context.Context) (partySnapshotRow, error) {
-		id, err := profileUUID(matchID)
-		if err != nil {
-			return partySnapshotRow{}, err
-		}
-		row, err := s.q().GetPartySnapshotByMatchID(ctx, id)
-		return partySnapshotRow{
-			ID: row.ID, OwnerUserID: row.OwnerUserID, InviteCode: row.InviteCode,
-			State: string(row.State), Mode: string(row.Mode), MapScope: row.MapScope,
-			ActiveMatchID: anyText(row.ActiveMatchID), LastMatchID: anyText(row.LastMatchID), StartedMatchID: anyText(row.StartedMatchID),
+			LastMatchID: anyText(row.LastMatchID), LastMatchStatus: row.LastMatchStatus,
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 			ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
 			MapName: row.DisplayName, MapLocationCount: row.LocationCount,
@@ -327,19 +305,65 @@ func (s *PGStore) TouchOpenParty(ctx context.Context, partyID string) error {
 	return s.q().TouchOpenParty(ctx, id)
 }
 
-func (s *PGStore) MarkPartyInMatch(ctx context.Context, partyID, matchID string) error {
+// MarkMatchStartedTx makes the match the party's current one and clears its members' ready flags, in
+// the transaction that starts the match. The party is in the match for as long as the match is live.
+func MarkMatchStartedTx(ctx context.Context, tx pgx.Tx, partyID, matchID string) error {
 	partyUUID, matchUUID, err := profileUUID2(partyID, matchID)
 	if err != nil {
 		return err
 	}
-	affected, err := s.q().MarkPartyInMatch(ctx, db.MarkPartyInMatchParams{ID: partyUUID, ActiveMatchID: matchUUID})
-	if err != nil {
+	if _, err := db.New(tx).MarkPartyMatchStarted(ctx, db.MarkPartyMatchStartedParams{ID: partyUUID, LastMatchID: matchUUID}); err != nil {
 		return err
 	}
-	if affected == 0 {
-		return pgx.ErrNoRows
-	}
 	return nil
+}
+
+// TouchMemberSeen records that the member has the party open. It reports whether that changed
+// their presence, so the party should hear about it.
+func (s *PGStore) TouchMemberSeen(ctx context.Context, partyID, userID string) (bool, error) {
+	partyUUID, userUUID, err := profileUUID2(partyID, userID)
+	if err != nil {
+		return false, err
+	}
+	previous, err := s.q().TouchPartyMemberSeen(ctx, db.TouchPartyMemberSeenParams{PartyID: partyUUID, UserID: userUUID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return memberPresence(time.Now(), previous) != contracts.PartyPresenceOnline, nil
+}
+
+// ClearMemberSeen marks the member as gone from the party. It reports whether they were there.
+func (s *PGStore) ClearMemberSeen(ctx context.Context, partyID, userID string) (bool, error) {
+	partyUUID, userUUID, err := profileUUID2(partyID, userID)
+	if err != nil {
+		return false, err
+	}
+	cleared, err := s.q().ClearPartyMemberSeen(ctx, db.ClearPartyMemberSeenParams{PartyID: partyUUID, UserID: userUUID})
+	return cleared > 0, err
+}
+
+const (
+	partyPresenceOnlineFor = 15 * time.Second
+	partyPresenceAwayFor   = 60 * time.Second
+)
+
+// memberPresence is online while the member had the party open within the last 15 seconds, away
+// within the last minute, and offline after.
+func memberPresence(now time.Time, seenAt pgtype.Timestamptz) contracts.PartyPresenceStatus {
+	if !seenAt.Valid {
+		return contracts.PartyPresenceOffline
+	}
+	switch age := now.Sub(seenAt.Time); {
+	case age <= partyPresenceOnlineFor:
+		return contracts.PartyPresenceOnline
+	case age <= partyPresenceAwayFor:
+		return contracts.PartyPresenceAway
+	default:
+		return contracts.PartyPresenceOffline
+	}
 }
 
 func (s *PGStore) ExpireParty(ctx context.Context, partyID string) error {
@@ -351,11 +375,6 @@ func (s *PGStore) ExpireParty(ctx context.Context, partyID string) error {
 }
 
 // --- maintenance (PartyMaintenance) ---
-
-func (s *PGStore) ExpireOpenParties(ctx context.Context) error {
-	_, err := s.q().ExpireOpenParties(ctx)
-	return err
-}
 
 func (s *PGStore) ListOpenPartyIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.q().ListOpenPartyIDs(ctx)
@@ -379,24 +398,13 @@ func (s *PGStore) CloseInactiveOpenParties(ctx context.Context, partyIDs []strin
 	})
 }
 
-func (s *PGStore) ReopenEndedParties(ctx context.Context) (int64, error) {
-	tag, err := s.q().ReopenEndedParties(ctx, db.GdRuntimeState(contracts.MatchEnded))
-	if err != nil {
-		return 0, err
-	}
-	if err := s.q().EndSessionsForEndedRuntimeMatches(ctx, db.GdRuntimeState(contracts.MatchEnded)); err != nil {
-		return 0, err
-	}
-	return tag, nil
-}
-
 // --- snapshot shaping ---
 
 type partySnapshotRow struct {
 	ID, OwnerUserID                   pgtype.UUID
 	InviteCode, State, Mode, MapScope string
-	ActiveMatchID, LastMatchID        string
-	StartedMatchID, ConfigJSON, MapID string
+	LastMatchID, LastMatchStatus      string
+	ConfigJSON, MapID                 string
 	CreatedAt, ExpiresAt              pgtype.Timestamptz
 	MapName                           string
 	MapLocationCount                  int32
@@ -413,7 +421,12 @@ func (s *PGStore) getParty(ctx context.Context, fetch func(ctx context.Context) 
 	}
 	snap.ID, snap.InviteCode, snap.OwnerUserID = row.ID.String(), row.InviteCode, row.OwnerUserID.String()
 	snap.State, snap.Mode, snap.MapScope = contracts.PartyState(row.State), contracts.MatchMode(row.Mode), row.MapScope
-	snap.ActiveMatchID, snap.LastMatchID, snap.StartedMatchID = row.ActiveMatchID, row.LastMatchID, row.StartedMatchID
+	snap.LastMatchID = row.LastMatchID
+	// An open party whose last match is starting or live is in that match.
+	if snap.State == contracts.PartyOpen && contracts.MatchSessionStatus(row.LastMatchStatus).Open() {
+		snap.State = contracts.PartyInMatch
+		snap.ActiveMatchID = row.LastMatchID
+	}
 	snap.CreatedAt, snap.ExpiresAt = row.CreatedAt.Time, row.ExpiresAt.Time
 	snap.MapName, snap.MapLocationCount = row.MapName, int(row.MapLocationCount)
 	_ = json.Unmarshal([]byte(row.ConfigJSON), &snap.Config)
@@ -421,9 +434,6 @@ func (s *PGStore) getParty(ctx context.Context, fetch func(ctx context.Context) 
 	if row.MapID != "" {
 		snap.Config.MapID = row.MapID
 		snap.Config.MapName = snap.MapName
-	}
-	if snap.StartedMatchID == "" {
-		snap.StartedMatchID = snap.ActiveMatchID
 	}
 	members, err := s.listPartyMembers(ctx, snap.ID)
 	if err != nil {
@@ -437,7 +447,7 @@ func toPartySnapshotRow(row db.GetPartySnapshotByIDRow) partySnapshotRow {
 	return partySnapshotRow{
 		ID: row.ID, OwnerUserID: row.OwnerUserID, InviteCode: row.InviteCode,
 		State: string(row.State), Mode: string(row.Mode), MapScope: row.MapScope,
-		ActiveMatchID: anyText(row.ActiveMatchID), LastMatchID: anyText(row.LastMatchID), StartedMatchID: anyText(row.StartedMatchID),
+		LastMatchID: anyText(row.LastMatchID), LastMatchStatus: row.LastMatchStatus,
 		CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 		ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
 		MapName: row.DisplayName, MapLocationCount: row.LocationCount,
@@ -455,6 +465,7 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 	}
 	out := []contracts.PartyMember{}
 	selected := map[string]string{}
+	now := time.Now()
 	for _, row := range rows {
 		var member contracts.PartyMember
 		member.UserID = row.UserID.String()
@@ -466,6 +477,9 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 		member.Role = string(row.Role)
 		member.Ready = row.Ready
 		member.JoinedAt = row.JoinedAt.Time
+		member.InActiveMatch = row.InActiveMatch
+		member.PresenceStatus = memberPresence(now, row.SeenAt)
+		member.Connected = member.PresenceStatus == contracts.PartyPresenceOnline
 		selected[member.UserID] = badges.IDFromCode(row.SelectedBadgeCode)
 		out = append(out, member)
 	}

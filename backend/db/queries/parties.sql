@@ -11,7 +11,8 @@ ON CONFLICT (user_id) DO UPDATE SET party_id = excluded.party_id;
 -- name: CloseInactiveOpenParties :execrows
 UPDATE parties SET state = 'closed', updated_at = now()
 WHERE state = 'open' AND id = ANY(sqlc.arg(party_ids)::uuid[])
-  AND updated_at < now() - (sqlc.arg(inactive_seconds)::double precision * interval '1 second');
+  AND updated_at < now() - (sqlc.arg(inactive_seconds)::double precision * interval '1 second')
+  AND NOT EXISTS (SELECT 1 FROM match_sessions ms WHERE ms.match_id = parties.last_match_id AND ms.ended_at IS NULL);
 
 -- name: CloseParty :exec
 UPDATE parties SET state = 'closed', updated_at = now()
@@ -24,18 +25,6 @@ SELECT count(*) FROM party_members WHERE party_id = $1 AND left_at IS NULL AND u
 INSERT INTO parties (id, invite_code, owner_user_id, state, mode, map_scope, expires_at, map_id)
 VALUES ($1, $2, $3, 'open', $4, $5, $6, $7);
 
--- name: EndSessionsForEndedRuntimeMatches :exec
-UPDATE match_sessions ms
-SET state = 'ended',
-    ended_at = COALESCE(ms.ended_at, now()),
-    updated_at = now()
-FROM runtime_matches rm
-WHERE rm.id = ms.match_id AND rm.state = $1 AND ms.state <> 'ended';
-
--- name: ExpireOpenParties :execrows
-UPDATE parties SET state = 'expired', updated_at = now()
-WHERE state = 'open' AND expires_at < now();
-
 -- name: ExpireParty :exec
 UPDATE parties SET state = 'expired', updated_at = now()
 WHERE id = $1 AND state = 'open';
@@ -45,39 +34,34 @@ SELECT owner_user_id, state FROM parties WHERE id = $1;
 
 -- name: GetPartySnapshotByID :one
 SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
-       COALESCE(l.active_match_id, l.started_match_id) AS active_match_id,
        l.last_match_id AS last_match_id,
-       l.started_match_id AS started_match_id,
+       COALESCE(gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at), '')::text AS last_match_status,
        l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
        COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
+LEFT JOIN match_sessions ms ON ms.match_id = l.last_match_id
 WHERE l.id = $1;
 
 -- name: GetPartySnapshotByInviteCode :one
 SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
-       COALESCE(l.active_match_id, l.started_match_id) AS active_match_id,
        l.last_match_id AS last_match_id,
-       l.started_match_id AS started_match_id,
+       COALESCE(gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at), '')::text AS last_match_status,
        l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
        COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
+LEFT JOIN match_sessions ms ON ms.match_id = l.last_match_id
 WHERE l.invite_code = $1;
 
--- name: GetPartySnapshotByMatchID :one
-SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
-       COALESCE(l.active_match_id, l.started_match_id) AS active_match_id,
-       l.last_match_id AS last_match_id,
-       l.started_match_id AS started_match_id,
-       l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
-       COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
-FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
-WHERE l.active_match_id = $1 OR l.last_match_id = $1 OR l.started_match_id = $1;
-
 -- name: GetPartyStateAndExpiry :one
-SELECT state, expires_at FROM parties WHERE id = $1;
+-- An open party is in_match while its last match is starting or live.
+SELECT CASE WHEN l.state = 'open' AND gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at) IN ('starting', 'live') THEN 'in_match' ELSE l.state::text END::text AS state, l.expires_at
+FROM parties l LEFT JOIN match_sessions ms ON ms.match_id = l.last_match_id
+WHERE l.id = $1;
 
 -- name: GetPartyStateAndOwner :one
-SELECT state, owner_user_id FROM parties WHERE id = $1;
+SELECT CASE WHEN l.state = 'open' AND gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at) IN ('starting', 'live') THEN 'in_match' ELSE l.state::text END::text AS state, l.owner_user_id
+FROM parties l LEFT JOIN match_sessions ms ON ms.match_id = l.last_match_id
+WHERE l.id = $1;
 
 -- name: JoinPartyMember :exec
 WITH member AS (
@@ -122,7 +106,11 @@ ORDER BY ub.user_id ASC, ub.awarded_at DESC, ub.badge_code ASC;
 SELECT m.user_id, u.display_name, COALESCE(u.avatar_url, '') AS avatar_url,
        gd_is_guest(u.id) AS is_guest, gd_is_admin(u.id) AS is_admin,
        COALESCE(u.selected_badge_code, 0) AS selected_badge_code, m.team_id AS team_id,
-       m.role, m.ready, m.joined_at
+       m.role, m.ready, m.joined_at, m.seen_at,
+       EXISTS (
+           SELECT 1 FROM parties p JOIN match_participants mp ON mp.match_id = p.last_match_id
+           WHERE p.id = m.party_id AND mp.user_id = m.user_id AND mp.active
+       ) AS in_active_match
 FROM party_members m JOIN users u ON u.id = m.user_id
 WHERE m.party_id = $1 AND m.left_at IS NULL
 ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.joined_at;
@@ -133,10 +121,14 @@ select mode from parties where id=$1 and state='open' for update;
 -- name: LockOpenPartyOwner :one
 select owner_user_id from parties where id=$1 and state='open' for update;
 
--- name: MarkPartyInMatch :execrows
-UPDATE parties
-SET state = 'in_match', active_match_id = $2, started_match_id = $2, updated_at = now()
-WHERE id = $1 AND state = 'open';
+-- name: MarkPartyMatchStarted :execrows
+-- The party's match is its last one; it is in that match while the match is live.
+WITH started AS (
+    UPDATE parties SET last_match_id = $2, updated_at = now()
+    WHERE id = $1 AND state = 'open'
+    RETURNING id
+)
+UPDATE party_members m SET ready = false FROM started WHERE m.party_id = started.id;
 
 -- name: NextPartyOwnerID :one
 SELECT user_id FROM party_members
@@ -160,29 +152,6 @@ SET role = CASE
 END
 WHERE party_id = $1 AND left_at IS NULL;
 
--- name: ReopenEndedParties :execrows
-WITH ended AS (
-    SELECT l.id, l.active_match_id
-    FROM parties l
-    JOIN runtime_matches rm ON rm.id = l.active_match_id
-    WHERE l.state IN ('in_match', 'started') AND rm.state = $1
-),
-reopened AS (
-    UPDATE parties l
-    SET state = 'open',
-        last_match_id = ended.active_match_id,
-        active_match_id = NULL,
-        started_match_id = NULL,
-        updated_at = now()
-    FROM ended
-    WHERE l.id = ended.id
-    RETURNING l.id
-)
-UPDATE party_members m
-SET ready = false
-FROM reopened
-WHERE m.party_id = reopened.id;
-
 -- name: ResetPartyMembersReady :exec
 UPDATE party_members SET ready = false WHERE party_id = $1;
 
@@ -205,7 +174,23 @@ WHERE id = $1 AND state = 'open';
 
 -- name: TouchPartyUpdated :exec
 UPDATE parties SET updated_at = now()
-WHERE id = $1 AND state IN ('open', 'in_match', 'started');
+WHERE id = $1 AND state = 'open';
+
+-- name: TouchPartyMemberSeen :one
+-- Marks the member as having the party open now, returning when they did before.
+WITH previous AS (
+    SELECT seen_at FROM party_members
+    WHERE party_id = $1 AND user_id = $2 AND left_at IS NULL
+    FOR UPDATE
+)
+UPDATE party_members m SET seen_at = now()
+FROM previous
+WHERE m.party_id = $1 AND m.user_id = $2 AND m.left_at IS NULL
+RETURNING previous.seen_at AS previous_seen_at;
+
+-- name: ClearPartyMemberSeen :execrows
+UPDATE party_members SET seen_at = NULL
+WHERE party_id = $1 AND user_id = $2 AND seen_at IS NOT NULL;
 
 -- name: TransferPartyOwner :exec
 UPDATE parties SET owner_user_id = $2, updated_at = now() WHERE id = $1;
@@ -216,5 +201,5 @@ FROM current_parties c
 JOIN parties p ON p.id = c.party_id
 JOIN party_members m ON m.party_id = c.party_id AND m.user_id = c.user_id
 WHERE c.user_id = $1 AND m.left_at IS NULL
-  AND p.state IN ('open', 'in_match', 'started')
-  AND (p.state <> 'open' OR p.expires_at > now());
+  AND p.state = 'open'
+  AND (p.expires_at > now() OR EXISTS (SELECT 1 FROM match_sessions ms WHERE ms.match_id = p.last_match_id AND ms.ended_at IS NULL));

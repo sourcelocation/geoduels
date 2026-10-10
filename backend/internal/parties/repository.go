@@ -15,7 +15,6 @@ type Store interface {
 	GetCurrentParty(ctx context.Context, userID string) (*contracts.CurrentParty, error)
 	GetPartyByID(ctx context.Context, partyID string) (contracts.PartySnapshot, bool, error)
 	GetPartyByInviteCode(ctx context.Context, inviteCode string) (contracts.PartySnapshot, bool, error)
-	GetPartyByMatchID(ctx context.Context, matchID string) (contracts.PartySnapshot, bool, error)
 	GetPartyStateAndOwner(ctx context.Context, partyID string) (PartyStateOwner, error)
 	GetPartyStateAndExpiry(ctx context.Context, partyID string) (PartyStateExpiry, error)
 	PartyMemberActive(ctx context.Context, partyID, userID string) (bool, error)
@@ -39,10 +38,9 @@ type Store interface {
 	SetPartyMemberTeam(ctx context.Context, partyID, userID, teamID string) (int64, error)
 	TouchPartyUpdated(ctx context.Context, partyID string) error
 	TouchOpenParty(ctx context.Context, partyID string) error
-	MarkPartyInMatch(ctx context.Context, partyID, matchID string) error
+	TouchMemberSeen(ctx context.Context, partyID, userID string) (bool, error)
+	ClearMemberSeen(ctx context.Context, partyID, userID string) (bool, error)
 	ExpireParty(ctx context.Context, partyID string) error
-	ExpireOpenParties(ctx context.Context) error
 	ListOpenPartyIDs(ctx context.Context) ([]string, error)
 	CloseInactiveOpenParties(ctx context.Context, partyIDs []string, inactiveFor time.Duration) (int64, error)
-	ReopenEndedParties(ctx context.Context) (int64, error)
 }

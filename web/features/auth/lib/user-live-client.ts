@@ -3,19 +3,11 @@ import { normalizeWSBase } from "../../../lib/runtime-config";
 import type { UserNotification } from "./auth-client";
 import type { AppBootstrapPayload } from "./auth-client";
 
-export type LivePresencePatch = {
-  userId: string;
-  presenceStatus: "online" | "away" | "offline";
-  activity?: "in_match" | "in_party" | "";
-  lastSeenAt?: string;
-};
-
 export type LiveEvent =
   | { type: "hello" }
   | { type: "notification.upsert"; notification: UserNotification }
   | { type: "notification.read"; notificationId: number }
   | { type: "notification.read_all" }
-  | { type: "presence.patch"; presence: LivePresencePatch }
   | { type: "invalidate"; resources: string[] }
   | {
       type: "global_status.changed";
@@ -41,11 +33,6 @@ export function parseLiveEvent(value: unknown): LiveEvent | null {
     return { type, notificationId: record.notificationId };
   }
   if (type === "notification.read_all") return { type };
-  if (type === "presence.patch" && record.presence && typeof record.presence === "object") {
-    const presence = record.presence as LivePresencePatch;
-    if (!presence.userId || !presence.presenceStatus) return null;
-    return { type, presence };
-  }
   if (type === "invalidate") {
     const resources = Array.isArray(record.resources) ? record.resources.filter((item): item is string => typeof item === "string") : [];
     return { type, resources };

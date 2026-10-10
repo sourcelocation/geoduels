@@ -458,7 +458,7 @@ func (a *api) adminGetMaintenance(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	status, err := maintenance.StaffRead(c.Request().Context(), a.redis, actor)
+	status, err := maintenance.StaffRead(c.Request().Context(), a.db.Pool(), actor)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -474,7 +474,7 @@ func (a *api) adminPutMaintenance(c echo.Context) error {
 	if err := decodeJSONBody(c.Request(), &status); err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
-	saved, err := maintenance.Save(c.Request().Context(), a.redis, actor, status)
+	saved, err := maintenance.Save(c.Request().Context(), a.db.Pool(), actor, status)
 	if err != nil {
 		return staffError(c, err)
 	}
@@ -486,7 +486,7 @@ func (a *api) adminClearMaintenance(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	if err := maintenance.Clear(c.Request().Context(), a.redis, actor); err != nil {
+	if err := maintenance.Clear(c.Request().Context(), a.db.Pool(), actor); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

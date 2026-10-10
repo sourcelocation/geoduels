@@ -13,120 +13,121 @@ import (
 
 	"geoduels/internal/storekit"
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *PGStore) PrepareMatchPlan(ctx context.Context, found *contracts.MatchFound) error {
-	if found == nil || strings.TrimSpace(found.MatchID) == "" {
-		return errors.New("match required")
+// MatchPlanRequest asks for a new match's map and round plan.
+type MatchPlanRequest struct {
+	MatchID string
+	Spec    matchkind.Spec
+	Config  contracts.MatchConfig
+	// MapAccessUserID is whose private maps the match may play.
+	MapAccessUserID string
+	Players         []string
+}
+
+// MatchPlan is the map a match plays; its rounds are in match_round_plans.
+type MatchPlan struct {
+	Config contracts.MatchConfig
+	MapID  string
+}
+
+// PlanMatchTx picks a new match's map and writes its round plan in the caller's transaction, so the
+// plan exists exactly when the match does. Ranked kinds play the ruleset's rotation map; the others
+// play the map in their config, or the rotation map when none was chosen.
+func (s *PGStore) PlanMatchTx(ctx context.Context, tx pgx.Tx, req MatchPlanRequest) (MatchPlan, error) {
+	if strings.TrimSpace(req.MatchID) == "" {
+		return MatchPlan{}, errors.New("match required")
 	}
-	if len(found.PlannedRounds) > 0 && found.ResolvedMap.MapID != "" {
-		return nil
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 	q := db.New(tx)
-	rows, err := q.ListMatchRoundPlans(ctx, mustMapUUID(found.MatchID))
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		var p contracts.PlannedRound
-		mapID := row.MapID
-		p.RoundIndex = int(row.RoundIndex)
-		p.Location.Lat, p.Location.Lng, p.Location.Country = row.Lat, row.Lng, row.Country
-		if row.PanoID.Valid {
-			v := row.PanoID.String
-			p.Location.PanoID = &v
-		}
-		if row.Heading.Valid {
-			v := row.Heading.Float64
-			p.Location.Heading = &v
-		}
-		if row.Pitch.Valid {
-			v := row.Pitch.Float64
-			p.Location.Pitch = &v
-		}
-		found.PlannedRounds = append(found.PlannedRounds, p)
-		found.ResolvedMap.MapID = storekit.UUIDVal(mapID)
-	}
-	if len(found.PlannedRounds) > 0 {
-		id, err := storekit.ProfileUUID(found.ResolvedMap.MapID)
-		if err == nil {
-			if name, nameErr := q.MapDisplayName(ctx, id); nameErr == nil {
-				found.ResolvedMap.DisplayName = name
-			}
-		}
-		found.Config.MapID = found.ResolvedMap.MapID
-		found.Config.MapName = found.ResolvedMap.DisplayName
-		return tx.Commit(ctx)
-	}
-	cfg := contracts.NormalizeMatchConfig(found.Config)
-	mapID := cfg.MapID
-	if found.Mode == contracts.ModeDuel && !found.Unranked && strings.TrimSpace(found.SourcePartyID) == "" {
-		resolved, err := s.ResolveGameplayMapID(found.Mode, cfg.Ruleset, "")
+	cfg := contracts.NormalizeMatchConfig(req.Config)
+	mapID := strings.TrimSpace(cfg.MapID)
+	if req.Spec.Maps == matchkind.MapsRotation || mapID == "" {
+		resolved, err := s.ResolveGameplayMapID(req.Spec.Mode, cfg.Ruleset, "")
 		if err != nil {
-			return err
+			return MatchPlan{}, err
 		}
 		mapID = resolved
 	}
 	canonicalMapID, _, err := resolveMapIdentity(ctx, tx, mapID)
 	if err != nil {
-		return fmt.Errorf("selected map unavailable: %w", err)
+		return MatchPlan{}, fmt.Errorf("selected map unavailable: %w", err)
 	}
 	mapID = canonicalMapID
-	var owner, visibility, status, displayName string
-	var count int
 	mapUUID, err := storekit.ProfileUUID(mapID)
 	if err != nil {
-		return fmt.Errorf("selected map unavailable: %w", err)
+		return MatchPlan{}, fmt.Errorf("selected map unavailable: %w", err)
 	}
 	selectedMap, err := q.SelectedMap(ctx, mapUUID)
-	if err == nil {
-		owner = storekit.UUIDVal(selectedMap.OwnerUserID)
-		visibility, status, displayName, count = string(selectedMap.Visibility), string(selectedMap.Status), selectedMap.DisplayName, int(selectedMap.LocationCount)
-	}
 	if err != nil {
-		return fmt.Errorf("selected map unavailable: %w", err)
+		return MatchPlan{}, fmt.Errorf("selected map unavailable: %w", err)
 	}
-	if status != "ready" {
-		return errors.New("selected map is not ready")
+	if string(selectedMap.Status) != "ready" {
+		return MatchPlan{}, errors.New("selected map is not ready")
 	}
-	if !selectedMapAccessible(owner, found.MapAccessUserID, visibility) {
-		return errors.New("selected map is not accessible")
+	if !selectedMapAccessible(storekit.UUIDVal(selectedMap.OwnerUserID), req.MapAccessUserID, string(selectedMap.Visibility)) {
+		return MatchPlan{}, errors.New("selected map is not accessible")
 	}
 	requiredRounds := plannedRoundCount
-	if found.Mode == contracts.ModeFreeForAll || found.Mode == contracts.ModeSingleplayer {
+	if req.Spec.Mode == contracts.ModeFreeForAll || req.Spec.Mode == contracts.ModeSingleplayer {
 		requiredRounds = minMapLocations
 	}
-	if count < requiredRounds {
-		return errors.New("selected map has too few locations")
+	if int(selectedMap.LocationCount) < requiredRounds {
+		return MatchPlan{}, errors.New("selected map has too few locations")
 	}
-	pivot := deterministicPivot(found.MatchID, mapID)
-	selected, err := selectPlanRows(ctx, tx, mapID, pivot, requiredRounds)
+	selected, err := selectPlanRows(ctx, tx, mapID, deterministicPivot(req.MatchID, mapID), requiredRounds)
 	if err != nil {
-		return err
+		return MatchPlan{}, err
 	}
 	if len(selected) < requiredRounds {
-		return errors.New("selected map has too few locations")
+		return MatchPlan{}, errors.New("selected map has too few locations")
 	}
 	for i, row := range selected {
-		if err := q.InsertMatchRoundPlan(ctx, db.InsertMatchRoundPlanParams{MatchID: mustMapUUID(found.MatchID), RoundIndex: int32(i), MapID: mapUUID, Lat: row.Lat, Lng: row.Lng, Country: pgtype.Text{String: row.Country, Valid: true}, PanoID: pgtype.Text{String: valueOrEmpty(row.PanoID), Valid: row.PanoID != nil}, Heading: pgtype.Float8{Float64: valueOrZero(row.Heading), Valid: row.Heading != nil}, Pitch: pgtype.Float8{Float64: valueOrZero(row.Pitch), Valid: row.Pitch != nil}}); err != nil {
-			return err
+		if err := q.InsertMatchRoundPlan(ctx, db.InsertMatchRoundPlanParams{MatchID: mustMapUUID(req.MatchID), RoundIndex: int32(i), MapID: mapUUID, Lat: row.Lat, Lng: row.Lng, Country: pgtype.Text{String: row.Country, Valid: true}, PanoID: pgtype.Text{String: valueOrEmpty(row.PanoID), Valid: row.PanoID != nil}, Heading: pgtype.Float8{Float64: valueOrZero(row.Heading), Valid: row.Heading != nil}, Pitch: pgtype.Float8{Float64: valueOrZero(row.Pitch), Valid: row.Pitch != nil}}); err != nil {
+			return MatchPlan{}, err
 		}
-		found.PlannedRounds = append(found.PlannedRounds, contracts.PlannedRound{RoundIndex: i, Location: row.LocationPoint})
 	}
-	found.ResolvedMap = contracts.ResolvedMap{MapID: mapID, DisplayName: displayName}
-	found.Config.MapID = mapID
-	found.Config.MapName = displayName
-	found.Config.MapKey = ""
-	if err := incrementMapPlayStats(ctx, tx, mapID, found.Players); err != nil {
-		return err
+	cfg.MapID = mapID
+	cfg.MapName = selectedMap.DisplayName
+	cfg.MapKey = ""
+	if err := incrementMapPlayStats(ctx, tx, mapID, req.Players); err != nil {
+		return MatchPlan{}, err
 	}
-	return tx.Commit(ctx)
+	return MatchPlan{Config: cfg, MapID: mapID}, nil
+}
+
+// MatchRounds returns a match's planned round locations, in order.
+func (s *PGStore) MatchRounds(ctx context.Context, matchID string) ([]contracts.LocationPoint, error) {
+	id, err := storekit.ProfileUUID(matchID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.New(s.pool).ListMatchRoundPlans(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	rounds := make([]contracts.LocationPoint, 0, len(rows))
+	for _, row := range rows {
+		point := contracts.LocationPoint{Lat: row.Lat, Lng: row.Lng, Country: row.Country}
+		if row.PanoID.Valid {
+			v := row.PanoID.String
+			point.PanoID = &v
+		}
+		if row.Heading.Valid {
+			v := row.Heading.Float64
+			point.Heading = &v
+		}
+		if row.Pitch.Valid {
+			v := row.Pitch.Float64
+			point.Pitch = &v
+		}
+		rounds = append(rounds, point)
+	}
+	if len(rounds) == 0 {
+		return nil, errors.New("match has no round plan")
+	}
+	return rounds, nil
 }
 
 func selectedMapAccessible(ownerUserID, accessUserID, visibility string) bool {

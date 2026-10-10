@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +19,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 
 	"geoduels/internal/envcfg"
 	"geoduels/internal/httpx"
@@ -26,59 +26,73 @@ import (
 	"geoduels/internal/maps"
 	"geoduels/internal/matches"
 	"geoduels/pkg/contracts"
-	"geoduels/pkg/coordinator"
+	"geoduels/pkg/controlplane"
 	"geoduels/pkg/duel"
-	"geoduels/pkg/gameticket"
-	"geoduels/pkg/matchstore"
+	"geoduels/pkg/maintenance"
+	"geoduels/pkg/matchkind"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
 	"geoduels/pkg/singleplayer"
 )
 
+// A gameplay node runs matches in memory. It holds a lease named after it in control_plane_leases;
+// a match it picks up is stamped with the lease's fencing token and stays live while that lease
+// holds (gd_match_status). Nothing else tells it what to run: it takes waiting matches itself.
 const (
-	wsWriteWait          = 10 * time.Second
-	wsPongWait           = 70 * time.Second
-	wsPingPeriod         = 25 * time.Second
-	matchLeaseRenewEvery = 10 * time.Second
-	matchLeaseTTL        = 45 * time.Second
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 70 * time.Second
+	wsPingPeriod = 25 * time.Second
+
+	leaseTTL         = 10 * time.Second
+	leaseRenewEvery  = 3 * time.Second
+	pickupEvery      = 250 * time.Millisecond
+	reconcileGrace   = 5 * time.Second
+	maxMatchesOnNode = 2000
+
+	// userHeader names the player the API authenticated before proxying their socket here, and
+	// secretHeader proves the request came from the API.
+	userHeader   = "X-Geoduels-User"
+	secretHeader = "X-Internal-Secret"
 )
 
-var upgrader = websocket.Upgrader{CheckOrigin: httpx.WSOriginAllowed}
+var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 
-// gameplayPersistence is the narrow persistence surface the gameplay node
-// needs; satisfied by the sqlc-backed persistence store.
 type gameplayNode struct {
 	mu sync.RWMutex
 
 	nodeID      string
-	nodeEpoch   int64
-	publicRoute string
 	internalURL string
+	internal    string
 
-	db         *persistence.DB
-	persist    matches.Store
-	coord      *coordinator.Store
-	redis      *redis.Client
-	ticketAuth []byte
-	coordAuth  string
+	db      *persistence.DB
+	persist matches.Store
+	maps    *maps.PGStore
+	leases  controlplane.LeaseStore
+	lease   controlplane.Lease
 
-	redisCleanup func()
-	plans        *roundPlanRegistry
+	plans *roundPlanRegistry
 
-	runtimes     map[contracts.MatchMode]gameplayRuntime
+	runtimes     map[matchkind.Engine]gameplayRuntime
 	conns        map[string]*websocket.Conn
 	connWrite    map[string]*sync.Mutex
 	connID       map[string]string
 	userMatch    map[string]string
 	matchUsers   map[string][]string
-	matchModes   map[string]contracts.MatchMode
+	matchKinds   map[string]contracts.MatchKind
+	heldSince    map[string]time.Time
 	finalizing   map[string]bool
 	lastTeamPing map[string]time.Time
+	// lastPlayed is when a player last did something in each match: created it, connected, or sent a
+	// command other than a heartbeat. A match is in use until its kind's idle end passes without that.
+	lastPlayed map[string]time.Time
 
 	metrics *observability.RuntimeMetrics
 
-	drain    gameplayDrain
-	drainTTL time.Duration
+	readMaintenance func(context.Context) (maintenance.Status, error)
+	drain           gameplayDrain
+	drainTTL        time.Duration
+	// matchEnded wakes a drain when a match leaves the node.
+	matchEnded chan struct{}
 }
 
 func main() {
@@ -90,22 +104,16 @@ func main() {
 		}
 		nodeID = h + "-" + shortID()
 	}
-	publicRoute := envcfg.Get("GAMEPLAY_PUBLIC_ROUTE", nodeID)
 	internalURL := envcfg.Get("GAMEPLAY_INTERNAL_URL", "http://localhost:8091")
 
-	rdb, redisCleanup, err := redisFromEnv()
-	if err != nil {
-		log.Fatal(err)
-	}
 	db, err := persistence.NewFromEnv()
 	if err != nil {
 		log.Fatal(err)
 	}
-	jobsClient, err := jobs.NewClient(db.Pool(), nil, nil)
+	jobsClient, err := jobs.NewClient(db.Pool(), "", nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	store := matches.NewPGStore(db.Pool(), jobsClient.EnqueueMatchAnalyze)
 	mapStore := maps.NewPGStore(db.Pool())
 	// Dev-only: import the bundled sample dataset when a required playable
 	// map is missing; production nodes leave DEV_MAP_DATASET unset.
@@ -114,62 +122,56 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	singleplayerTTL := envcfg.Duration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
-	if err := store.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
-		log.Fatal(err)
-	}
-	ticketSecret, err := envcfg.RequiredSecret("GAMEPLAY_TICKET_SECRET", 32)
-	if err != nil {
-		log.Fatal(err)
-	}
 	internalSecret := strings.TrimSpace(os.Getenv("COORDINATOR_INTERNAL_SECRET"))
 	if internalSecret == "" {
 		log.Fatal("COORDINATOR_INTERNAL_SECRET is required")
 	}
+	leases, err := controlplane.NewPostgresLeaseStore(db.Pool())
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	duelConfigs := newMatchConfigRegistry()
 	plans := newRoundPlanRegistry()
 	roundForPlan := func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
 		return plans.Get(matchID, roundIndex)
 	}
-
 	g := &gameplayNode{
-		nodeID:       nodeID,
-		nodeEpoch:    time.Now().UnixNano(),
-		publicRoute:  publicRoute,
-		internalURL:  internalURL,
-		db:           db,
-		persist:      store,
-		coord:        coordinator.NewStore(rdb, envcfg.Duration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
-		redis:        rdb,
-		ticketAuth:   ticketSecret,
-		coordAuth:    internalSecret,
-		redisCleanup: redisCleanup,
-		plans:        plans,
-		runtimes: map[contracts.MatchMode]gameplayRuntime{
-			contracts.ModeDuel:         duelRuntime{mode: contracts.ModeDuel, engine: duel.New(roundForPlan), configs: duelConfigs},
-			contracts.ModeTeamDuel:     duelRuntime{mode: contracts.ModeTeamDuel, engine: duel.New(roundForPlan), configs: duelConfigs},
-			contracts.ModeFreeForAll:   duelRuntime{mode: contracts.ModeFreeForAll, engine: duel.New(roundForPlan), configs: duelConfigs},
-			contracts.ModeSingleplayer: singleplayerRuntime{engine: singleplayer.New(roundForPlan)},
+		nodeID:      nodeID,
+		internalURL: internalURL,
+		internal:    internalSecret,
+		db:          db,
+		persist:     matches.NewPGStore(db.Pool(), jobsClient.EnqueueMatchAnalyze),
+		maps:        mapStore,
+		leases:      leases,
+		plans:       plans,
+		runtimes: map[matchkind.Engine]gameplayRuntime{
+			matchkind.EngineVersus: versusRuntime{engine: duel.New(roundForPlan)},
+			matchkind.EngineSolo:   soloRuntime{engine: singleplayer.New(roundForPlan)},
 		},
 		conns:        map[string]*websocket.Conn{},
 		connWrite:    map[string]*sync.Mutex{},
 		connID:       map[string]string{},
 		userMatch:    map[string]string{},
 		matchUsers:   map[string][]string{},
-		matchModes:   map[string]contracts.MatchMode{},
+		matchKinds:   map[string]contracts.MatchKind{},
+		heldSince:    map[string]time.Time{},
 		finalizing:   map[string]bool{},
 		lastTeamPing: map[string]time.Time{},
+		lastPlayed:   map[string]time.Time{},
 		metrics:      observability.NewRuntimeMetrics(),
-		drainTTL:     envcfg.Duration("GAMEPLAY_DRAIN_TIMEOUT", 9*time.Minute+30*time.Second),
+		readMaintenance: func(ctx context.Context) (maintenance.Status, error) {
+			return maintenance.Read(ctx, db.Pool())
+		},
+		// Only a backstop: a drain ends once no match is in use.
+		drainTTL:   envcfg.Duration("GAMEPLAY_DRAIN_TIMEOUT", 2*time.Hour),
+		matchEnded: make(chan struct{}, 1),
 	}
 	defer g.db.Close()
-	defer g.redisCleanup()
-	defer g.coord.RemoveNode(context.Background(), g.nodeID)
 
+	g.acquireLease()
 	g.refreshMaintenanceDrain()
-	go g.registerLoop()
-	go g.matchLeaseLoop()
+	go g.leaseLoop()
+	go g.pickupLoop()
 	go g.tick()
 
 	e := echo.New()
@@ -183,22 +185,16 @@ func main() {
 		if he, ok := err.(*echo.HTTPError); ok {
 			code = he.Code
 		}
-		// gorilla/mux wrote empty bodies for unrouted paths and methods.
 		if code == http.StatusNotFound || code == http.StatusMethodNotAllowed {
 			_ = c.NoContent(code)
 			return
 		}
 		e.DefaultHTTPErrorHandler(err, c)
 	}
-	e.Use(httpx.CORS)
 	e.GET("/health", g.healthLive)
 	e.GET("/health/live", g.healthLive)
 	e.GET("/health/ready", g.healthReady)
-	e.GET("/ws/:node", g.ws)
-	e.POST("/internal/matches", g.createMatch)
-	e.GET("/internal/matches/:id", g.matchStatus)
-	e.HEAD("/internal/matches/:id", g.matchStatus)
-	e.POST("/internal/matches/:id/terminate", g.terminateMatch)
+	e.GET("/internal/matches/:id/ws", g.ws)
 	e.GET("/metrics", echo.WrapHandler(observability.Handler(g.metrics.Registry)))
 
 	addr := envcfg.Get("GAMEPLAY_NODE_ADDR", ":8091")
@@ -210,130 +206,202 @@ func main() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	observability.Log("info", "gameplay-node startup", map[string]any{"addr": addr, "nodeId": g.nodeID, "route": g.publicRoute})
-	go g.handleShutdown(srv)
+	observability.Log("info", "gameplay-node startup", map[string]any{"addr": addr, "nodeId": g.nodeID, "epoch": g.epoch()})
+	drained := make(chan struct{})
+	go g.handleShutdown(srv, drained)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
 
-func (g *gameplayNode) createMatch(c echo.Context) error {
-	req := c.Request()
-	if subtleHeader(req.Header.Get("X-Coordinator-Secret")) != g.coordAuth {
-		return httpx.PlainTextError(c, http.StatusForbidden, "forbidden")
+func leaseName(nodeID string) string { return "gameplay-node:" + nodeID }
+
+// acquireLease waits until this process holds the node's lease. A process that died holding it
+// keeps it until it expires.
+func (g *gameplayNode) acquireLease() {
+	owner := g.nodeID + ":" + shortID()
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		lease, acquired, err := g.leases.Acquire(ctx, leaseName(g.nodeID), owner, leaseTTL)
+		cancel()
+		if err == nil && acquired {
+			g.mu.Lock()
+			g.lease = lease
+			g.mu.Unlock()
+			return
+		}
+		observability.Log("warn", "waiting for node lease", map[string]any{"nodeId": g.nodeID, "error": errString(err)})
+		time.Sleep(time.Second)
 	}
-	if g.drain.isDraining() {
-		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "draining")
+}
+
+func (g *gameplayNode) epoch() int64 {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.lease.Token
+}
+
+func (g *gameplayNode) node() matches.Node {
+	return matches.Node{ID: g.nodeID, Epoch: g.epoch(), URL: g.internalURL}
+}
+
+// leaseLoop renews the lease and reconciles the node's matches with the database. A lost lease
+// means every match stamped with it is interrupted: the node lets them go and takes a new one.
+func (g *gameplayNode) leaseLoop() {
+	ticker := time.NewTicker(leaseRenewEvery)
+	defer ticker.Stop()
+	for range ticker.C {
+		g.refreshMaintenanceDrain()
+		g.mu.RLock()
+		lease := g.lease
+		g.mu.RUnlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		renewed, err := g.leases.Renew(ctx, lease, leaseTTL)
+		cancel()
+		if err != nil {
+			g.metrics.OwnershipRenewFailures.Inc()
+			continue
+		}
+		if !renewed {
+			observability.Log("error", "node lease lost; its matches are interrupted", map[string]any{"nodeId": g.nodeID})
+			g.dropAll()
+			g.acquireLease()
+			continue
+		}
+		g.reconcile()
 	}
-	var found contracts.MatchFound
-	if err := json.NewDecoder(req.Body).Decode(&found); err != nil {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid payload")
+}
+
+// reconcile drops the matches the database says this node no longer runs (replaced, aborted, or
+// ended elsewhere) and ends the ones it says the node runs but the node does not have.
+func (g *gameplayNode) reconcile() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	open, err := g.persist.NodeOpenMatches(ctx, g.node())
+	if err != nil {
+		return
 	}
-	mode := found.Mode
-	if mode == "" {
-		mode = contracts.ModeDuel
+	g.mu.RLock()
+	gone, missing := reconcilePlan(g.heldSince, g.finalizing, open, time.Now())
+	g.mu.RUnlock()
+	for _, matchID := range gone {
+		observability.Log("info", "match no longer runs here", map[string]any{"matchId": matchID})
+		g.release(matchID, "match ended")
 	}
-	runtime, ok := g.runtimes[mode]
-	if !ok {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "unsupported mode")
-	}
-	if found.MatchID == "" || len(found.Players) == 0 {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid match")
-	}
-	for _, playerID := range found.Players {
-		if strings.TrimSpace(playerID) == "" {
-			return httpx.PlainTextError(c, http.StatusBadRequest, "invalid match: blank player id")
+	for _, matchID := range missing {
+		if _, err := g.persist.EndMatch(ctx, matchID, matches.OutcomeInterrupted); err != nil {
+			observability.Log("warn", "ending lost match failed", map[string]any{"matchId": matchID, "error": err.Error()})
 		}
 	}
-	if len(found.PlannedRounds) == 0 || found.ResolvedMap.MapID == "" {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "match has no resolved round plan")
-	}
-	if _, err := runtime.GetSnapshot(found.MatchID); err == nil {
-		return httpx.JSON(c, http.StatusOK, map[string]string{"status": "exists"})
-	}
-	found.Config = contracts.NormalizeMatchConfig(found.Config)
-	g.plans.Set(found.MatchID, found.PlannedRounds)
-	if err := runtime.CreateMatch(found.MatchID, found.Players, found.Profiles, found.Unranked, found.SeasonID, found.Config, found.Teams); err != nil && !strings.Contains(err.Error(), "already exists") {
-		return httpx.PlainTextError(c, http.StatusBadGateway, err.Error())
-	}
-	if err := g.persist.RecordRuntimeMatch(req.Context(), found.MatchID, string(contracts.MatchLive), g.nodeEpoch, false); err != nil {
-		return httpx.PlainTextError(c, http.StatusBadGateway, "match persistence unavailable")
-	}
-	g.mu.Lock()
-	g.matchUsers[found.MatchID] = append([]string(nil), found.Players...)
-	g.matchModes[found.MatchID] = mode
-	g.mu.Unlock()
-	return httpx.JSON(c, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (g *gameplayNode) matchStatus(c echo.Context) error {
-	if subtleHeader(c.Request().Header.Get("X-Coordinator-Secret")) != g.coordAuth {
-		return httpx.PlainTextError(c, http.StatusForbidden, "forbidden")
+// reconcilePlan compares the matches a node holds with those the database says it runs. Gone are
+// held matches the database no longer gives the node, past a grace that covers a pickup still
+// committing and not while being recorded; missing are matches it gives the node that it lacks.
+func reconcilePlan(held map[string]time.Time, finalizing map[string]bool, open map[string]bool, now time.Time) (gone, missing []string) {
+	for matchID, since := range held {
+		if !open[matchID] && !finalizing[matchID] && now.Sub(since) > reconcileGrace {
+			gone = append(gone, matchID)
+		}
 	}
-	matchID := strings.TrimSpace(c.Param("id"))
-	if matchID == "" {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid match")
+	for matchID := range open {
+		if _, ok := held[matchID]; !ok {
+			missing = append(missing, matchID)
+		}
 	}
-	if _, ok := g.getSnapshot(matchID); !ok {
-		return httpx.PlainTextError(c, http.StatusNotFound, "match not found")
-	}
-	c.Response().WriteHeader(http.StatusOK)
-	return nil
+	sort.Strings(gone)
+	sort.Strings(missing)
+	return gone, missing
 }
 
-func (g *gameplayNode) terminateMatch(c echo.Context) error {
-	if subtleHeader(c.Request().Header.Get("X-Coordinator-Secret")) != g.coordAuth {
-		return httpx.PlainTextError(c, http.StatusForbidden, "forbidden")
+// dropAll lets every match go, as when the node's lease was lost.
+func (g *gameplayNode) dropAll() {
+	g.mu.RLock()
+	held := make([]string, 0, len(g.heldSince))
+	for matchID := range g.heldSince {
+		held = append(held, matchID)
 	}
-	matchID := strings.TrimSpace(c.Param("id"))
-	if matchID == "" {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid match")
+	g.mu.RUnlock()
+	for _, matchID := range held {
+		g.release(matchID, "match interrupted")
 	}
-	snap, ok := g.getSnapshot(matchID)
+}
+
+// admitting reports whether the node takes new matches.
+func (g *gameplayNode) admitting() bool {
+	return !g.drain.isDraining() && g.liveMatchCount() < maxMatchesOnNode
+}
+
+// pickupLoop takes waiting matches while the node admits them. A busier node waits a little longer
+// before each try, so idle nodes take most of them.
+func (g *gameplayNode) pickupLoop() {
+	for {
+		if !g.admitting() {
+			time.Sleep(pickupEvery)
+			continue
+		}
+		time.Sleep(min(time.Duration(g.liveMatchCount())*10*time.Millisecond, 500*time.Millisecond))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		picked, err := g.persist.PickUp(ctx, g.node(), g.startMatch)
+		cancel()
+		if err != nil {
+			observability.Log("warn", "match pickup failed", map[string]any{"error": err.Error()})
+			if picked != "" {
+				g.forget(picked)
+			}
+			picked = ""
+		}
+		if picked == "" {
+			time.Sleep(pickupEvery)
+		}
+	}
+}
+
+// startMatch creates a picked-up match in memory. It runs in the pickup's transaction: if it fails,
+// the match waits for another node.
+func (g *gameplayNode) startMatch(m matches.PickedUp) error {
+	spec, ok := matchkind.Lookup(m.Kind)
 	if !ok {
-		return httpx.PlainTextError(c, http.StatusNotFound, "match not found")
+		return errors.New("unknown match kind")
 	}
-	var payload struct {
-		UserID string `json:"userId"`
-	}
-	if err := json.NewDecoder(c.Request().Body).Decode(&payload); err != nil {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid payload")
-	}
-	if strings.TrimSpace(payload.UserID) == "" {
-		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid user")
-	}
-	if snap.Mode != contracts.ModeSingleplayer {
-		return httpx.PlainTextError(c, http.StatusConflict, "replacement unsupported")
-	}
-	runtime, ok := g.runtimeForMatch(matchID)
-	if !ok {
-		return httpx.PlainTextError(c, http.StatusNotFound, "match not found")
-	}
-	nextSnap, err := runtime.Forfeit(matchID, payload.UserID)
+	runtime := g.runtimes[spec.Engine]
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	rounds, err := g.maps.MatchRounds(ctx, m.MatchID)
 	if err != nil {
-		return httpx.PlainTextError(c, http.StatusBadGateway, err.Error())
+		return err
 	}
-	if nextSnap != nil && nextSnap.State == contracts.MatchEnded {
-		g.terminalize(matchID, nextSnap)
+	g.plans.Set(m.MatchID, rounds)
+	created := newMatch{MatchID: m.MatchID, Kind: m.Kind, Profiles: map[string]contracts.PlayerProfile{}, Teams: m.Spec.SeatTeams(), SeasonID: m.Spec.SeasonID, Config: m.Config}
+	for _, seat := range m.Spec.Seats {
+		created.Players = append(created.Players, seat.Profile.UserID)
+		created.Profiles[seat.Profile.UserID] = seat.Profile
 	}
-	return httpx.JSON(c, http.StatusOK, map[string]string{"status": "ok"})
+	if err := runtime.CreateMatch(created); err != nil {
+		g.plans.Delete(m.MatchID)
+		return err
+	}
+	now := time.Now()
+	g.mu.Lock()
+	g.matchUsers[m.MatchID] = created.Players
+	g.matchKinds[m.MatchID] = m.Kind
+	g.heldSince[m.MatchID] = now
+	g.lastPlayed[m.MatchID] = now
+	g.mu.Unlock()
+	return nil
 }
 
 func (g *gameplayNode) ws(c echo.Context) error {
 	req := c.Request()
-	nodePath := c.Param("node")
-	if nodePath == "" || nodePath != g.publicRoute {
-		return httpx.PlainTextError(c, http.StatusNotFound, "not found")
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(req.Header.Get(secretHeader))), []byte(g.internal)) != 1 {
+		return httpx.PlainTextError(c, http.StatusForbidden, "forbidden")
 	}
-	claims, err := gameticket.Validate(g.ticketAuth, strings.TrimSpace(c.QueryParam("ticket")))
-	if err != nil {
-		return httpx.PlainTextError(c, http.StatusUnauthorized, "unauthorized")
+	matchID := strings.TrimSpace(c.Param("id"))
+	userID := strings.TrimSpace(req.Header.Get(userHeader))
+	if matchID == "" || userID == "" {
+		return httpx.PlainTextError(c, http.StatusBadRequest, "invalid match")
 	}
-	if claims.Node != nodePath {
-		return httpx.PlainTextError(c, http.StatusUnauthorized, "wrong node")
-	}
-	matchID := claims.MatchID
-	userID := claims.Subject
 	runtime, ok := g.runtimeForMatch(matchID)
 	if !ok {
 		return httpx.PlainTextError(c, http.StatusNotFound, "match not found")
@@ -358,13 +426,12 @@ func (g *gameplayNode) ws(c echo.Context) error {
 	writeMu := &sync.Mutex{}
 	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(string) error {
-		g.touchPresence(userID)
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 
 	connID := shortID()
 	g.bindConnection(userID, matchID, connID, conn, writeMu)
-	g.touchPresence(userID)
+	g.played(matchID)
 	defer g.onDisconnect(userID, matchID, connID)
 
 	done := make(chan struct{})
@@ -385,10 +452,8 @@ func (g *gameplayNode) ws(c echo.Context) error {
 		}
 	}()
 
-	// Always send the initial snapshot, including for a match that has already
-	// ended in memory. Persistence can fail independently of the authoritative
-	// runtime; without this snapshot a reconnect receives ping acknowledgements
-	// but never leaves the client's awaiting-first-snapshot state.
+	// Always send the initial snapshot, including for a match that has already ended in memory:
+	// without it a reconnect never leaves the client's awaiting-first-snapshot state.
 	g.writeSnapshotToUser(userID, matchID, snap)
 	g.publishRuntimeState(matchID, snap, userID)
 
@@ -419,18 +484,20 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 		g.metrics.CommandLatencySeconds.WithLabelValues(cmd.Type).Observe(time.Since(start).Seconds())
 		g.metrics.CommandTotal.WithLabelValues(cmd.Type, status, errorCode).Inc()
 	}()
-	runtime, ok := g.runtimeForMatch(matchID)
-	if !ok {
-		status = "error"
-		errorCode = contracts.ErrMatchNotFound
-		ack.Status = "error"
-		ack.ErrorCode = contracts.ErrMatchNotFound
-		ack.Message = "match not found"
+	fail := func(code, message string) (contracts.CommandAck, *contracts.MatchSnapshot) {
+		status, errorCode = "error", code
+		ack.Status, ack.ErrorCode, ack.Message = "error", code, message
 		return ack, nil
 	}
-
+	runtime, ok := g.runtimeForMatch(matchID)
+	if !ok {
+		return fail(contracts.ErrMatchNotFound, "match not found")
+	}
+	if cmd.Type != "ping" && cmd.Type != "session.leave_match" {
+		g.played(matchID)
+	}
 	switch cmd.Type {
-	case "ping":
+	case "ping", "session.leave_match":
 		return ack, nil
 	case "guess.place", "guess.finalize":
 		snap, err := runtime.SubmitGuess(contracts.GuessPayload{
@@ -443,51 +510,28 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 			Finalize:       cmd.Type == "guess.finalize",
 		})
 		if err != nil {
-			status = "error"
-			errorCode = contracts.ErrMatchNotFound
-			ack.Status = "error"
-			ack.ErrorCode = contracts.ErrMatchNotFound
-			ack.Message = err.Error()
-			return ack, nil
+			return fail(contracts.ErrMatchNotFound, err.Error())
 		}
 		return ack, snap
 	case "team.ping":
 		if err := g.sendTeamPing(userID, matchID, strPayload(cmd.Payload, "roundId"), floatPayload(cmd.Payload, "lat"), floatPayload(cmd.Payload, "lng")); err != nil {
-			status, errorCode = "error", "invalid_team_ping"
-			ack.Status, ack.ErrorCode, ack.Message = "error", errorCode, err.Error()
+			return fail("invalid_team_ping", err.Error())
 		}
 		return ack, nil
 	case "round.advance":
 		snap, err := runtime.AdvanceRound(matchID, userID)
 		if err != nil {
-			status = "error"
-			errorCode = contracts.ErrMatchNotFound
-			ack.Status = "error"
-			ack.ErrorCode = contracts.ErrMatchNotFound
-			ack.Message = err.Error()
-			return ack, nil
+			return fail(contracts.ErrMatchNotFound, err.Error())
 		}
 		return ack, snap
 	case "match.forfeit":
 		snap, err := runtime.Forfeit(matchID, userID)
 		if err != nil {
-			status = "error"
-			errorCode = contracts.ErrMatchNotFound
-			ack.Status = "error"
-			ack.ErrorCode = contracts.ErrMatchNotFound
-			ack.Message = err.Error()
-			return ack, nil
+			return fail(contracts.ErrMatchNotFound, err.Error())
 		}
 		return ack, snap
-	case "session.leave_match":
-		return ack, nil
 	default:
-		status = "error"
-		errorCode = contracts.ErrMatchNotFound
-		ack.Status = "error"
-		ack.ErrorCode = contracts.ErrMatchNotFound
-		ack.Message = "unsupported command"
-		return ack, nil
+		return fail(contracts.ErrMatchNotFound, "unsupported command")
 	}
 }
 
@@ -534,7 +578,8 @@ func (g *gameplayNode) sendTeamPing(userID, matchID, roundID string, lat, lng fl
 func (g *gameplayNode) tick() {
 	t := time.NewTicker(1 * time.Second)
 	defer t.Stop()
-	for range t.C {
+	lastRetry := time.Now()
+	for now := range t.C {
 		changed := map[string]bool{}
 		for _, runtime := range g.runtimes {
 			for _, matchID := range runtime.Tick() {
@@ -542,15 +587,63 @@ func (g *gameplayNode) tick() {
 			}
 		}
 		for matchID := range changed {
-			runtime, ok := g.runtimeForMatch(matchID)
-			if !ok {
-				continue
+			if snap, ok := g.getSnapshot(matchID); ok {
+				g.publishRuntimeState(matchID, snap, "")
 			}
-			snap, err := runtime.GetSnapshot(matchID)
-			if err != nil {
-				continue
-			}
-			g.publishRuntimeState(matchID, snap, "")
+		}
+		if now.Sub(lastRetry) >= finalizationRetryEvery {
+			lastRetry = now
+			g.retryFinalization(changed)
+			g.endIdle(now)
+		}
+	}
+}
+
+const finalizationRetryEvery = 10 * time.Second
+
+// endIdle ends the matches nobody played for their kind's idle end, so an abandoned one does not
+// keep its players seated forever.
+func (g *gameplayNode) endIdle(now time.Time) {
+	type idle struct{ matchID, userID string }
+	var ended []idle
+	g.mu.RLock()
+	for matchID, players := range g.matchUsers {
+		after := matchkind.Of(g.matchKinds[matchID]).IdleEnd
+		if g.finalizing[matchID] || len(players) == 0 || after <= 0 {
+			continue
+		}
+		if now.Sub(g.lastPlayed[matchID]) >= after {
+			ended = append(ended, idle{matchID, players[0]})
+		}
+	}
+	g.mu.RUnlock()
+	for _, m := range ended {
+		runtime, ok := g.runtimeForMatch(m.matchID)
+		if !ok {
+			continue
+		}
+		snap, err := runtime.Abandon(m.matchID, m.userID)
+		if err != nil {
+			continue
+		}
+		g.publishRuntimeState(m.matchID, snap, "")
+	}
+}
+
+// retryFinalization finalizes ended matches again whose last attempt failed: an ended match stops
+// changing, so nothing else would, and it would stay on the node (and hold a drain) forever.
+func (g *gameplayNode) retryFinalization(justPublished map[string]bool) {
+	g.mu.RLock()
+	pending := make([]string, 0)
+	for matchID := range g.matchUsers {
+		if !justPublished[matchID] && !g.finalizing[matchID] {
+			pending = append(pending, matchID)
+		}
+	}
+	g.mu.RUnlock()
+	for _, matchID := range pending {
+		if snap, ok := g.getSnapshot(matchID); ok && snap.State == contracts.MatchEnded {
+			g.terminalize(matchID, snap)
 		}
 	}
 }
@@ -566,113 +659,74 @@ func (g *gameplayNode) publishRuntimeState(matchID string, snap *contracts.Match
 	g.broadcastState(matchID, snap, excludeUserID)
 }
 
+// terminalize records an ended match, which ends it in the database and frees its players' seats,
+// then lets it go.
 func (g *gameplayNode) terminalize(matchID string, snap *contracts.MatchSnapshot) {
 	if snap == nil {
 		return
 	}
-
 	g.mu.Lock()
-	players, ok := g.matchUsers[matchID]
-	if !ok || g.finalizing[matchID] {
+	if _, ok := g.matchUsers[matchID]; !ok || g.finalizing[matchID] {
 		g.mu.Unlock()
 		return
 	}
-	players = append([]string(nil), players...)
 	g.finalizing[matchID] = true
 	g.mu.Unlock()
 
-	finalized, err := g.persist.FinalizeMatch(*snap, g.nodeEpoch)
+	finalized, err := g.persist.FinalizeMatch(*snap)
 	if err != nil {
 		g.mu.Lock()
 		delete(g.finalizing, matchID)
 		g.mu.Unlock()
 		g.metrics.DBWriteFailures.Inc()
-		observability.Log("error", "match finalization failed", map[string]any{
-			"matchId": matchID,
-			"error":   err.Error(),
-		})
+		observability.Log("error", "match finalization failed", map[string]any{"matchId": matchID, "error": err.Error()})
 		return
 	}
 	g.broadcastState(matchID, &finalized, "")
+	g.forget(matchID)
+}
 
+// release lets a match go that the database no longer says this node runs, telling its players.
+func (g *gameplayNode) release(matchID, reason string) {
+	g.mu.RLock()
+	users := append([]string(nil), g.matchUsers[matchID]...)
+	g.mu.RUnlock()
+	message := websocket.FormatCloseMessage(websocket.CloseNormalClosure, reason)
+	for _, userID := range users {
+		g.mu.RLock()
+		conn, wm, mine := g.conns[userID], g.connWrite[userID], g.userMatch[userID] == matchID
+		g.mu.RUnlock()
+		if mine && conn != nil && wm != nil {
+			g.safeWriteControl(conn, wm, websocket.CloseMessage, message)
+			_ = conn.Close()
+		}
+	}
+	g.forget(matchID)
+}
+
+// forget removes a match from the node and its engine.
+func (g *gameplayNode) forget(matchID string) {
+	runtime, ok := g.runtimeForMatch(matchID)
 	g.mu.Lock()
+	players := g.matchUsers[matchID]
 	delete(g.finalizing, matchID)
 	delete(g.matchUsers, matchID)
-	delete(g.matchModes, matchID)
+	delete(g.matchKinds, matchID)
+	delete(g.heldSince, matchID)
+	delete(g.lastPlayed, matchID)
 	for _, userID := range players {
 		if g.userMatch[userID] == matchID {
 			delete(g.userMatch, userID)
 		}
 	}
 	g.mu.Unlock()
-
-	g.clearQueuedMatchArtifacts(players)
-	if err := g.coord.ClearAssignment(context.Background(), coordinator.Assignment{
-		MatchID: matchID,
-		Players: players,
-	}); err != nil {
-		log.Printf("clear assignment failed: %v", err)
+	if ok {
+		runtime.Remove(matchID)
 	}
-}
-
-func (g *gameplayNode) matchLeaseLoop() {
-	ticker := time.NewTicker(matchLeaseRenewEvery)
-	defer ticker.Stop()
-	for {
-		g.mu.RLock()
-		matchIDs := make([]string, 0, len(g.matchUsers))
-		for matchID := range g.matchUsers {
-			matchIDs = append(matchIDs, matchID)
-		}
-		g.mu.RUnlock()
-		if len(matchIDs) > 0 {
-			if err := g.persist.RenewMatchSessionLeases(g.nodeID, g.nodeEpoch, matchIDs, matchLeaseTTL); err != nil {
-				g.metrics.DBWriteFailures.Inc()
-			}
-		}
-		<-ticker.C
-	}
-}
-
-func (g *gameplayNode) clearQueuedMatchArtifacts(players []string) {
-	if len(players) == 0 {
-		return
-	}
-	keys := make([]string, 0, len(players)*2)
-	for _, userID := range players {
-		userID = strings.TrimSpace(userID)
-		if userID == "" {
-			continue
-		}
-		keys = append(keys, matchstore.QueueMatchKeysForUsers([]string{userID})...)
-	}
-	if len(keys) == 0 {
-		return
-	}
-	if err := g.redis.Del(context.Background(), keys...).Err(); err != nil {
-		log.Printf("clear queued match artifacts failed: %v", err)
-	}
-}
-
-func (g *gameplayNode) registerLoop() {
-	t := time.NewTicker(3 * time.Second)
-	defer t.Stop()
-	for {
-		g.refreshMaintenanceDrain()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err := g.coord.RegisterNode(ctx, coordinator.NodeRecord{
-			NodeID:        g.nodeID,
-			OwnerEpoch:    g.nodeEpoch,
-			PublicRoute:   g.publicRoute,
-			InternalURL:   g.internalURL,
-			ActiveMatches: g.activeMatchCount(),
-			Draining:      g.drain.isDraining(),
-		})
-		cancel()
-		if err != nil {
-			log.Printf("node registration failed: %v", err)
-		}
-		<-t.C
+	g.plans.Delete(matchID)
+	select {
+	case g.matchEnded <- struct{}{}:
+	default:
 	}
 }
 
@@ -693,50 +747,55 @@ func (g *gameplayNode) bindConnection(userID, matchID, connID string, conn *webs
 
 func (g *gameplayNode) runtimeForMatch(matchID string) (gameplayRuntime, bool) {
 	g.mu.RLock()
-	mode := g.matchModes[matchID]
+	kind, ok := g.matchKinds[matchID]
 	g.mu.RUnlock()
-	if mode == "" {
-		mode = contracts.ModeDuel
+	if !ok {
+		return nil, false
 	}
-	runtime, ok := g.runtimes[mode]
+	runtime, ok := g.runtimes[matchkind.Of(kind).Engine]
 	return runtime, ok
 }
 
 func (g *gameplayNode) getSnapshot(matchID string) (*contracts.MatchSnapshot, bool) {
-	g.mu.RLock()
-	mode := g.matchModes[matchID]
-	g.mu.RUnlock()
-	if mode != "" {
-		if runtime, ok := g.runtimes[mode]; ok {
-			snap, err := runtime.GetSnapshot(matchID)
-			return snap, err == nil
-		}
+	runtime, ok := g.runtimeForMatch(matchID)
+	if !ok {
+		return nil, false
 	}
-	for _, runtime := range g.runtimes {
-		snap, err := runtime.GetSnapshot(matchID)
-		if err == nil {
-			return snap, true
-		}
-	}
-	return nil, false
+	snap, err := runtime.GetSnapshot(matchID)
+	return snap, err == nil
 }
 
-func (g *gameplayNode) activeMatchCount() int {
+// liveMatchCount is the node's load: every match it holds, whatever its kind.
+func (g *gameplayNode) liveMatchCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	total := 0
-	for matchID := range g.matchUsers {
-		if contracts.IsPrivatePartyMode(g.matchModes[matchID]) {
-			total++
-		}
-	}
-	return total
+	return len(g.matchUsers)
 }
 
-func (g *gameplayNode) touchPresence(userID string) {
-	if err := g.coord.TouchPresence(context.Background(), userID); err != nil {
-		log.Printf("presence touch failed for %s: %v", userID, err)
+func (g *gameplayNode) played(matchID string) {
+	g.mu.Lock()
+	if _, ok := g.matchUsers[matchID]; ok {
+		g.lastPlayed[matchID] = time.Now()
 	}
+	g.mu.Unlock()
+}
+
+// matchesInUse counts the matches someone played within their kind's idle end, and says when the
+// first of them turns idle.
+func (g *gameplayNode) matchesInUse(now time.Time) (count int, nextIdle time.Time) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for matchID := range g.matchUsers {
+		idleAt := g.lastPlayed[matchID].Add(matchkind.Of(g.matchKinds[matchID]).IdleEnd)
+		if !now.Before(idleAt) {
+			continue
+		}
+		count++
+		if nextIdle.IsZero() || idleAt.Before(nextIdle) {
+			nextIdle = idleAt
+		}
+	}
+	return count, nextIdle
 }
 
 func (g *gameplayNode) onDisconnect(userID, matchID, connID string) {
@@ -750,11 +809,9 @@ func (g *gameplayNode) onDisconnect(userID, matchID, connID string) {
 	delete(g.connID, userID)
 	g.metrics.ConnectedUsers.Set(float64(len(g.conns)))
 	g.mu.Unlock()
-	if matchID != "" {
-		if runtime, ok := g.runtimeForMatch(matchID); ok {
-			if snap, err := runtime.MarkDisconnected(matchID, userID); err == nil {
-				g.broadcastState(matchID, snap, "")
-			}
+	if runtime, ok := g.runtimeForMatch(matchID); ok {
+		if snap, err := runtime.MarkDisconnected(matchID, userID); err == nil {
+			g.broadcastState(matchID, snap, "")
 		}
 	}
 }
@@ -844,42 +901,58 @@ func (g *gameplayNode) healthReady(c echo.Context) error {
 	if g.drain.isStopping() {
 		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "draining")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := g.redis.Ping(ctx).Err(); err != nil {
-		return httpx.PlainTextError(c, http.StatusServiceUnavailable, "redis not ready")
-	}
 	c.Response().WriteHeader(http.StatusOK)
 	_, _ = c.Response().Write([]byte("ready"))
 	return nil
 }
 
-func (g *gameplayNode) handleShutdown(srv *http.Server) {
+// handleShutdown drains the node: it takes no new matches, waits until none is in use (the
+// deadline is only a backstop), then asks the sockets left to reconnect, gives up its lease so its
+// matches read as interrupted at once, and stops.
+func (g *gameplayNode) handleShutdown(srv *http.Server, drained chan<- struct{}) {
+	defer close(drained)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
 
 	<-sigCh
 	deadline := g.drain.startShutdown(time.Now()).Add(g.drainTTL)
-	registerCtx, registerCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	if err := g.coord.RegisterNode(registerCtx, coordinator.NodeRecord{
-		NodeID:        g.nodeID,
-		OwnerEpoch:    g.nodeEpoch,
-		PublicRoute:   g.publicRoute,
-		InternalURL:   g.internalURL,
-		ActiveMatches: g.activeMatchCount(),
-		Draining:      true,
-	}); err != nil {
-		log.Printf("node drain registration failed: %v", err)
-	}
-	registerCancel()
 
-	for time.Now().Before(deadline) {
-		if g.activeMatchCount() == 0 {
+	// Matches nobody played within their idle end don't hold the drain; they end with the node.
+	backstop := time.NewTimer(time.Until(deadline))
+	defer backstop.Stop()
+wait:
+	for {
+		inUse, nextIdle := g.matchesInUse(time.Now())
+		if inUse == 0 {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		turnsIdle := time.NewTimer(time.Until(nextIdle))
+		select {
+		case <-g.matchEnded:
+		case <-turnsIdle.C:
+		case <-backstop.C:
+			turnsIdle.Stop()
+			observability.Log("warn", "drain deadline passed with matches in use", map[string]any{
+				"nodeId":  g.nodeID,
+				"matches": inUse,
+			})
+			break wait
+		}
+		turnsIdle.Stop()
 	}
+	if left := g.liveMatchCount(); left > 0 {
+		observability.Log("info", "drain leaves idle matches to end with the node", map[string]any{"nodeId": g.nodeID, "matches": left})
+	}
+	g.closeConnections()
+	g.mu.RLock()
+	lease := g.lease
+	g.mu.RUnlock()
+	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := g.leases.Release(releaseCtx, lease); err != nil {
+		log.Printf("node lease release failed: %v", err)
+	}
+	releaseCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -888,22 +961,19 @@ func (g *gameplayNode) handleShutdown(srv *http.Server) {
 	}
 }
 
-func redisFromEnv() (*redis.Client, func(), error) {
-	url := envcfg.Get("REDIS_URL", "")
-	if url == "" {
-		return nil, nil, errors.New("REDIS_URL is required")
+// closeConnections asks every socket still open to reconnect: Shutdown doesn't close WebSockets.
+func (g *gameplayNode) closeConnections() {
+	g.mu.RLock()
+	conns := make(map[*websocket.Conn]*sync.Mutex, len(g.conns))
+	for userID, conn := range g.conns {
+		conns[conn] = g.connWrite[userID]
 	}
-	opt, err := redis.ParseURL(url)
-	if err != nil {
-		return nil, nil, err
+	g.mu.RUnlock()
+	message := websocket.FormatCloseMessage(websocket.CloseServiceRestart, "restarting")
+	for conn, wm := range conns {
+		g.safeWriteControl(conn, wm, websocket.CloseMessage, message)
+		_ = conn.Close()
 	}
-	rdb := redis.NewClient(opt)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, nil, err
-	}
-	return rdb, func() { _ = rdb.Close() }, nil
 }
 
 func shortID() string {
@@ -912,8 +982,11 @@ func shortID() string {
 	return hex.EncodeToString(b)
 }
 
-func subtleHeader(value string) string {
-	return strings.TrimSpace(value)
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func strPayload(m map[string]any, key string) string {

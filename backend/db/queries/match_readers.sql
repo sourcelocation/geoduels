@@ -1,5 +1,5 @@
 -- name: GetFinalMatchSnapshot :one
-select replay_zstd, coalesce(replay_codec, 0)::int AS replay_codec, coalesce(replay_uncompressed_bytes, 0) AS replay_uncompressed_bytes, replay_sha256, replay_json
+select replay_zstd, coalesce(replay_codec, 0)::int AS replay_codec, coalesce(replay_uncompressed_bytes, 0) AS replay_uncompressed_bytes, replay_sha256, replay_json, mode, ranked
 from match_history where match_id = $1 and (replay_expires_at is null or replay_expires_at > now()) limit 1;
 
 -- One query covering every (ranked filter, cursor) combination. ranked_only

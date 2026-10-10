@@ -54,7 +54,8 @@ export type AppBootstrapPayload = {
   preferences: { revision: number; value: unknown } | null;
   activity: {
     currentParty?: { id: string; inviteCode: string } | null;
-    activeMatch: { status: "match"; matchId: string; mode?: string } | null;
+    // The open match the player can return to, of any kind.
+    activeMatch: { matchId: string; kind?: string; mode?: string; status?: "starting" | "live" } | null;
     notifications: UserNotification[];
   };
   global: {
@@ -115,6 +116,7 @@ export async function requestRefreshSession(config: RuntimeConfig): Promise<Auth
   return resp.json();
 }
 
+/** A notification the server wrote, shown once on whichever device sees it first. */
 export type UserNotification = {
   id: number;
   type: string;
@@ -135,54 +137,36 @@ export type UserNotification = {
     matchId?: string;
     requestId?: string;
     invitationId?: string;
-    actorUserId?: string;
     expiresAt?: string;
-    cheaterUserId?: string;
-    mmrBefore?: number;
-    mmrAfter?: number;
+    reason?: string;
+    withdrawn?: boolean;
+    nicknameReset?: string;
   };
   actorUserId?: string;
   actorDisplayName?: string;
-  readAt?: string;
   createdAt: string;
 };
 
-export async function requestUserNotifications(
+/** The notifications no device has shown yet, oldest first. */
+export async function requestUnseenNotifications(
   config: RuntimeConfig,
   accessToken: string,
-  filter: "unread" | "all" = "unread",
-  options?: { limit?: number; beforeId?: number },
-): Promise<{ notifications: UserNotification[] }> {
-  const query = new URLSearchParams();
-  if (filter === "all") query.set("filter", "all");
-  if (options?.limit) query.set("limit", String(options.limit));
-  if (options?.beforeId) query.set("beforeId", String(options.beforeId));
-  const suffix = query.size ? `?${query.toString()}` : "";
-  const resp = await apiFetch(config, `/api/me/notifications${suffix}`, {
+): Promise<UserNotification[]> {
+  const resp = await apiFetch(config, "/api/me/notifications", {
     headers: authHeaders(accessToken),
   });
-  if (!resp.ok) {
-    return { notifications: [] };
-  }
-  return resp.json();
+  if (!resp.ok) throw new Error(await readError(resp, "Notifications unavailable"));
+  const body = (await resp.json()) as { notifications?: UserNotification[] };
+  return body.notifications || [];
 }
 
-export async function markAllUserNotificationsRead(
-  config: RuntimeConfig,
-  accessToken: string,
-) {
-  await apiFetch(config, "/api/me/notifications/read-all", {
-    method: "POST",
-    headers: authHeaders(accessToken),
-  });
-}
-
-export async function markUserNotificationRead(
+/** Records that this device showed a notification, so no other shows it again. */
+export async function markNotificationSeen(
   config: RuntimeConfig,
   accessToken: string,
   notificationId: number,
 ) {
-  await apiFetch(
+  const resp = await apiFetch(
     config,
     `/api/me/notifications/${encodeURIComponent(notificationId)}/read`,
     {
@@ -190,6 +174,7 @@ export async function markUserNotificationRead(
       headers: authHeaders(accessToken),
     },
   );
+  if (!resp.ok) throw new Error(await readError(resp, "Notification could not be marked seen"));
 }
 
 export async function requestSupportDonation(

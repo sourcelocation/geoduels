@@ -215,9 +215,8 @@ func FromParts(code, level, extra int16, owned bool) contracts.PlayerBadge {
 }
 
 func notifyBadgeUnlock(ctx context.Context, tx pgx.Tx, userID string, badge contracts.PlayerBadge) (bool, error) {
-	var notificationID int64
 	key := "badge_unlocked:" + userID + ":" + badge.ID + ":" + strconv.Itoa(badge.Level)
-	if err := storekit.UpsertUserNotificationTx(ctx, tx, userID, "badge_unlocked", key, map[string]any{"badge": badge}, "", &notificationID); err != nil {
+	if _, err := storekit.UpsertUserNotificationTx(ctx, tx, userID, "badge_unlocked", key, map[string]any{"badge": badge}, "", time.Time{}); err != nil {
 		return false, err
 	}
 	return true, nil

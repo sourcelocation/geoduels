@@ -96,7 +96,6 @@ const geometryExceptions = new Map(Object.entries({
   "features/lobby/components/maps/MapPickerModal.tsx": ["max-w-[1040px]", "grid-cols-[190px_minmax(0,1fr)]", "max-h-[56vh]"],
   "features/lobby/components/modals/InviteModal.tsx": ["min-h-[46px]"],
   "features/matchmaking/components/QueueCard.tsx": ["max-w-[540px]", "bg-[url('/mountains.v1.svg')]"],
-  "features/notifications/components/NotificationCenter.tsx": ["w-[min(92vw,25rem)]", "max-h-[70vh]"],
   "features/players/components/PlayerProfilePage.tsx": ["min-h-[520px]"],
   "features/players/components/PlayerProfilePrimitives.tsx": ["grid-cols-[minmax(0,1fr)_auto]", "grid-cols-[minmax(180px,0.85fr)_minmax(160px,1fr)_120px_24px]", "min-w-[90px]"],
   "features/players/components/IconMetric.tsx": ["grid-cols-[42px_minmax(0,1fr)]", "grid-cols-[48px_minmax(0,1fr)]"],

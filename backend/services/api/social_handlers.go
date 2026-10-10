@@ -110,7 +110,7 @@ func (a *api) sendFriendRequest(c echo.Context) error {
 		return writeSocialStoreError(c, err)
 	}
 	targetID := strings.TrimSpace(body.UserID)
-	a.publishSocialLive(targetID, "friend_request_received", userID, targetID)
+	a.liveInvalidate(userID, targetID)
 	return writeJSONStatus(c, http.StatusCreated, item)
 }
 
@@ -236,7 +236,7 @@ func (a *api) sendFriendCodeRequest(c echo.Context) error {
 	if err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.publishSocialLive(player.UserID, "friend_request_received", userID, player.UserID)
+	a.liveInvalidate(userID, player.UserID)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -266,7 +266,7 @@ func (a *api) partyInvitations(c echo.Context) error {
 	if err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.publishSocialLive(body.UserID, "party_invitation_received", userID, body.UserID)
+	a.liveInvalidate(userID, body.UserID)
 	return writeJSONStatus(c, http.StatusCreated, item)
 }
 
@@ -294,7 +294,7 @@ func (a *api) createPartyAndInvite(c echo.Context) error {
 		_, _ = a.parties.LeaveParty(party.ID, userID)
 		return writeSocialStoreError(c, err)
 	}
-	a.publishSocialLive(body.UserID, "party_invitation_received", userID, body.UserID)
+	a.liveInvalidate(userID, body.UserID)
 	return writeJSONStatus(c, http.StatusCreated, map[string]any{
 		"invitation": invitation,
 		"party":      party,
@@ -317,16 +317,6 @@ func (a *api) respondPartyInvitation(c echo.Context) error {
 	}
 	a.liveInvalidate(userID)
 	return writeJSON(c, item)
-}
-
-func (a *api) publishSocialLive(notifyUserID, notificationType string, invalidate ...string) {
-	if a.live == nil {
-		return
-	}
-	if notifyUserID != "" && notificationType != "" {
-		a.live.publishLatestNotification(notifyUserID, notificationType)
-	}
-	a.live.publishInvalidate(invalidate...)
 }
 
 func (a *api) liveInvalidate(userIDs ...string) {

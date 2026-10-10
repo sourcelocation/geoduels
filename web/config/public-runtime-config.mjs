@@ -1,7 +1,6 @@
 // Explicit browser-safe allowlist. Never serialize the entire environment.
 export const publicConfigKeys = [
-  'NEXT_PUBLIC_SITE_URL', 'NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_QUEUE_URL',
-  'NEXT_PUBLIC_REALTIME_URL', 'NEXT_PUBLIC_GOOGLE_CLIENT_ID',
+  'NEXT_PUBLIC_SITE_URL', 'NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_GOOGLE_CLIENT_ID',
   'NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS', 'NEXT_PUBLIC_DISCORD_CLIENT_ID',
   'NEXT_PUBLIC_TURNSTILE_SITE_KEY', 'NEXT_PUBLIC_GOOGLE_EMBED_KEY',
   'NEXT_PUBLIC_APP_VERSION'
@@ -14,16 +13,13 @@ export function resolvePublicConfig(env, development = false) {
   }));
   config.NEXT_PUBLIC_SITE_URL ||= development ? 'http://localhost:3000' : '';
   config.NEXT_PUBLIC_API_URL ||= development ? 'http://localhost:8080' : config.NEXT_PUBLIC_SITE_URL;
-  config.NEXT_PUBLIC_QUEUE_URL ||= development ? 'http://localhost:8090' : config.NEXT_PUBLIC_SITE_URL;
-  config.NEXT_PUBLIC_REALTIME_URL ||= development ? 'ws://localhost:8092' : config.NEXT_PUBLIC_SITE_URL;
   config.NEXT_PUBLIC_APP_VERSION ||= (env.NEXT_PUBLIC_GIT_SHA || 'dev').slice(0, 12);
   return config;
 }
 
 export function validatePublicConfig(config) {
-  for (const key of publicConfigKeys.slice(0, 4)) {
-    const protocols = key === 'NEXT_PUBLIC_REALTIME_URL'
-      ? ['http:', 'https:', 'ws:', 'wss:'] : ['http:', 'https:'];
+  for (const key of publicConfigKeys.slice(0, 2)) {
+    const protocols = ['http:', 'https:'];
     let url;
     try { url = new URL(config[key]); } catch { /* Report the configuration key below. */ }
     if (!url || !protocols.includes(url.protocol) || url.username || url.password || url.search || url.hash) {

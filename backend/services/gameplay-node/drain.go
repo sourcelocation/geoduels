@@ -57,9 +57,9 @@ func (d *gameplayDrain) isStopping() bool {
 func (g *gameplayNode) refreshMaintenanceDrain() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	status, err := maintenance.Read(ctx, g.redis)
+	status, err := g.readMaintenance(ctx)
 	if err != nil {
-		// Keep the last known drain state if Redis is temporarily unavailable.
+		// Keep the last known drain state if the database is briefly unavailable.
 		log.Printf("node maintenance read failed: %v", err)
 		return
 	}

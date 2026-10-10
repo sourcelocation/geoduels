@@ -11,6 +11,7 @@ import { HotkeyProvider } from '../features/hotkeys/components/HotkeyProvider';
 import { AuthProvider } from '../features/auth/components/AuthProvider';
 import { AppActivityProvider } from '../features/app-shell/components/AppActivityProvider';
 import { AppNoticeProvider } from '../components/ui/AppNotice';
+import { Notifications } from '../features/notifications/components/Notifications';
 import { WarningPrompt } from '../features/notifications/components/WarningPrompt';
 import 'leaflet/dist/leaflet.css';
 import 'easymde/dist/easymde.min.css';
@@ -54,6 +55,7 @@ export default function App({ Component, pageProps, runtimeConfig }: AppPropsWit
                 <HotkeyProvider>
                   <AppNoticeProvider>
                     {getLayout(<Component {...pageProps} />)}
+                    <Notifications />
                     <WarningPrompt />
                   </AppNoticeProvider>
                 </HotkeyProvider>

@@ -1,6 +1,7 @@
-import type {
-  RoundResultOverlayProps,
-  Snapshot,
+import {
+  isRatedKind,
+  type RoundResultOverlayProps,
+  type Snapshot,
 } from "../../game/model/types";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { getMatchReturnDestination } from "../../matchmaking/lib/match-return";
@@ -312,7 +313,7 @@ export function deriveHomeModel({
       : 100;
   const matchOutcome: "win" | "lose" | "draw" =
     selfHP === oppHP ? "draw" : selfHP > oppHP ? "win" : "lose";
-  const isRankedDuel = mode === "duel" && !snapshot?.unranked;
+  const isRankedDuel = mode === "duel" && isRatedKind(snapshot?.kind);
   const { selfRatingDelta, opponentRatingDelta } = deriveDuelRatingDeltas({
     snapshot,
     selfUserId: selfId,
@@ -496,7 +497,6 @@ export function deriveHomeModel({
     },
     overlays: {
       nicknameRequiredOpen: auth.nicknameRequired && !!auth.userId,
-      notifications: [],
       guestVerification: {
         open: false,
         siteKey: "",

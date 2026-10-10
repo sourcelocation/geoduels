@@ -321,12 +321,12 @@ func (a *PGStore) SaveRefund(ctx context.Context, award RefundAward) (bool, erro
 	if tag == 0 {
 		return false, nil
 	}
-	var notificationID int64
 	payload := map[string]any{
 		"refundDelta": award.Delta, "matchId": award.MatchID, "cheaterUserId": award.CheaterID,
 		"reason": award.Reason, "mmrBefore": award.Before, "mmrAfter": award.After,
 	}
-	if err := storekit.UpsertUserNotificationTx(ctx, a.tx, award.UserID, "mmr_refund", fmt.Sprintf("mmr_refund:%s:%s:%s", award.UserID, award.MatchID, award.CheaterID), payload, "", &notificationID); err != nil {
+	notificationID, err := storekit.UpsertUserNotificationTx(ctx, a.tx, award.UserID, "mmr_refund", fmt.Sprintf("mmr_refund:%s:%s:%s", award.UserID, award.MatchID, award.CheaterID), payload, "", time.Time{})
+	if err != nil {
 		return false, err
 	}
 	if err := q.SetEloRefundNotification(ctx, db.SetEloRefundNotificationParams{UserID: opponentUUID, MatchID: matchUUID, CheaterUserID: cheaterUUID, NotificationID: pgtype.Int8{Int64: notificationID, Valid: true}}); err != nil {
@@ -343,10 +343,10 @@ func (a *PGStore) notifyAccountEnforcement(ctx context.Context, userID, action, 
 	if action == "unban" {
 		notificationType = "account_unbanned"
 	}
-	var notificationID int64
-	return storekit.UpsertUserNotificationTx(ctx, a.tx, userID, notificationType, fmt.Sprintf("%s:%d", notificationType, moderationLogID), map[string]any{
+	_, err := storekit.UpsertUserNotificationTx(ctx, a.tx, userID, notificationType, fmt.Sprintf("%s:%d", notificationType, moderationLogID), map[string]any{
 		"reason": strings.TrimSpace(reason), "action": action, "moderationLogId": moderationLogID, "endsAt": nil,
-	}, "", &notificationID)
+	}, "", time.Time{})
+	return err
 }
 
 func (a *PGStore) notifyReportersOfBan(ctx context.Context, subjectUserID, action string, logID int64) error {
@@ -356,10 +356,9 @@ func (a *PGStore) notifyReportersOfBan(ctx context.Context, subjectUserID, actio
 	}
 	for _, row := range rows {
 		reporterID := storekit.UUIDVal(row)
-		var notificationID int64
-		if err := storekit.UpsertUserNotificationTx(ctx, a.tx, reporterID, "reported_player_banned", fmt.Sprintf("reported_player_banned:%d:%s", logID, reporterID), map[string]any{
+		if _, err := storekit.UpsertUserNotificationTx(ctx, a.tx, reporterID, "reported_player_banned", fmt.Sprintf("reported_player_banned:%d:%s", logID, reporterID), map[string]any{
 			"action": action, "moderationLogId": logID,
-		}, "", &notificationID); err != nil {
+		}, "", time.Time{}); err != nil {
 			return err
 		}
 	}

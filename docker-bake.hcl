@@ -40,9 +40,7 @@ target "backend" {
     service = [
       "api",
       "discord-worker",
-      "match-coordinator",
       "moderation-worker",
-      "realtime-gateway",
       "gameplay-node",
     ]
   }

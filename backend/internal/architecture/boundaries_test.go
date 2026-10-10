@@ -28,9 +28,10 @@ var queryOwners = map[string]string{
 	"content.sql": "content", "controlplane.sql": "controlplane", "curation.sql": "curation", "leaderboard.sql": "leaderboard",
 	"map_comments.sql": "maps", "map_identity.sql": "maps", "map_ingest.sql": "maps", "map_match_plans.sql": "maps",
 	"map_revisions.sql": "maps", "map_settings.sql": "maps", "map_stats.sql": "maps", "map_trust.sql": "maps", "maps.sql": "maps",
-	"match_readers.sql": "matches", "match_sessions.sql": "matches", "match_writes.sql": "matches", "runtime_matches.sql": "matches",
+	"match_readers.sql": "matches", "match_sessions.sql": "matches", "match_writes.sql": "matches",
 	"moderation_enforcement.sql": "moderation", "moderation_review.sql": "moderation", "moderation_v2.sql": "moderation", "warnings.sql": "moderation",
 	"notifications.sql": "notifications", "parties.sql": "parties", "preferences.sql": "preferences", "profiles.sql": "profiles",
+	"notify.sql": "*", "queue.sql": "queue", "rate_limits.sql": "*",
 	"settings.sql": "*", "social.sql": "social", "staff.sql": "staff", "storage_cleanup.sql": "storage",
 }
 
@@ -47,7 +48,7 @@ var queryExceptions = map[string][]string{
 	"profiles": {"GetLeaderboardTotals"},
 	"seasons": {"EnsureRankedSeasonSettings", "GetRankedSeasonSettings", "GetRankedSeasonSettingsForUpdate", "ListRankedSeasonFinishers",
 		"SeedRankedSeasonRanks", "SeedRankedSeasonStats", "WriteRankedSeasonSettings"},
-	"social": {"GetSocialAccount", "GetSocialSettings", "TouchLastSeen", "UpdateSocialSettings"},
+	"social": {"GetSocialAccount", "GetSocialSettings", "UpdateSocialSettings"},
 }
 
 // allowedImports lists, per module, the other domain modules it may import.

@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 
 	"geoduels/internal/accounts"
 	"geoduels/internal/authsession"
 	"geoduels/internal/badges"
+	"geoduels/internal/chat"
 	"geoduels/internal/content"
 	"geoduels/internal/curation"
 	"geoduels/internal/jobs"
@@ -27,21 +27,20 @@ import (
 	"geoduels/internal/parties"
 	preferencesdomain "geoduels/internal/preferences"
 	"geoduels/internal/profiles"
+	"geoduels/internal/queue"
 	"geoduels/internal/seasons"
 	socialdomain "geoduels/internal/social"
 	staffctx "geoduels/internal/staff"
 	"geoduels/pkg/auth"
-	"geoduels/pkg/contracts"
-	"geoduels/pkg/coordinator"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
+	"geoduels/pkg/pgnotify"
 )
 
 type api struct {
 	staff                  *staffctx.Service
 	moderation             *moderation.Service
 	curation               *curation.Service
-	matchCoordinator       string
 	db                     *persistence.DB
 	accounts               *accounts.Service
 	sessions               authsession.Store
@@ -51,7 +50,6 @@ type api struct {
 	content                *content.Service
 	seasons                *seasons.Service
 	gameplayMaps           maps.Store
-	runtimeStore           matches.Store
 	parties                *parties.Service
 	social                 *socialdomain.Service
 	maps                   *maps.Service
@@ -60,8 +58,10 @@ type api struct {
 	leaderboardService     *leaderboard.Service
 	notificationService    *notifications.Service
 	authSessionService     *authsession.Service
-	coord                  *coordinator.Store
-	redis                  *redis.Client
+	presence               *profiles.PGStore
+	queue                  *queue.PGStore
+	chat                   chat.Store
+	events                 *pgnotify.Hub
 	httpClient             *http.Client
 	googleVerifier         *auth.GoogleVerifier
 	googleClientID         string
@@ -76,7 +76,6 @@ type api struct {
 	stripeLiveWebhook      string
 	stripeLegacyWebhook    string
 	appAuthSecret          []byte
-	ticketAuth             []byte
 	internalSecret         string
 	accessTokenTTL         time.Duration
 	refreshTokenTTL        time.Duration
@@ -96,7 +95,9 @@ type api struct {
 	metrics                *observability.APIMetrics
 	globalStatus           *globalStatusHub
 	live                   *liveHub
-	lastSeen               lastSeenWriter
+	presenceWrites         presenceThrottle
+	chatLimits             chatRateLimiter
+	proxied                proxiedSockets
 	draining               atomic.Bool
 }
 
@@ -105,7 +106,7 @@ func newAPI() (*api, error) {
 	if err != nil {
 		return nil, err
 	}
-	rdb, _, err := redisFromEnv()
+	listenURL, err := persistence.ListenURL()
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -134,11 +135,6 @@ func newAPI() (*api, error) {
 		store.Close()
 		return nil, err
 	}
-	ticketAuth, err := requiredSecret("GAMEPLAY_TICKET_SECRET", 32)
-	if err != nil {
-		store.Close()
-		return nil, err
-	}
 	internalSecret := strings.TrimSpace(os.Getenv("COORDINATOR_INTERNAL_SECRET"))
 	if internalSecret == "" {
 		store.Close()
@@ -155,22 +151,13 @@ func newAPI() (*api, error) {
 		store.Close()
 		return nil, errors.New("TURNSTILE_SECRET_KEY is required when TURNSTILE_GUEST_REQUIRED=true")
 	}
-	singleplayerTTL := getenvDuration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
 	pool := store.Pool()
 	mapsStore := maps.NewPGStore(pool)
 	matchStore := matches.NewPGStore(pool, nil)
 	partyStore := parties.NewPGStore(pool, mapsStore)
 	partyService := parties.NewService(partyStore)
-	if err := matchStore.ExpireStaleRuntimeMatches(context.Background(), string(contracts.ModeSingleplayer), singleplayerTTL); err != nil {
-		store.Close()
-		return nil, err
-	}
-	if err := partyService.ExpireOpenParties(); err != nil {
-		store.Close()
-		return nil, err
-	}
 	socialStore := socialdomain.NewPGStore(pool)
-	jobsClient, err := jobs.NewClient(pool, nil, nil)
+	jobsClient, err := jobs.NewClient(pool, "", nil, nil)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -185,7 +172,6 @@ func newAPI() (*api, error) {
 		staff:                  staffctx.NewService(staffctx.NewPGStore(pool)),
 		moderation:             moderation.NewService(moderation.NewPGStore(pool, jobsClient), moderation.NewRiskEngineFromEnv()),
 		curation:               curation.NewService(curation.NewPGStore(pool)),
-		matchCoordinator:       getenv("MATCH_COORDINATOR_URL", getenv("QUEUE_COORDINATOR_URL", "http://localhost:8090")),
 		db:                     store,
 		accounts:               accountsService,
 		sessions:               authsession.NewPGStore(pool),
@@ -195,18 +181,18 @@ func newAPI() (*api, error) {
 		content:                content.NewService(contentStore),
 		seasons:                seasons.NewService(seasonStore),
 		gameplayMaps:           mapsStore,
-		runtimeStore:           matchStore,
 		parties:                partyService,
 		social:                 socialdomain.NewService(socialStore),
 		maps:                   mapsService,
 		mapsStore:              mapsStore,
-		lastSeen:               socialStore,
 		preferences:            preferencesdomain.NewService(preferencesdomain.NewPGStore(pool)),
 		leaderboardService:     leaderboard.NewService(leaderboard.NewPGStore(pool)),
 		notificationService:    notifications.NewService(notifications.NewPGStore(pool)),
 		authSessionService:     authsession.NewService(authsession.NewPGStore(pool)),
-		coord:                  coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
-		redis:                  rdb,
+		presence:               profiles.NewPGStore(pool),
+		queue:                  queue.NewPGStore(pool),
+		chat:                   chat.NewPGStore(pool),
+		events:                 pgnotify.NewHub(listenURL),
 		httpClient:             &http.Client{Timeout: 3 * time.Second},
 		googleVerifier:         googleVerifier,
 		googleClientID:         googleClientID,
@@ -221,7 +207,6 @@ func newAPI() (*api, error) {
 		stripeLiveWebhook:      stripeLiveWebhook,
 		stripeLegacyWebhook:    stripeLegacyWebhook,
 		appAuthSecret:          appAuthSecret,
-		ticketAuth:             ticketAuth,
 		internalSecret:         internalSecret,
 		accessTokenTTL:         getenvDuration("APP_ACCESS_TOKEN_TTL", 15*time.Minute),
 		refreshTokenTTL:        getenvDuration("APP_REFRESH_TOKEN_TTL", 30*24*time.Hour),
@@ -240,10 +225,12 @@ func newAPI() (*api, error) {
 		adminBootstrapEmails:   parseEmailAllowlist(os.Getenv("ADMIN_BOOTSTRAP_EMAILS")),
 		metrics:                observability.NewAPIMetrics(),
 	}
+	go instance.events.Run(context.Background())
 	instance.globalStatus = newGlobalStatusHub(instance)
 	instance.globalStatus.start()
 	instance.live = newLiveHub(instance)
 	instance.live.start()
+	go instance.runMatchmaker()
 	return instance, nil
 }
 
@@ -326,12 +313,17 @@ func routes(a *api) *echo.Echo {
 	e.GET("/api/players/:nickname/relationship", a.playerRelationship)
 	e.GET("/api/player-search", a.socialPlayerSearch)
 	e.GET("/api/matches/:id", a.match)
-	e.GET("/api/matches/:id/bootstrap", a.matchBootstrap)
-	e.GET("/api/matches/:id/route", a.matchRoute)
-	e.GET("/api/matches/:id/session", a.matchSession, a.active)
 	e.POST("/api/matches/:id/reports", a.createMatchReport, a.active)
-	e.POST("/api/sessions", a.startSession, a.active)
-	e.POST("/api/singleplayer/session", a.startSingleplayerSession, a.active)
+	e.POST("/api/v2/matches", a.createMatch, a.active)
+	e.GET("/api/v2/matches/:id", a.getMatchView)
+	e.GET("/api/v2/matches/:id/bootstrap", a.matchBootstrap)
+	e.GET("/api/v2/matches/:id/ws", a.matchSocket)
+	e.GET("/api/v2/me/match", a.myMatch)
+	e.GET("/api/v2/queue/ws", a.queueSocket)
+	e.POST("/api/v2/parties", a.createParty)
+	e.POST("/api/v2/parties/:code/join", a.joinParty)
+	e.GET("/api/v2/parties/:id/ws", a.partyWS)
+	e.GET("/api/v2/chat/ws", a.chatWS)
 	e.GET("/api/maps", a.listMaps)
 	e.POST("/api/maps", a.createMap, a.active)
 	e.GET("/api/maps/quota", a.mapUploadQuota)

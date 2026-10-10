@@ -218,6 +218,13 @@ func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, erro
 
 func (e *Engine) Tick() {}
 
+// Remove forgets a session, once it is recorded or no longer this engine's.
+func (e *Engine) Remove(matchID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.sessions, matchID)
+}
+
 func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -325,6 +332,7 @@ func (s *Session) snapshot() *contracts.MatchSnapshot {
 	return &contracts.MatchSnapshot{
 		MatchID:         s.ID,
 		Mode:            contracts.ModeSingleplayer,
+		Kind:            contracts.KindSolo,
 		State:           s.State,
 		Phase:           phase,
 		RoundPhase:      roundPhase,

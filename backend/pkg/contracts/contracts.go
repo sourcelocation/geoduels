@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-
 	"geoduels/pkg/maintenance"
 )
 
@@ -66,10 +64,6 @@ const (
 	MinPartyMembers            = 2
 	MaxPartyMembers            = 64
 )
-
-func IsPrivatePartyMode(mode MatchMode) bool {
-	return mode == ModeDuel || mode == ModeTeamDuel || mode == ModeFreeForAll
-}
 
 type GameRuleset = string
 
@@ -340,9 +334,9 @@ type RoundResult struct {
 type MatchSnapshot struct {
 	MatchID         string                        `json:"matchId"`
 	Mode            MatchMode                     `json:"mode"`
+	Kind            MatchKind                     `json:"kind,omitempty"`
 	SeasonID        string                        `json:"seasonId,omitempty"`
 	Config          MatchConfig                   `json:"config,omitempty"`
-	Unranked        bool                          `json:"unranked,omitempty"`
 	State           MatchState                    `json:"state"`
 	Phase           MatchPhase                    `json:"phase"`
 	RoundPhase      RoundPhase                    `json:"roundPhase"`
@@ -410,8 +404,8 @@ type ClientRoundState struct {
 type ClientMatchSnapshot struct {
 	MatchID         string                        `json:"matchId"`
 	Mode            MatchMode                     `json:"mode"`
+	Kind            MatchKind                     `json:"kind,omitempty"`
 	Config          MatchConfig                   `json:"config,omitempty"`
-	Unranked        bool                          `json:"unranked,omitempty"`
 	State           MatchState                    `json:"state"`
 	Phase           MatchPhase                    `json:"phase"`
 	RoundPhase      RoundPhase                    `json:"roundPhase"`
@@ -438,8 +432,8 @@ func ClientSnapshotForPlayer(snap *MatchSnapshot, userID string) *ClientMatchSna
 	client := &ClientMatchSnapshot{
 		MatchID:         snap.MatchID,
 		Mode:            snap.Mode,
+		Kind:            snap.Kind,
 		Config:          NormalizeMatchConfig(snap.Config),
-		Unranked:        snap.Unranked,
 		State:           snap.State,
 		Phase:           snap.Phase,
 		RoundPhase:      snap.RoundPhase,
@@ -522,60 +516,76 @@ func clientSelfState(snap *MatchSnapshot, player PlayerState) *ClientSelfState {
 	return self
 }
 
-type QueueJoinRequest struct {
-	UserID            string       `json:"userId"`
-	DisplayName       string       `json:"displayName"`
-	AvatarURL         string       `json:"avatarUrl,omitempty"`
-	MMR               int          `json:"mmr"`
-	RatingRD          float64      `json:"ratingRd,omitempty"`
-	SeasonID          string       `json:"seasonId,omitempty"`
-	RankedGamesPlayed int          `json:"rankedGamesPlayed,omitempty"`
-	IsGuest           bool         `json:"isGuest,omitempty"`
-	IsAdmin           bool         `json:"isAdmin,omitempty"`
-	SelectedBadge     *PlayerBadge `json:"selectedBadge,omitempty"`
-}
-
-type QueueJoinResponse struct {
-	TicketID string `json:"ticketId"`
-	Status   string `json:"status"`
-}
-
 type QueueStatusEvent struct {
 	Status   string `json:"status"`
 	QueuedAt int64  `json:"queuedAt"`
 }
 
-type MatchAssignedPayload struct {
-	MatchID               string             `json:"matchId"`
-	Mode                  string             `json:"mode,omitempty"`
-	Config                MatchConfig        `json:"config,omitempty"`
-	Node                  string             `json:"node"`
-	Ticket                string             `json:"ticket"`
-	WSPath                string             `json:"wsPath"`
-	SourcePartyID         string             `json:"sourcePartyId,omitempty"`
-	SourcePartyInviteCode string             `json:"sourcePartyInviteCode,omitempty"`
-	ReturnTarget          *MatchReturnTarget `json:"returnTarget,omitempty"`
+// MatchViewStatus is what a viewer finds at a match's address.
+type MatchViewStatus string
+
+const (
+	MatchViewStarting    MatchViewStatus = "starting"
+	MatchViewLive        MatchViewStatus = "live"
+	MatchViewEnded       MatchViewStatus = "ended"
+	MatchViewInterrupted MatchViewStatus = "interrupted"
+	MatchViewMissing     MatchViewStatus = "missing"
+	MatchViewForbidden   MatchViewStatus = "forbidden"
+)
+
+// MatchView is everything a client needs about a match: what it is, whether it is being played and
+// whether the viewer plays in it, where to go after it, and how it ended. A seated viewer of a
+// starting or live match connects to /api/v2/matches/{id}/ws.
+type MatchView struct {
+	MatchID string          `json:"matchId"`
+	Kind    MatchKind       `json:"kind,omitempty"`
+	Mode    MatchMode       `json:"mode,omitempty"`
+	Status  MatchViewStatus `json:"status"`
+	Config  *MatchConfig    `json:"config,omitempty"`
+	Players []MatchViewSeat `json:"players,omitempty"`
+	// Playing is set when the viewer has a seat in the match.
+	Playing bool `json:"playing,omitempty"`
+	// SignInRequired is set when an anonymous viewer finds a match being played.
+	SignInRequired bool `json:"signInRequired,omitempty"`
+	// CurrentMatchID is the viewer's own open match when it is another one.
+	CurrentMatchID string             `json:"currentMatchId,omitempty"`
+	Party          *MatchViewParty    `json:"party,omitempty"`
+	ReturnTarget   *MatchReturnTarget `json:"returnTarget,omitempty"`
+	// Result is the final snapshot of a match that ended and was recorded.
+	Result *MatchSnapshot `json:"result,omitempty"`
 }
 
-type SessionStartRequest struct {
-	Mode MatchMode `json:"mode"`
+type MatchViewSeat struct {
+	UserID      string `json:"userId"`
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+	TeamID      string `json:"teamId,omitempty"`
 }
 
-type MatchSessionResponse struct {
-	Status                string                `json:"status"`
-	MatchID               string                `json:"matchId"`
-	Mode                  string                `json:"mode,omitempty"`
-	Config                MatchConfig           `json:"config,omitempty"`
-	Node                  string                `json:"node,omitempty"`
-	Ticket                string                `json:"ticket,omitempty"`
-	WSPath                string                `json:"wsPath,omitempty"`
-	Reason                string                `json:"reason,omitempty"`
-	Snapshot              *MatchSnapshot        `json:"snapshot,omitempty"`
-	ReplacementMatchID    string                `json:"replacementMatchId,omitempty"`
-	Replacement           *MatchAssignedPayload `json:"replacement,omitempty"`
-	SourcePartyID         string                `json:"sourcePartyId,omitempty"`
-	SourcePartyInviteCode string                `json:"sourcePartyInviteCode,omitempty"`
-	ReturnTarget          *MatchReturnTarget    `json:"returnTarget,omitempty"`
+type MatchViewParty struct {
+	ID         string `json:"id"`
+	InviteCode string `json:"inviteCode,omitempty"`
+}
+
+// MatchStartRequest starts a match the viewer plays alone.
+type MatchStartRequest struct {
+	Kind         MatchKind          `json:"kind"`
+	Config       MatchConfig        `json:"config"`
+	ReturnTarget *MatchReturnTarget `json:"returnTarget,omitempty"`
+}
+
+// MatchBootstrapResponse is a match page's view together with the session it bootstraps.
+type MatchBootstrapResponse struct {
+	Auth  AuthSessionPayload `json:"auth"`
+	Match MatchView          `json:"match"`
+}
+
+// ActiveMatchSummary names the open match a player can return to.
+type ActiveMatchSummary struct {
+	MatchID string          `json:"matchId"`
+	Kind    MatchKind       `json:"kind"`
+	Mode    MatchMode       `json:"mode"`
+	Status  MatchViewStatus `json:"status"`
 }
 
 type AuthUser struct {
@@ -652,9 +662,9 @@ type CurrentParty struct {
 
 type BootstrapActivity struct {
 	// Included only in bootstrap v2; v1 retains its original JSON shape.
-	CurrentParty  *CurrentParty             `json:"currentParty,omitempty"`
-	ActiveMatch   *ResumableSessionResponse `json:"activeMatch"`
-	Notifications []UserNotification        `json:"notifications"`
+	CurrentParty  *CurrentParty       `json:"currentParty,omitempty"`
+	ActiveMatch   *ActiveMatchSummary `json:"activeMatch"`
+	Notifications []UserNotification  `json:"notifications"`
 }
 
 type BootstrapGlobal struct {
@@ -671,23 +681,11 @@ type BootstrapResponse struct {
 	Global      BootstrapGlobal       `json:"global"`
 }
 
-type MatchBootstrapResponse struct {
-	Auth  AuthSessionPayload   `json:"auth"`
-	Match MatchSessionResponse `json:"match"`
-}
-
-type ResumableSessionResponse struct {
-	Status  string `json:"status"`
-	MatchID string `json:"matchId,omitempty"`
-	Mode    string `json:"mode,omitempty"`
-}
-
 type PartyState string
 
 const (
 	PartyOpen    PartyState = "open"
 	PartyInMatch PartyState = "in_match"
-	PartyStarted PartyState = "started"
 	PartyClosed  PartyState = "closed"
 	PartyExpired PartyState = "expired"
 )
@@ -728,7 +726,6 @@ type PartySnapshot struct {
 	Config           MatchConfig   `json:"config,omitempty"`
 	ActiveMatchID    string        `json:"activeMatchId,omitempty"`
 	LastMatchID      string        `json:"lastMatchId,omitempty"`
-	StartedMatchID   string        `json:"startedMatchId,omitempty"`
 	CreatedAt        time.Time     `json:"createdAt"`
 	ExpiresAt        time.Time     `json:"expiresAt"`
 	Members          []PartyMember `json:"members"`
@@ -745,7 +742,6 @@ type PartyPatch struct {
 	Config           *MatchConfig  `json:"config,omitempty"`
 	ActiveMatchID    *string       `json:"activeMatchId,omitempty"`
 	LastMatchID      *string       `json:"lastMatchId,omitempty"`
-	StartedMatchID   *string       `json:"startedMatchId,omitempty"`
 	UpsertMembers    []PartyMember `json:"upsertMembers,omitempty"`
 	RemoveMemberIDs  []string      `json:"removeMemberIds,omitempty"`
 }
@@ -764,38 +760,15 @@ type PartyTeamRequest struct {
 	TeamID string `json:"teamId"`
 }
 
-type GameplayTicketClaims struct {
-	Node    string `json:"node"`
-	MatchID string `json:"matchId"`
-	jwt.RegisteredClaims
-}
-
-type MatchFound struct {
-	MatchID               string                   `json:"matchId"`
-	Mode                  MatchMode                `json:"mode,omitempty"`
-	SeasonID              string                   `json:"seasonId,omitempty"`
-	Config                MatchConfig              `json:"config,omitempty"`
-	Unranked              bool                     `json:"unranked,omitempty"`
-	Players               []string                 `json:"players"`
-	Profiles              map[string]PlayerProfile `json:"profiles,omitempty"`
-	Teams                 map[string]string        `json:"teams,omitempty"`
-	ResolvedMap           ResolvedMap              `json:"resolvedMap"`
-	PlannedRounds         []PlannedRound           `json:"plannedRounds"`
-	MapAccessUserID       string                   `json:"mapAccessUserId,omitempty"`
-	MapScope              string                   `json:"mapScope,omitempty"` // Legacy read compatibility.
-	SourcePartyID         string                   `json:"sourcePartyId,omitempty"`
-	SourcePartyInviteCode string                   `json:"sourcePartyInviteCode,omitempty"`
-	ReturnTarget          *MatchReturnTarget       `json:"returnTarget,omitempty"`
-}
-
-type MatchPresetID string
+// MatchKind is what a match is; pkg/matchkind describes each one.
+type MatchKind string
 
 const (
-	MatchPresetRankedDuel  MatchPresetID = "ranked_duel"
-	MatchPresetPrivateDuel MatchPresetID = "private_duel"
-	MatchPresetTeamDuel    MatchPresetID = "team_duel"
-	MatchPresetFreeForAll  MatchPresetID = "free_for_all"
-	MatchPresetSolo        MatchPresetID = "solo"
+	KindRankedDuel  MatchKind = "ranked_duel"
+	KindPrivateDuel MatchKind = "private_duel"
+	KindTeamDuel    MatchKind = "team_duel"
+	KindFreeForAll  MatchKind = "free_for_all"
+	KindSolo        MatchKind = "solo"
 )
 
 type MatchParticipant struct {
@@ -1177,25 +1150,19 @@ const (
 	LiveNotificationUpsert  = "notification.upsert"
 	LiveNotificationRead    = "notification.read"
 	LiveNotificationReadAll = "notification.read_all"
-	LivePresenceEvent       = "presence.patch"
 	LiveInvalidate          = "invalidate"
 	LiveGlobalStatus        = "global_status.changed"
+	// LiveMatchStarted tells a player a match they are seated in has started.
+	LiveMatchStarted = "match.started"
 )
 
-type LivePresencePatch struct {
-	UserID         string     `json:"userId"`
-	PresenceStatus string     `json:"presenceStatus"`
-	Activity       string     `json:"activity,omitempty"`
-	LastSeenAt     *time.Time `json:"lastSeenAt,omitempty"`
-}
-
 type LiveEvent struct {
-	Type           string             `json:"type"`
-	Notification   *UserNotification  `json:"notification,omitempty"`
-	NotificationID int64              `json:"notificationId,omitempty"`
-	Presence       *LivePresencePatch `json:"presence,omitempty"`
-	Resources      []string           `json:"resources,omitempty"`
-	Global         *BootstrapGlobal   `json:"global,omitempty"`
+	Type           string              `json:"type"`
+	Notification   *UserNotification   `json:"notification,omitempty"`
+	NotificationID int64               `json:"notificationId,omitempty"`
+	Resources      []string            `json:"resources,omitempty"`
+	Global         *BootstrapGlobal    `json:"global,omitempty"`
+	Match          *ActiveMatchSummary `json:"match,omitempty"`
 }
 
 type NotificationOutboxItem struct {
@@ -1205,21 +1172,27 @@ type NotificationOutboxItem struct {
 	Attempts    int
 }
 
-// Runtime match bookkeeping shared between the match-launch planner and the
-// persistence store.
-type RuntimeMatch struct {
-	MatchID    string
-	State      string
-	OwnerEpoch int64
-	StartedAt  time.Time
-	EndedAt    time.Time
+// MatchSessionStatus is what a match is now, derived from its session and never stored
+// (gd_match_status): starting until a gameplay node picks it up, live while that node's lease holds,
+// ended once it ended, and interrupted when its node is gone or none picked it up in time.
+type MatchSessionStatus string
+
+const (
+	MatchSessionMissing     MatchSessionStatus = ""
+	MatchSessionStarting    MatchSessionStatus = "starting"
+	MatchSessionLive        MatchSessionStatus = "live"
+	MatchSessionEnded       MatchSessionStatus = "ended"
+	MatchSessionInterrupted MatchSessionStatus = "interrupted"
+)
+
+// Over reports whether the match will see no more play: it ended or was interrupted.
+func (s MatchSessionStatus) Over() bool {
+	return s == MatchSessionEnded || s == MatchSessionInterrupted
 }
 
-type MatchSessionUpsert struct {
-	Found       MatchFound
-	NodeID      string
-	NodeEpoch   int64
-	PublicRoute string
+// Open reports whether the match is starting or live.
+func (s MatchSessionStatus) Open() bool {
+	return s == MatchSessionStarting || s == MatchSessionLive
 }
 
 // ModerationWarning is the staff view of a warning.

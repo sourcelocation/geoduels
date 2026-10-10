@@ -48,6 +48,19 @@ func NewFromEnv() (*DB, error) {
 	return &DB{pool: pool}, nil
 }
 
+// ListenURL is where LISTEN connects: POSTGRES_LISTEN_URL, or POSTGRES_URL. A transaction-pooling
+// PgBouncer cannot hold a LISTEN, so behind one this must reach Postgres directly.
+func ListenURL() (string, error) {
+	url := os.Getenv("POSTGRES_LISTEN_URL")
+	if url == "" {
+		url = os.Getenv("POSTGRES_URL")
+	}
+	if url == "" {
+		return "", errors.New("POSTGRES_URL is required")
+	}
+	return normalizeDBURLForContainer(url), nil
+}
+
 type DB struct {
 	pool *pgxpool.Pool
 }

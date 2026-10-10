@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/internal/storekit"
@@ -14,8 +15,9 @@ import (
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-// PGStore owns PostgreSQL access for the notifications feature: the user
-// notification inbox and the delivery outbox claimed by workers.
+const queryTimeout = 4 * time.Second
+
+// PGStore owns PostgreSQL access for user notifications.
 type PGStore struct {
 	pool *pgxpool.Pool
 }
@@ -24,82 +26,39 @@ func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
 func (s *PGStore) q() *db.Queries { return db.New(s.pool) }
 
-func (s *PGStore) ListUserNotifications(userID string, limit int) ([]contracts.UserNotification, error) {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return nil, errors.New("userID required")
-	}
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > 50 {
-		limit = 50
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	u, err := storekit.ProfileUUID(userID)
+func (s *PGStore) ListUserNotifications(ctx context.Context, userID string, limit int) ([]contracts.UserNotification, error) {
+	u, err := requireUser(userID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.q().ListUserNotifications(ctx, db.ListUserNotificationsParams{UserID: u, Limit: int32(limit)})
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	rows, err := s.q().ListUserNotifications(ctx, db.ListUserNotificationsParams{UserID: u, Limit: int32(clamp(limit, 20, 50))})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]contracts.UserNotification, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, contracts.UserNotification{
-			ID: row.ID, Type: string(row.Type), Payload: json.RawMessage(row.PayloadJson), CreatedAt: row.CreatedAt.Time,
-			ActorUserID: storekit.UUIDVal(row.ActorUserID), ActorDisplayName: strings.TrimSpace(row.ActorDisplayName),
-		})
+		out = append(out, notification(row.ID, row.Type, row.PayloadJson, row.CreatedAt, row.ActorUserID, row.ActorDisplayName))
 	}
 	return out, nil
 }
 
-func (s *PGStore) MarkUserNotificationRead(userID string, notificationID int64) error {
-	userID = strings.TrimSpace(userID)
-	if userID == "" || notificationID <= 0 {
-		return errors.New("userID and notificationID required")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	u, err := storekit.ProfileUUID(userID)
-	if err != nil {
-		return err
-	}
-	id, err := requireNotificationID(notificationID)
-	if err != nil {
-		return err
-	}
-	return s.q().MarkUserNotificationRead(ctx, db.MarkUserNotificationReadParams{ID: id, UserID: u})
-}
-
-func (s *PGStore) ListNotificationInbox(userID string, limit int, beforeID int64) ([]contracts.UserNotification, error) {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return nil, errors.New("userID required")
-	}
-	if limit <= 0 {
-		limit = 30
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	u, err := storekit.ProfileUUID(userID)
+func (s *PGStore) ListNotificationInbox(ctx context.Context, userID string, limit int, beforeID int64) ([]contracts.UserNotification, error) {
+	u, err := requireUser(userID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.q().ListNotificationInbox(ctx, db.ListNotificationInboxParams{UserID: u, BeforeID: beforeID, RowLimit: int32(limit)})
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	rows, err := s.q().ListNotificationInbox(ctx, db.ListNotificationInboxParams{UserID: u, BeforeID: beforeID, RowLimit: int32(clamp(limit, 30, 100))})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]contracts.UserNotification, 0, len(rows))
 	for _, row := range rows {
-		item := contracts.UserNotification{
-			ID: row.ID, Type: string(row.Type), Category: string(row.Category), Payload: json.RawMessage(row.PayloadJson), CreatedAt: row.CreatedAt.Time,
-			ActorUserID: storekit.UUIDVal(row.ActorUserID), ActorDisplayName: strings.TrimSpace(row.ActorDisplayName),
-		}
+		item := notification(row.ID, row.Type, row.PayloadJson, row.CreatedAt, row.ActorUserID, row.ActorDisplayName)
+		item.Category = string(row.Category)
 		if row.ReadAt.Valid {
 			value := row.ReadAt.Time
 			item.ReadAt = &value
@@ -109,17 +68,70 @@ func (s *PGStore) ListNotificationInbox(userID string, limit int, beforeID int64
 	return out, nil
 }
 
-func (s *PGStore) MarkAllUserNotificationsRead(userID string) error {
-	u, err := storekit.ProfileUUID(userID)
+func (s *PGStore) ListUnseenSince(ctx context.Context, userIDs []string, since time.Time) ([]Announcement, error) {
+	ids := make([]pgtype.UUID, 0, len(userIDs))
+	for _, userID := range userIDs {
+		if u, err := storekit.ProfileUUID(userID); err == nil {
+			ids = append(ids, u)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	rows, err := s.q().ListUnseenNotificationsSince(ctx, db.ListUnseenNotificationsSinceParams{UserIds: ids, Since: pgtype.Timestamptz{Time: since, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Announcement, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, Announcement{
+			UserID:       storekit.UUIDVal(row.UserID),
+			Notification: notification(row.ID, row.Type, row.PayloadJson, row.CreatedAt, row.ActorUserID, row.ActorDisplayName),
+		})
+	}
+	return out, nil
+}
+
+func (s *PGStore) MarkUserNotificationRead(ctx context.Context, userID string, notificationID int64) error {
+	u, err := requireUser(userID)
 	if err != nil {
 		return err
 	}
-	return s.q().MarkAllUserNotificationsRead(context.Background(), u)
+	if notificationID <= 0 {
+		return errors.New("notification id required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	return s.q().MarkUserNotificationRead(ctx, db.MarkUserNotificationReadParams{ID: notificationID, UserID: u})
 }
 
-func requireNotificationID(id int64) (int64, error) {
-	if id <= 0 {
-		return 0, errors.New("notification id required")
+func (s *PGStore) MarkAllUserNotificationsRead(ctx context.Context, userID string) error {
+	u, err := requireUser(userID)
+	if err != nil {
+		return err
 	}
-	return id, nil
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	return s.q().MarkAllUserNotificationsRead(ctx, u)
+}
+
+func notification(id int64, kind db.GdNotificationType, payload []byte, createdAt pgtype.Timestamptz, actor pgtype.UUID, actorName string) contracts.UserNotification {
+	return contracts.UserNotification{
+		ID: id, Type: string(kind), Payload: json.RawMessage(payload), CreatedAt: createdAt.Time,
+		ActorUserID: storekit.UUIDVal(actor), ActorDisplayName: strings.TrimSpace(actorName),
+	}
+}
+
+func requireUser(userID string) (pgtype.UUID, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return pgtype.UUID{}, errors.New("userID required")
+	}
+	return storekit.ProfileUUID(userID)
+}
+
+func clamp(limit, fallback, max int) int {
+	if limit <= 0 {
+		return fallback
+	}
+	return min(limit, max)
 }

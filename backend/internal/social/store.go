@@ -329,8 +329,10 @@ func (s *PGStore) NotifyUser(ctx context.Context, userID, notificationType, dedu
 	if err != nil {
 		return err
 	}
-	var notificationID int64
-	return storekit.UpsertUserNotificationTx(ctx, tx, userID, notificationType, dedupeKey, payload, actorID, &notificationID)
+	// A notification about something that expires, such as a request, ends with it.
+	expiresAt, _ := time.Parse(time.RFC3339, fmt.Sprint(payload["expiresAt"]))
+	_, err = storekit.UpsertUserNotificationTx(ctx, tx, userID, notificationType, dedupeKey, payload, actorID, expiresAt)
+	return err
 }
 
 func acceptFriendRequestTx(ctx context.Context, tx pgx.Tx, requestID, recipientID string) error {
@@ -637,13 +639,4 @@ func (s *PGStore) RespondPartyInvitation(ctx context.Context, userID, invitation
 		return PartyInvitation{}, ErrNotFound
 	}
 	return PartyInvitation{ID: storekit.UUIDVal(row.InvitationID), PartyID: storekit.UUIDVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
-}
-
-// TouchLastSeen records the viewer's last-seen timestamp for presence.
-func (s *PGStore) TouchLastSeen(ctx context.Context, userID string, seenAt time.Time) error {
-	id, err := storekit.ProfileUUID(userID)
-	if err != nil {
-		return err
-	}
-	return s.q().TouchLastSeen(ctx, db.TouchLastSeenParams{ID: id, LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: true}})
 }

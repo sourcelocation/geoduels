@@ -25,6 +25,7 @@ import {
 } from "./MaintenanceNotice";
 import { MapRouteSurface } from "./maps/MapRouteSurfaces";
 import { FriendsDashboard } from "../../social/components/FriendsDashboard";
+import { RequestsCard } from "../../social/components/RequestsCard";
 import { LobbyScreenView } from "./LobbyScreenView";
 import { LobbyScreenModals } from "./LobbyScreenModals";
 import { useLobbyScreenState, type LobbyPartyView } from "../hooks/useLobbyScreenState";
@@ -193,6 +194,7 @@ export default function LobbyScreen({
     />
   );
   const donateCard = <DonateCard onSupportDonation={onSupportDonation} />;
+  const requestsCard = !isGuest && accessToken ? <RequestsCard accessToken={accessToken} /> : null;
   const socialCard = <SocialLinksCard />;
   const partyConfig = partyPanelState.config;
   const savePartyConfig = partyPanelState.saveConfig;
@@ -311,6 +313,7 @@ export default function LobbyScreen({
       changelogCard={newsPanel}
       donateCard={donateCard}
       socialCard={socialCard}
+      requestsCard={requestsCard}
     />
   );
 

@@ -27,6 +27,11 @@ const (
 	KindCurationSweep    = "curation_sweep"
 )
 
+// Queues. A worker client works only its own queue, so it never takes a job
+// kind it hasn't registered: the moderation worker works the default queue and
+// the Discord worker works QueueDiscord.
+const QueueDiscord = "discord"
+
 // MatchAnalyzeArgs asks the integrity detector to evaluate a finished match.
 type MatchAnalyzeArgs struct {
 	MatchID string `json:"matchId"`
@@ -49,10 +54,14 @@ type DiscordSyncArgs struct {
 
 func (DiscordSyncArgs) Kind() string { return KindDiscordSync }
 
+func (DiscordSyncArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: QueueDiscord} }
+
 // DiscordSyncAllArgs fans out a Discord role sync across all linked identities.
 type DiscordSyncAllArgs struct{}
 
 func (DiscordSyncAllArgs) Kind() string { return KindDiscordSyncAll }
+
+func (DiscordSyncAllArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: QueueDiscord} }
 
 // GuestCleanupArgs deletes stale guest accounts.
 type GuestCleanupArgs struct{}
@@ -89,9 +98,10 @@ type Client struct {
 	pool  *pgxpool.Pool
 }
 
-// NewClient builds a River client. Pass nil workers for an insert-only client,
-// and periodic jobs to schedule maintenance (worker clients only).
-func NewClient(pool *pgxpool.Pool, workers *river.Workers, periodic []*river.PeriodicJob) (*Client, error) {
+// NewClient builds a River client. Pass nil workers for an insert-only client;
+// a worker client works queue (river.QueueDefault or QueueDiscord) and may
+// schedule periodic maintenance jobs.
+func NewClient(pool *pgxpool.Pool, queue string, workers *river.Workers, periodic []*river.PeriodicJob) (*Client, error) {
 	cfg := &river.Config{
 		// Behind PgBouncer in transaction mode LISTEN never hears anything, and River would hold a
 		// connection for it forever; poll instead.
@@ -99,7 +109,7 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, periodic []*river.Per
 	}
 	if workers != nil {
 		cfg.Workers = workers
-		cfg.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 8}}
+		cfg.Queues = map[string]river.QueueConfig{queue: {MaxWorkers: 8}}
 	}
 	if len(periodic) > 0 {
 		cfg.PeriodicJobs = periodic

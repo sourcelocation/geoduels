@@ -121,14 +121,11 @@ WITH candidate_matches AS (
     FROM match_history h
     JOIN match_players cheater ON cheater.match_id = h.match_id AND cheater.user_id = $1
     JOIN match_players opponent ON opponent.match_id = h.match_id AND opponent.user_id <> $1
-    LEFT JOIN parties l ON l.active_match_id = h.match_id
-        OR l.started_match_id = h.match_id
-        OR l.last_match_id = h.match_id
     WHERE h.mode = $2
         AND h.winner_user_id = $1
         AND (sqlc.narg(since)::timestamptz IS NULL OR h.ended_at >= sqlc.narg(since))
         AND h.ranked
-        AND l.id IS NULL
+        AND h.source_kind <> 'party'
 )
 SELECT
     match_id AS match_id,

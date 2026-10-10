@@ -10,5 +10,8 @@ export function useFriendsPage(accessToken?: string, enabled = true, partyId?: s
     enabled: !!accessToken && enabled,
     queryFn: () => socialClient.friendsPage(config, accessToken!, scopedPartyId || undefined),
     staleTime: 20_000,
+    // Friends' online status is read, not pushed: refresh while the list is on screen and the tab
+    // is visible, and on focus.
+    refetchInterval: 30_000,
   });
 }

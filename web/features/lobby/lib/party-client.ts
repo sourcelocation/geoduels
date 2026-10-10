@@ -1,5 +1,5 @@
 import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { normalizeHTTPBase } from "../../../lib/runtime-config";
+import { apiFetch } from "../../../lib/http";
 import type { MatchConfig } from "../../matchmaking/lib/queue-client";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 
@@ -25,7 +25,7 @@ export type PartySnapshot = {
   id: string;
   inviteCode: string;
   ownerUserId: string;
-  state: "open" | "in_match" | "started" | "closed" | "expired";
+  state: "open" | "in_match" | "closed" | "expired";
   mode: PartyMode;
   mapScope: string;
   mapName?: string;
@@ -33,7 +33,6 @@ export type PartySnapshot = {
   config?: MatchConfig;
   activeMatchId?: string;
   lastMatchId?: string;
-  startedMatchId?: string;
   members: PartyMember[];
 };
 
@@ -48,38 +47,22 @@ export type PartyPatch = {
   config?: MatchConfig;
   activeMatchId?: string;
   lastMatchId?: string;
-  startedMatchId?: string;
   upsertMembers?: PartyMember[];
   removeMemberIds?: string[];
-};
-
-export type PartyAssignment = {
-  matchId: string;
-  mode?: string;
-  config?: MatchConfig;
-  node: string;
-  ticket: string;
-  wsPath: string;
-  sourcePartyId?: string;
-  sourcePartyInviteCode?: string;
 };
 
 export type PartyEvent =
   | { type: "party_snapshot"; party: PartySnapshot }
   | { type: "party_patch"; patch: PartyPatch }
-  | { type: "match_assigned"; assignment: PartyAssignment }
+  | { type: "match_found"; matchId: string }
   | { type: "party_error"; message: string };
 
 function authHeaders(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-function partyHTTPBase(config: RuntimeConfig) {
-  return normalizeHTTPBase(config.queueURL).replace(/\/$/, "");
-}
-
 export async function createParty(config: RuntimeConfig, accessToken: string, mode: PartyMode = "duel", matchConfig?: MatchConfig): Promise<Pick<PartySnapshot, "id" | "inviteCode">> {
-  const resp = await fetch(`${partyHTTPBase(config)}/parties/v2`, {
+  const resp = await apiFetch(config, "/api/v2/parties", {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify({ mode, config: matchConfig }),
@@ -101,7 +84,6 @@ export function applyPartyPatch(party: PartySnapshot | null, patch: PartyPatch):
     mapLocationCount: patch.mapLocationCount ?? party.mapLocationCount,
     activeMatchId: patch.activeMatchId ?? party.activeMatchId,
     lastMatchId: patch.lastMatchId ?? party.lastMatchId,
-    startedMatchId: patch.startedMatchId ?? party.startedMatchId,
     members: party.members,
   };
   if (patch.upsertMembers?.length || patch.removeMemberIds?.length) {
@@ -116,7 +98,7 @@ export function applyPartyPatch(party: PartySnapshot | null, patch: PartyPatch):
 }
 
 export async function joinParty(config: RuntimeConfig, code: string, accessToken: string): Promise<Pick<PartySnapshot, "id" | "inviteCode">> {
-  const resp = await fetch(`${partyHTTPBase(config)}/parties/v2/${encodeURIComponent(code)}/join`, {
+  const resp = await apiFetch(config, `/api/v2/parties/${encodeURIComponent(code)}/join`, {
     method: "POST",
     headers: authHeaders(accessToken),
   });

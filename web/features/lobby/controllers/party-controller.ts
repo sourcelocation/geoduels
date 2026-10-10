@@ -7,7 +7,6 @@ import {
   applyPartyPatch,
   createParty,
   joinParty,
-  type PartyAssignment,
   type PartySnapshot,
   type PartyMember,
   type PartyTeamId,
@@ -51,7 +50,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 export class PartyController extends ObservableStore<PartyRuntimeState> {
   private readonly config: RuntimeConfig;
   private readonly sessionController: SessionController;
-  private readonly onMatchAssigned: (assignment: PartyAssignment) => Promise<boolean>;
+  private readonly onMatchFound: (matchId: string) => Promise<boolean>;
   private state: PartyRuntimeState = initialState;
   private streamAbort: AbortController | null = null;
   private socket: PartySocket | null = null;
@@ -64,12 +63,12 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
   constructor(params: {
     config: RuntimeConfig;
     sessionController: SessionController;
-    onMatchAssigned: (assignment: PartyAssignment) => Promise<boolean>;
+    onMatchFound: (matchId: string) => Promise<boolean>;
   }) {
     super();
     this.config = params.config;
     this.sessionController = params.sessionController;
-    this.onMatchAssigned = params.onMatchAssigned;
+    this.onMatchFound = params.onMatchFound;
   }
 
   getState() {
@@ -385,19 +384,19 @@ export class PartyController extends ObservableStore<PartyRuntimeState> {
           }
           return;
         }
-        if (event.type === "match_assigned") {
-          if (this.handledMatchId === event.assignment.matchId) return;
-          this.handledMatchId = event.assignment.matchId;
+        if (event.type === "match_found") {
+          if (this.handledMatchId === event.matchId) return;
+          this.handledMatchId = event.matchId;
           // Publish the navigation target immediately and cancel stale route work
           // through the shared route controller before connecting to this match.
-          void this.onMatchAssigned(event.assignment).then((ok) => {
+          void this.onMatchFound(event.matchId).then((ok) => {
             if (!ok && requestId === this.connectRequestId) this.handledMatchId = "";
           }).catch((error) => {
             if (requestId !== this.connectRequestId) return;
             this.handledMatchId = "";
-            this.patchState({ error: getErrorMessage(error, "Could not join assigned match") });
+            this.patchState({ error: getErrorMessage(error, "Could not join the party's match") });
           });
-          this.patchState({ launchMatchId: event.assignment.matchId });
+          this.patchState({ launchMatchId: event.matchId });
           return;
         }
         if (event.type === "party_error") {

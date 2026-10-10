@@ -25,7 +25,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OWNER: ${{ github.repository_owner }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
-          PACKAGES: geoduels-api geoduels-discord-worker geoduels-gameplay-node geoduels-match-coordinator geoduels-moderation-worker geoduels-realtime-gateway geoduels-web
+          PACKAGES: geoduels-api geoduels-discord-worker geoduels-gameplay-node geoduels-moderation-worker geoduels-web
         run: |
           set -euo pipefail
           cutoff=$(date -u -d '14 days ago' +%s)

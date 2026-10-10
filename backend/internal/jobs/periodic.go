@@ -7,12 +7,16 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// PeriodicJobs returns the maintenance schedule. Each job is unique while
-// available/running so multiple worker replicas cannot double-run it.
+// PeriodicJobs returns the maintenance schedule. Each job is unique until it
+// finishes so multiple worker replicas cannot double-run it. River requires the
+// unique states to include available, pending, running and scheduled.
 func PeriodicJobs(cfg PeriodicConfig) []*river.PeriodicJob {
 	unique := &river.InsertOpts{UniqueOpts: river.UniqueOpts{
-		ByArgs:  true,
-		ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning, rivertype.JobStateScheduled},
+		ByArgs: true,
+		ByState: []rivertype.JobState{
+			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable,
+			rivertype.JobStateRunning, rivertype.JobStateScheduled,
+		},
 	}}
 	opts := func(id string) *river.PeriodicJobOpts {
 		return &river.PeriodicJobOpts{ID: id, RunOnStart: false}

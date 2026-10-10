@@ -35,6 +35,8 @@ type PlayPanelProps = {
   changelogCard: React.ReactNode;
   donateCard: React.ReactNode;
   socialCard: React.ReactNode;
+  /** Signed-in players only; without it the news takes both rows. */
+  requestsCard?: React.ReactNode;
 };
 
 type PlayModeActionButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -81,6 +83,7 @@ export const PlayPanel = forwardRef<HTMLDivElement, PlayPanelProps>(function Pla
   changelogCard,
   donateCard,
   socialCard,
+  requestsCard,
 }, ref) {
   return (
     <motion.div
@@ -128,11 +131,15 @@ export const PlayPanel = forwardRef<HTMLDivElement, PlayPanelProps>(function Pla
         )}
       </HorizontalScroller>
 
-      <HorizontalScroller label="GeoDuels" itemClassName="w-80 sm:w-96">
-        {changelogCard}
-        {socialCard}
-        {donateCard}
-      </HorizontalScroller>
+      <section>
+        <Heading as="h2" variant="heading-md" className="mb-3">GeoDuels</Heading>
+        <div className="grid w-full gap-4 sm:grid-cols-2">
+          <div className={requestsCard ? "min-w-0" : "min-w-0 sm:row-span-2"}>{changelogCard}</div>
+          {requestsCard ? <div className="min-w-0">{requestsCard}</div> : null}
+          {socialCard}
+          {donateCard}
+        </div>
+      </section>
     </motion.div>
   );
 });

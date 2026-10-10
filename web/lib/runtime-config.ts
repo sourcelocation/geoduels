@@ -2,8 +2,6 @@ import { validatePublicConfig } from '../config/public-runtime-config.mjs';
 
 export type PublicConfig = {
   NEXT_PUBLIC_SITE_URL: string;
-  NEXT_PUBLIC_QUEUE_URL: string;
-  NEXT_PUBLIC_REALTIME_URL: string;
   NEXT_PUBLIC_API_URL: string;
   NEXT_PUBLIC_GOOGLE_CLIENT_ID: string;
   NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: string;
@@ -15,8 +13,6 @@ export type PublicConfig = {
 
 export type RuntimeConfig = {
   siteURL: string;
-  queueURL: string;
-  realtimeBaseURL: string;
   apiURL: string;
   googleClientId: string;
   googleAllowedOrigins: string[];
@@ -26,7 +22,6 @@ export type RuntimeConfig = {
   appVersion: string;
   roundDurationMs: number;
   maxHP: number;
-  queueHeartbeatIntervalMs: number;
   socketHeartbeatIntervalMs: number;
   socketStaleAfterMs: number;
   connectionErrorMessage: string;
@@ -44,8 +39,6 @@ export function createRuntimeConfig(publicRuntimeConfig: PublicConfig): RuntimeC
   validatePublicConfig(publicRuntimeConfig);
   const config: RuntimeConfig = {
     siteURL: publicRuntimeConfig.NEXT_PUBLIC_SITE_URL.replace(/\/$/, ''),
-    queueURL: publicRuntimeConfig.NEXT_PUBLIC_QUEUE_URL,
-    realtimeBaseURL: publicRuntimeConfig.NEXT_PUBLIC_REALTIME_URL,
     apiURL: publicRuntimeConfig.NEXT_PUBLIC_API_URL,
     googleClientId: publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
     googleAllowedOrigins: splitOrigins(publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS || ''),
@@ -55,7 +48,6 @@ export function createRuntimeConfig(publicRuntimeConfig: PublicConfig): RuntimeC
     appVersion: publicRuntimeConfig.NEXT_PUBLIC_APP_VERSION,
     roundDurationMs: 45_000,
     maxHP: 6_000,
-    queueHeartbeatIntervalMs: 10_000,
     socketHeartbeatIntervalMs: 20_000,
     socketStaleAfterMs: 35_000,
     connectionErrorMessage: 'Connection error',

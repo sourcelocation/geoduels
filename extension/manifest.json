@@ -8,7 +8,7 @@
       "matches": [
         "https://geoduels.io/*",
         "https://*.geoduels.io/*",
-        "http://localhost:3000/*"
+        "http://localhost:24000/*"
       ],
       "js": ["src/geoduels-page.js"],
       "run_at": "document_start"

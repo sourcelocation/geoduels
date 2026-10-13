@@ -4,7 +4,7 @@
   "license": "AGPL-3.0-only",
   "version": "0.1.0",
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "node --env-file-if-exists=../.env node_modules/next/dist/bin/next dev -p 24000",
     "build": "next build",
     "analyze": "ANALYZE=true next build",
     "start": "next start -p 3000",

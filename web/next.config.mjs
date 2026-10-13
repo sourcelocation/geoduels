@@ -15,6 +15,14 @@ const createNextConfig = (phase) => ({
   distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
   reactStrictMode: true,
   output: "standalone",
+  // Development's front door is this server: /api goes on to the API (compose's, at GEODUELS_API),
+  // its sockets included, as the ingress and compose's front door send it elsewhere.
+  ...(phase === PHASE_DEVELOPMENT_SERVER && {
+    async rewrites() {
+      const api = process.env.GEODUELS_API ?? "http://localhost:24001";
+      return { beforeFiles: [{ source: "/api/:path*", destination: `${api}/api/:path*` }] };
+    }
+  }),
   outputFileTracingRoot: appRoot,
   async headers() {
     return [

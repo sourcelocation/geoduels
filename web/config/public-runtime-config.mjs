@@ -7,12 +7,19 @@ export const publicConfigKeys = [
 ];
 
 export function resolvePublicConfig(env, development = false) {
-  const config = Object.fromEntries(publicConfigKeys.map((key) => {
+  const read = (key) => {
     const value = env[key];
-    return [key, typeof value === 'string' && !value.startsWith('REPLACE_WITH_') ? value : ''];
-  }));
-  config.NEXT_PUBLIC_SITE_URL ||= development ? 'http://localhost:3000' : '';
-  config.NEXT_PUBLIC_API_URL ||= development ? 'http://localhost:8080' : config.NEXT_PUBLIC_SITE_URL;
+    return typeof value === 'string' && !value.startsWith('REPLACE_WITH_') ? value : '';
+  };
+  const config = Object.fromEntries(publicConfigKeys.map((key) => [key, read(key)]));
+  // The API is on the site's origin under /api: the ingress routes it in production, compose's front
+  // door locally, and next.config.mjs's rewrite in development.
+  config.NEXT_PUBLIC_SITE_URL ||= development ? 'http://localhost:24000' : '';
+  config.NEXT_PUBLIC_API_URL ||= config.NEXT_PUBLIC_SITE_URL;
+  // The OAuth client IDs are the API's own (the repository's .env); both are public.
+  config.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||= read('GOOGLE_CLIENT_ID');
+  config.NEXT_PUBLIC_DISCORD_CLIENT_ID ||= read('DISCORD_CLIENT_ID');
+  config.NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS ||= config.NEXT_PUBLIC_SITE_URL;
   config.NEXT_PUBLIC_APP_VERSION ||= (env.NEXT_PUBLIC_GIT_SHA || 'dev').slice(0, 12);
   return config;
 }

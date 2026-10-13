@@ -1,0 +1,147 @@
+# GeoDuels as it runs in production, for self-hosting and for trying a build locally. Copy
+# .env.example to .env (its values run GeoDuels on this machine), then:
+#   docker compose up -d            the released images (GEODUELS_VERSION), or this checkout's if unset
+#   docker compose up --build       this checkout, built
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build   development (compose.dev.yaml)
+# Either way GeoDuels is at NEXT_PUBLIC_SITE_URL, http://localhost:24000 unless you change it.
+#
+# GeoDuels' ports are 24000-24003, so it runs beside other projects' stacks, on loopback only:
+#   24000 the front door (`front`, or Next's dev server in development)   24001 the API   24003 Postgres
+# Inside the network every service keeps its usual port.
+name: geoduels
+
+x-service: &service
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 5s
+  env_file: .env
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "2" } }
+
+x-backend: &backend
+  <<: *service
+  depends_on: { db-migrate: { condition: service_completed_successfully } }
+
+x-database: &database "postgres://geoduels:${POSTGRES_PASSWORD:?set it in .env}@postgres:5432/geoduels?sslmode=disable"
+
+services:
+  postgres:
+    <<: *service
+    image: postgres:18.6-alpine
+    env_file: []
+    command: ["postgres", "-c", "log_statement=none", "-c", "log_min_error_statement=fatal", "-c", "log_min_messages=warning"]
+    environment: { POSTGRES_USER: geoduels, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}", POSTGRES_DB: geoduels }
+    volumes: ["postgres:/var/lib/postgresql"]
+    ports: ["127.0.0.1:24003:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U geoduels -d geoduels"], interval: 5s, timeout: 3s, retries: 20 }
+
+  # Brings the schema to this release (goose, then River) before anything that uses the database
+  # starts. A blank database gets the v2 baseline (version 2000) and every later migration.
+  db-migrate:
+    <<: *service
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${GEODUELS_VERSION:-dev}
+    pull_policy: never # `api` pulls or builds the image
+    restart: "no"
+    entrypoint: ["/migrate"]
+    environment: { POSTGRES_URL: *database }
+    depends_on: { postgres: { condition: service_healthy } }
+
+  gameplay-node:
+    <<: *backend
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-gameplay-node:${GEODUELS_VERSION:-dev}
+    build: { context: backend, dockerfile: services/gameplay-node/Dockerfile }
+    # Long enough for its matches to finish.
+    stop_grace_period: 5m
+    environment:
+      POSTGRES_URL: *database
+      GAMEPLAY_NODE_ADDR: :8091
+      GAMEPLAY_NODE_ID: game-1
+      GAMEPLAY_INTERNAL_URL: http://gameplay-node:8091
+
+  api:
+    <<: *backend
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${GEODUELS_VERSION:-dev}
+    build: { context: backend, dockerfile: services/api/Dockerfile }
+    environment:
+      POSTGRES_URL: *database
+      API_ADDR: ":8080"
+      # The browser's origin, for its websockets.
+      CORS_ALLOWED_ORIGINS: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
+    ports: ["127.0.0.1:24001:8080"]
+
+  web:
+    <<: *service
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-web:${GEODUELS_VERSION:-dev}
+    build: { context: web, args: { NEXT_PUBLIC_APP_VERSION: "${GEODUELS_VERSION:-dev}" } }
+    # The browser gets all of these too (web/config/public-runtime-config.mjs), and nothing else from .env.
+    env_file: []
+    environment:
+      PORT: "3000"
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: ${NEXT_PUBLIC_SITE_URL}
+      NEXT_PUBLIC_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+      NEXT_PUBLIC_GOOGLE_EMBED_KEY: ${NEXT_PUBLIC_GOOGLE_EMBED_KEY:-}
+      NEXT_PUBLIC_APP_VERSION: ${GEODUELS_VERSION:-dev}
+    depends_on: [api]
+
+  # The front door: /api to the API, the rest to the web app, as the ingress routes production.
+  front:
+    <<: *service
+    image: caddy:2.11.7-alpine
+    env_file: []
+    configs: [{ source: front, target: /etc/caddy/Caddyfile }]
+    ports: ["127.0.0.1:24000:8080"]
+    depends_on: [api, web]
+
+  # COMPOSE_PROFILES=workers: moderation (with RISK_ENGINE_*) and the Discord bot (DISCORD_BOT_TOKEN).
+  moderation-worker:
+    <<: *backend
+    profiles: [workers]
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-moderation-worker:${GEODUELS_VERSION:-dev}
+    build: { context: backend, dockerfile: services/moderation-worker/Dockerfile }
+    environment: { POSTGRES_URL: *database, MODERATION_WORKER_ADDR: ":8093" }
+
+  discord-worker:
+    <<: *backend
+    profiles: [workers]
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-discord-worker:${GEODUELS_VERSION:-dev}
+    build: { context: backend, dockerfile: services/discord-worker/Dockerfile }
+    environment: { POSTGRES_URL: *database, DISCORD_WORKER_ADDR: ":8094" }
+
+  # COMPOSE_PROFILES=tls: Caddy takes a certificate for NEXT_PUBLIC_SITE_URL's hostname (its DNS must
+  # point here) and serves GeoDuels on ports 80 and 443. Behind a proxy of your own, send it to 24000.
+  edge:
+    <<: *service
+    profiles: [tls]
+    image: caddy:2.11.7-alpine
+    env_file: []
+    command: ["caddy", "reverse-proxy", "--from", "${NEXT_PUBLIC_SITE_URL:-}", "--to", "front:8080"]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes: ["edge:/data"]
+    depends_on: [front]
+
+volumes:
+  postgres: {}
+  edge: {}
+
+configs:
+  # Caddy passes the client's address on from proxies on private networks (`edge`, or yours), which
+  # TRUSTED_PROXY_CIDRS lets the API believe.
+  front:
+    content: |
+      {
+      	servers {
+      		trusted_proxies static private_ranges
+      	}
+      }
+      :8080 {
+      	encode zstd gzip
+      	@api path /api /api/*
+      	handle @api {
+      		reverse_proxy api:8080
+      	}
+      	handle {
+      		reverse_proxy web:3000
+      	}
+      }

@@ -1,0 +1,57 @@
+# Development: `docker compose -f compose.yaml -f compose.dev.yaml up --build` runs the Go services
+# from source under Air (backend/services/<service>/.air.toml), rebuilt and restarted on every save,
+# and migrates the checkout's schema first. Everything else is compose.yaml's. The web app runs with
+# Next's dev server (`npm --prefix web run dev`) on the front door's port in place of `web` and
+# `front`, so NEXT_PUBLIC_SITE_URL and the OAuth redirects stay the same.
+x-dev: &dev
+  image: geoduels:dev # keeps the dev build off the release images' tags
+  pull_policy: never # db-migrate, which everything waits for, builds it
+  volumes:
+    - .:/src
+    - go-mod:/go/pkg/mod
+    - go-build:/root/.cache/go-build
+
+services:
+  # After adding a migration: docker compose -f compose.yaml -f compose.dev.yaml run --rm db-migrate
+  db-migrate:
+    <<: *dev
+    build: { context: backend, dockerfile: dev.Dockerfile }
+    entrypoint: ["go", "run", "./cmd/migrate"]
+
+  gameplay-node:
+    <<: *dev
+    build: !reset null
+    command: ["-c", "services/gameplay-node/.air.toml"]
+    stop_grace_period: 5s
+    volumes:
+      - .:/src
+      - go-mod:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+      - ./maps/datasets:/datasets:ro
+    # Imports the bundled sample for any required playable map that isn't configured yet; it never
+    # replaces existing maps.
+    environment: { DEV_MAP_DATASET: /datasets/a-source-world.sample.json }
+
+  api:
+    <<: *dev
+    build: !reset null
+    command: ["-c", "services/api/.air.toml"]
+
+  moderation-worker:
+    <<: *dev
+    build: !reset null
+    command: ["-c", "services/moderation-worker/.air.toml"]
+
+  discord-worker:
+    <<: *dev
+    build: !reset null
+    command: ["-c", "services/discord-worker/.air.toml"]
+
+  web:
+    profiles: [release] # never started in development
+  front:
+    profiles: [release]
+
+volumes:
+  go-mod: {}
+  go-build: {}

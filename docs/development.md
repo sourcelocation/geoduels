@@ -60,12 +60,13 @@ npm --prefix web run build
 
 ## Local infrastructure
 
-Migrations are goose files in `backend/db/migrations`. `docker compose -f backend/dev.yaml up` applies
-them before the services start; after adding one, run `docker compose -f backend/dev.yaml run --rm db-migrate`.
+Migrations are goose files in `backend/db/migrations`. `docker compose -f compose.yaml -f compose.dev.yaml up`
+applies them before the services start; after adding one, run
+`docker compose -f compose.yaml -f compose.dev.yaml run --rm db-migrate`.
 `go run ./cmd/migrate status` (from `backend/`, with `POSTGRES_URL` set) lists them, and `go run ./cmd/migrate down`
-rolls back the latest.
-After changing Compose environment variables, recreate containers:
+rolls back the latest. Postgres is at `postgres://geoduels:geoduels@localhost:24003/geoduels?sslmode=disable`.
+After changing `.env`, recreate containers:
 
 ```sh
-docker compose -f backend/dev.yaml up -d --force-recreate
+docker compose -f compose.yaml -f compose.dev.yaml up -d --force-recreate
 ```

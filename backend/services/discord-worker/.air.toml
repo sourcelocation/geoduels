@@ -1,0 +1,17 @@
+# Air for discord-worker, inside compose.dev.yaml's container only (it runs from backend/): it rebuilds and
+# restarts the service when its code, the shared packages or the migrations change.
+tmp_dir = "/tmp/air" # in the container, out of the bind-mounted backend/
+
+[build]
+cmd = "go build -o /usr/local/bin/discord-worker ./services/discord-worker"
+entrypoint = ["/usr/local/bin/discord-worker"]
+include_dir = ["services/discord-worker", "internal", "pkg", "db"]
+include_ext = ["go", "sql", "tpl", "tmpl", "html", "yaml", "yml", "json"]
+include_file = ["go.mod", "go.sum"]
+exclude_regex = ["_test\\.go$"]
+delay = 250 # ms
+send_interrupt = true
+kill_delay = "5s"
+
+[misc]
+clean_on_exit = true

@@ -328,7 +328,7 @@ func apiWSOriginAllowed(r *http.Request) bool {
 	}
 	raw := os.Getenv("CORS_ALLOWED_ORIGINS")
 	if raw == "" {
-		raw = "http://localhost:3000,http://127.0.0.1:3000"
+		raw = "http://localhost:24000,http://127.0.0.1:24000"
 	}
 	for _, item := range strings.Split(raw, ",") {
 		allowed := strings.TrimSpace(item)

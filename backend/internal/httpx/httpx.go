@@ -41,7 +41,7 @@ func CORS(next echo.HandlerFunc) echo.HandlerFunc {
 func AllowedOriginsSet() map[string]bool {
 	raw := os.Getenv("CORS_ALLOWED_ORIGINS")
 	if raw == "" {
-		raw = "http://localhost:3000,http://127.0.0.1:3000"
+		raw = "http://localhost:24000,http://127.0.0.1:24000"
 	}
 	out := map[string]bool{}
 	for _, s := range strings.Split(raw, ",") {

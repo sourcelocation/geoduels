@@ -269,7 +269,7 @@ export default function MinimapPanel({
           }
           setDesktopHovered(false);
         }}
-        className={`absolute bottom-0 right-0 z-game-controls flex w-full flex-col gap-2 p-3 md:bottom-4 md:right-4 md:p-0 md:w-[min(34vw,460px)] md:h-[min(33vh,360px)] ${isResizing ? '' : 'transition-[width,height] duration-fast ease-standard'} ${expanded ? 'md:w-[min(90vw,800px)] md:h-[min(52vh,560px)]' : ''
+        className={`absolute bottom-0 right-0 z-game-controls flex w-full select-none flex-col gap-2 p-3 md:bottom-4 md:right-4 md:p-0 md:w-[min(34vw,460px)] md:h-[min(33vh,360px)] ${isResizing ? '' : 'transition-[width,height] duration-fast ease-standard'} ${expanded ? 'md:w-[min(90vw,800px)] md:h-[min(52vh,560px)]' : ''
           }`}
         style={{
           right: rightOffset ? `${rightOffset}px` : undefined,

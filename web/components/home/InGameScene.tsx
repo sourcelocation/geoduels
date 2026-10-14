@@ -279,7 +279,7 @@ export default function InGameScene({
       className={`fixed inset-0 overflow-hidden focus:outline-none ${motionPresetClass.reveal}`}
     >
       {(uiPhase === 'live_round' || uiPhase === 'prematch_countdown') && (
-        <div className="absolute inset-0 overflow-hidden bg-surface-page">
+        <div className="absolute inset-0 select-none overflow-hidden bg-surface-page">
           <iframe
             key={`${streetViewFrameSrc}-${streetViewResetCount}`}
             ref={streetViewFrameRef}

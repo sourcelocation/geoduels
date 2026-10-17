@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/duel"
 	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 )
 
 // Independently defined gameplay constants (not imported from the engine).
@@ -25,15 +25,15 @@ var invariantSeeds = []int64{1, 7, 42, 1337, 90210}
 
 type simMode struct {
 	name    string
-	mode    contracts.MatchMode
-	kind    contracts.MatchKind
+	mode    matchkind.Mode
+	kind    matchkind.Kind
 	players []string
 	teams   map[string]string
 }
 
 // checkInvariants asserts independently defined gameplay invariants against a
 // fresh authoritative snapshot taken after every applied command.
-func checkInvariants(t *testing.T, tag string, snap *contracts.MatchSnapshot, s simMode, prevHP map[string]int, endedSeen *bool) {
+func checkInvariants(t *testing.T, tag string, snap *gameplay.MatchSnapshot, s simMode, prevHP map[string]int, endedSeen *bool) {
 	t.Helper()
 	if len(snap.Players) != len(s.players) {
 		t.Fatalf("%s: player set changed: got %d players, want %d", tag, len(snap.Players), len(s.players))
@@ -88,14 +88,14 @@ func checkInvariants(t *testing.T, tag string, snap *contracts.MatchSnapshot, s 
 
 	// A live match has a current round except during the result intermission;
 	// a finished match never does.
-	if snap.State == contracts.MatchLive && snap.CurrentRound == nil && snap.Phase != contracts.PhaseRoundResult {
+	if snap.State == gameplay.MatchLive && snap.CurrentRound == nil && snap.Phase != gameplay.PhaseRoundResult {
 		t.Fatalf("%s: live match without a current round (phase %v)", tag, snap.Phase)
 	}
-	if snap.State == contracts.MatchEnded {
+	if snap.State == gameplay.MatchEnded {
 		if snap.CurrentRound != nil {
 			t.Fatalf("%s: ended match still exposes a current round", tag)
 		}
-		if snap.Phase != contracts.PhaseEnded || snap.RoundPhase != contracts.RoundPhaseEnded {
+		if snap.Phase != gameplay.PhaseEnded || snap.RoundPhase != gameplay.RoundPhaseEnded {
 			t.Fatalf("%s: ended match reports phase %v/%v", tag, snap.Phase, snap.RoundPhase)
 		}
 		*endedSeen = true
@@ -107,10 +107,10 @@ func checkInvariants(t *testing.T, tag string, snap *contracts.MatchSnapshot, s 
 	}
 
 	// Mode-specific structure.
-	if s.mode == contracts.ModeDuel && snap.Teams != nil {
+	if s.mode == matchkind.ModeDuel && snap.Teams != nil {
 		t.Fatalf("%s: plain duel exposed team state", tag)
 	}
-	if s.mode == contracts.ModeTeamDuel {
+	if s.mode == matchkind.ModeTeamDuel {
 		if len(snap.Teams) != 2 {
 			t.Fatalf("%s: team duel has %d teams, want 2", tag, len(snap.Teams))
 		}
@@ -118,7 +118,7 @@ func checkInvariants(t *testing.T, tag string, snap *contracts.MatchSnapshot, s 
 			if team.HP < 0 || team.HP > invariantStartingHP {
 				t.Fatalf("%s: team %q HP %d outside [0,%d]", tag, team.TeamID, team.HP, invariantStartingHP)
 			}
-			if snap.State == contracts.MatchLive {
+			if snap.State == gameplay.MatchLive {
 				for _, member := range team.Players {
 					if snap.Players[member].HP != team.HP {
 						t.Fatalf("%s: member %q HP %d diverges from team %q HP %d", tag, member, snap.Players[member].HP, team.TeamID, team.HP)
@@ -127,7 +127,7 @@ func checkInvariants(t *testing.T, tag string, snap *contracts.MatchSnapshot, s 
 			}
 		}
 	}
-	if s.mode == contracts.ModeFreeForAll {
+	if s.mode == matchkind.ModeFreeForAll {
 		if snap.Teams != nil {
 			t.Fatalf("%s: free-for-all exposed team state", tag)
 		}
@@ -137,7 +137,7 @@ func checkInvariants(t *testing.T, tag string, snap *contracts.MatchSnapshot, s 
 	}
 
 	// Terminal states are absorbing: nothing may revive an ended match.
-	if *endedSeen && snap.State != contracts.MatchEnded {
+	if *endedSeen && snap.State != gameplay.MatchEnded {
 		t.Fatalf("%s: match left the ended state", tag)
 	}
 }
@@ -150,12 +150,12 @@ func applyCommand(t *testing.T, eng *duel.Engine, m *simMode, rng *rand.Rand, no
 	case action < 55: // guess
 		userID := m.players[rng.Intn(len(m.players))]
 		snap, _ := eng.GetSnapshot(matchID)
-		if snap.State != contracts.MatchLive || snap.CurrentRound == nil {
+		if snap.State != gameplay.MatchLive || snap.CurrentRound == nil {
 			return
 		}
 		lat := rng.Float64()*180 - 90
 		lng := rng.Float64()*360 - 180
-		eng.SubmitGuess(contracts.GuessPayload{
+		eng.SubmitGuess(gameplay.Guess{
 			UserID: userID, MatchID: matchID, RoundID: snap.CurrentRound.RoundID,
 			Lat: lat, Lng: lng, Finalize: rng.Intn(100) < 30,
 		})
@@ -176,9 +176,9 @@ func applyCommand(t *testing.T, eng *duel.Engine, m *simMode, rng *rand.Rand, no
 
 func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 	modes := []simMode{
-		{name: "duel", mode: contracts.ModeDuel, kind: contracts.KindRankedDuel, players: []string{"p1", "p2"}},
-		{name: "team_duel", mode: contracts.ModeTeamDuel, kind: contracts.KindTeamDuel, players: []string{"p1", "p2", "p3", "p4"}, teams: map[string]string{"p1": "a", "p3": "a", "p2": "b", "p4": "b"}},
-		{name: "free_for_all", mode: contracts.ModeFreeForAll, kind: contracts.KindFreeForAll, players: []string{"p1", "p2", "p3"}},
+		{name: "duel", mode: matchkind.ModeDuel, kind: matchkind.RankedDuel, players: []string{"p1", "p2"}},
+		{name: "team_duel", mode: matchkind.ModeTeamDuel, kind: matchkind.TeamDuel, players: []string{"p1", "p2", "p3", "p4"}, teams: map[string]string{"p1": "a", "p3": "a", "p2": "b", "p4": "b"}},
+		{name: "free_for_all", mode: matchkind.ModeFreeForAll, kind: matchkind.FreeForAll, players: []string{"p1", "p2", "p3"}},
 	}
 	for _, s := range modes {
 		for _, seed := range invariantSeeds {
@@ -186,12 +186,12 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 				rng := rand.New(rand.NewSource(seed))
 				base := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 				now := base
-				eng := duel.NewWithClock(func(string, int) (contracts.LocationPoint, error) {
-					return contracts.LocationPoint{Lat: rng.Float64()*140 - 70, Lng: rng.Float64()*360 - 180, Country: "xx"}, nil
+				eng := duel.NewWithClock(func(string, int) (gameplay.LocationPoint, error) {
+					return gameplay.LocationPoint{Lat: rng.Float64()*140 - 70, Lng: rng.Float64()*360 - 180, Country: "xx"}, nil
 				}, func() time.Time { return now })
 				if _, err := eng.CreateMatchWithOptions("sim", s.players, nil, duel.MatchOptions{
 					Kind: s.kind, Teams: s.teams,
-					Config: contracts.MatchConfig{RoundTimerMode: contracts.RoundTimerFixed, RoundTimeLimitMS: 45_000},
+					Config: gameplay.MatchConfig{RoundTimerMode: gameplay.RoundTimerFixed, RoundTimeLimitMS: 45_000},
 				}); err != nil {
 					t.Fatalf("create match: %v", err)
 				}
@@ -204,7 +204,7 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 				rejectIntruder := func() {
 					snapBefore, _ := eng.GetSnapshot("sim")
 					beforeRaw, _ := json.Marshal(snapBefore)
-					if _, err := eng.SubmitGuess(contracts.GuessPayload{UserID: "intruder", MatchID: "sim", RoundID: "intruder-round", Lat: 1, Lng: 1, Finalize: true}); err == nil {
+					if _, err := eng.SubmitGuess(gameplay.Guess{UserID: "intruder", MatchID: "sim", RoundID: "intruder-round", Lat: 1, Lng: 1, Finalize: true}); err == nil {
 						t.Fatal("intruder guess accepted")
 					}
 					if _, err := eng.MarkDisconnected("sim", "intruder"); err == nil {
@@ -213,7 +213,7 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 					if _, err := eng.MarkResumed("sim", "intruder"); err == nil {
 						t.Fatal("intruder resume accepted")
 					}
-					if snapBefore.State == contracts.MatchLive {
+					if snapBefore.State == gameplay.MatchLive {
 						if _, err := eng.Forfeit("sim", "intruder"); err == nil {
 							t.Fatal("intruder forfeit accepted")
 						}
@@ -238,7 +238,7 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 					}
 					if endedSeen {
 						// Keep hammering the ended match; it must stay ended.
-						eng.SubmitGuess(contracts.GuessPayload{UserID: s.players[0], MatchID: "sim", RoundID: "sim:r99", Lat: 1, Lng: 1, Finalize: true})
+						eng.SubmitGuess(gameplay.Guess{UserID: s.players[0], MatchID: "sim", RoundID: "sim:r99", Lat: 1, Lng: 1, Finalize: true})
 						eng.Tick()
 						snap, err := eng.GetSnapshot("sim")
 						if err != nil {
@@ -260,17 +260,17 @@ func TestMatchInvariantsUnderGeneratedSequences(t *testing.T) {
 
 // Abandoning a match ends it as a draw, and a removed match is gone from the engine.
 func TestAbandonAndRemove(t *testing.T) {
-	eng := duel.New(func(string, int) (contracts.LocationPoint, error) {
-		return contracts.LocationPoint{Lat: 1, Lng: 2, Country: "xx"}, nil
+	eng := duel.New(func(string, int) (gameplay.LocationPoint, error) {
+		return gameplay.LocationPoint{Lat: 1, Lng: 2, Country: "xx"}, nil
 	})
-	if _, err := eng.CreateMatchWithOptions("m", []string{"a", "b"}, nil, duel.MatchOptions{Kind: contracts.KindRankedDuel}); err != nil {
+	if _, err := eng.CreateMatchWithOptions("m", []string{"a", "b"}, nil, duel.MatchOptions{Kind: matchkind.RankedDuel}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := eng.Abandon("m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.State != contracts.MatchEnded {
+	if snap.State != gameplay.MatchEnded {
 		t.Fatalf("state = %s, want ended", snap.State)
 	}
 	for id, player := range snap.Players {

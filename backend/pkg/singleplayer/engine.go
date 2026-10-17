@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 )
 
 const maxRounds = 5
@@ -20,24 +20,24 @@ type Guess struct {
 
 type Session struct {
 	ID              string
-	Config          contracts.MatchConfig
-	Player          *contracts.PlayerState
-	CurrentLocation contracts.LocationPoint
+	Config          gameplay.MatchConfig
+	Player          *gameplay.PlayerState
+	CurrentLocation gameplay.LocationPoint
 	CurrentIndex    int
 	RoundID         string
 	RoundStartedAt  time.Time
 	Guess           *Guess
-	LastRoundResult *contracts.RoundResult
-	RoundResults    []*contracts.RoundResult
+	LastRoundResult *gameplay.RoundResult
+	RoundResults    []*gameplay.RoundResult
 	AwaitingAdvance bool
-	State           contracts.MatchState
+	State           gameplay.MatchState
 	EventSeq        int64
 	CreatedAt       time.Time
 	LastActivity    time.Time
 	now             func() time.Time
 }
 
-type RoundProvider func(matchID string, roundIndex int) (contracts.LocationPoint, error)
+type RoundProvider func(matchID string, roundIndex int) (gameplay.LocationPoint, error)
 
 type Engine struct {
 	mu            sync.RWMutex
@@ -63,11 +63,11 @@ func NewWithClock(roundProvider RoundProvider, now func() time.Time) *Engine {
 	}
 }
 
-func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile) (*Session, error) {
-	return e.CreateMatchWithConfig(matchID, playerIDs, profiles, contracts.MatchConfig{})
+func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[string]gameplay.PlayerProfile) (*Session, error) {
+	return e.CreateMatchWithConfig(matchID, playerIDs, profiles, gameplay.MatchConfig{})
 }
 
-func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, config contracts.MatchConfig) (*Session, error) {
+func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profiles map[string]gameplay.PlayerProfile, config gameplay.MatchConfig) (*Session, error) {
 	if len(playerIDs) != 1 {
 		return nil, errors.New("singleplayer requires exactly one player")
 	}
@@ -90,16 +90,16 @@ func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profi
 	if _, ok := e.sessions[matchID]; ok {
 		return nil, errors.New("match already exists")
 	}
-	config = contracts.NormalizeMatchConfig(config)
+	config = gameplay.NormalizeMatchConfig(config)
 	session := &Session{
 		ID:              matchID,
 		Config:          config,
-		Player:          &contracts.PlayerState{UserID: playerID, DisplayName: name, MMR: profile.MMR, RatingRD: profile.RatingRD, RankedGamesPlayed: profile.RankedGamesPlayed, AvatarURL: profile.AvatarURL, IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin, SelectedBadge: profile.SelectedBadge},
+		Player:          &gameplay.PlayerState{UserID: playerID, DisplayName: name, MMR: profile.MMR, RatingRD: profile.RatingRD, RankedGamesPlayed: profile.RankedGamesPlayed, AvatarURL: profile.AvatarURL, IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin, SelectedBadge: profile.SelectedBadge},
 		CurrentLocation: firstRound,
 		CurrentIndex:    0,
 		RoundID:         roundID(matchID, 1),
 		RoundStartedAt:  now,
-		State:           contracts.MatchLive,
+		State:           gameplay.MatchLive,
 		EventSeq:        1,
 		CreatedAt:       now,
 		LastActivity:    now,
@@ -109,7 +109,7 @@ func (e *Engine) CreateMatchWithConfig(matchID string, playerIDs []string, profi
 	return session, nil
 }
 
-func (e *Engine) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
+func (e *Engine) GetSnapshot(matchID string) (*gameplay.MatchSnapshot, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	session, ok := e.sessions[matchID]
@@ -119,14 +119,14 @@ func (e *Engine) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
 	return session.snapshot(), nil
 }
 
-func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error) {
+func (e *Engine) SubmitGuess(g gameplay.Guess) (*gameplay.MatchSnapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	session, ok := e.sessions[g.MatchID]
 	if !ok {
 		return nil, errors.New("match not found")
 	}
-	if session.State != contracts.MatchLive {
+	if session.State != gameplay.MatchLive {
 		return session.snapshot(), nil
 	}
 	if session.Player.UserID != g.UserID {
@@ -154,7 +154,7 @@ func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot
 	return session.snapshot(), nil
 }
 
-func (e *Engine) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (e *Engine) AdvanceRound(matchID, userID string) (*gameplay.MatchSnapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	session, ok := e.sessions[matchID]
@@ -164,14 +164,14 @@ func (e *Engine) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot,
 	if session.Player.UserID != userID {
 		return nil, errors.New("player not in match")
 	}
-	if session.State != contracts.MatchLive {
+	if session.State != gameplay.MatchLive {
 		return session.snapshot(), nil
 	}
 	if !session.AwaitingAdvance {
 		return session.snapshot(), nil
 	}
 	if session.CurrentIndex+1 >= maxRounds {
-		session.State = contracts.MatchEnded
+		session.State = gameplay.MatchEnded
 		session.AwaitingAdvance = false
 		session.LastActivity = e.now()
 		session.EventSeq++
@@ -198,7 +198,7 @@ func (e *Engine) AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot,
 	return session.snapshot(), nil
 }
 
-func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (e *Engine) Forfeit(matchID, userID string) (*gameplay.MatchSnapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	session, ok := e.sessions[matchID]
@@ -208,7 +208,7 @@ func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, erro
 	if session.Player.UserID != userID {
 		return nil, errors.New("player not in match")
 	}
-	session.State = contracts.MatchEnded
+	session.State = gameplay.MatchEnded
 	session.AwaitingAdvance = false
 	session.Player.Finalized = false
 	session.LastActivity = e.now()
@@ -225,7 +225,7 @@ func (e *Engine) Remove(matchID string) {
 	delete(e.sessions, matchID)
 }
 
-func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (e *Engine) MarkDisconnected(matchID, userID string) (*gameplay.MatchSnapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	session, ok := e.sessions[matchID]
@@ -241,7 +241,7 @@ func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnaps
 	return session.snapshot(), nil
 }
 
-func (e *Engine) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error) {
+func (e *Engine) MarkResumed(matchID, userID string) (*gameplay.MatchSnapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	session, ok := e.sessions[matchID]
@@ -266,11 +266,11 @@ func (e *Engine) resolveRound(session *Session) {
 	score := gameplay.RoundScore(dist)
 	session.Player.TotalScore += score
 	session.Player.Finalized = false
-	session.LastRoundResult = &contracts.RoundResult{
+	session.LastRoundResult = &gameplay.RoundResult{
 		RoundID:        session.RoundID,
 		RoundNumber:    session.CurrentIndex + 1,
 		ActualLocation: session.CurrentLocation,
-		Players: map[string]contracts.RoundPlayerResult{
+		Players: map[string]gameplay.RoundPlayerResult{
 			session.Player.UserID: {
 				UserID:      session.Player.UserID,
 				Lat:         guess.Lat,
@@ -307,32 +307,32 @@ func guessMS(g Guess, roundStartedAt time.Time) int64 {
 	return ms
 }
 
-func (s *Session) snapshot() *contracts.MatchSnapshot {
-	players := map[string]contracts.PlayerState{
+func (s *Session) snapshot() *gameplay.MatchSnapshot {
+	players := map[string]gameplay.PlayerState{
 		s.Player.UserID: *s.Player,
 	}
 	now := s.now().UnixMilli()
-	phase := contracts.PhaseLive
-	roundPhase := contracts.RoundPhaseLive
-	currentRound := &contracts.RoundState{
+	phase := gameplay.PhaseLive
+	roundPhase := gameplay.RoundPhaseLive
+	currentRound := &gameplay.RoundState{
 		RoundID:       s.RoundID,
 		RoundNumber:   s.CurrentIndex + 1,
 		RoundDeadline: time.UnixMilli(0),
 		Location:      s.CurrentLocation,
 	}
-	if s.State == contracts.MatchEnded {
-		phase = contracts.PhaseEnded
-		roundPhase = contracts.RoundPhaseEnded
+	if s.State == gameplay.MatchEnded {
+		phase = gameplay.PhaseEnded
+		roundPhase = gameplay.RoundPhaseEnded
 		currentRound = nil
 	} else if s.AwaitingAdvance {
-		phase = contracts.PhaseRoundResult
-		roundPhase = contracts.RoundPhaseResult
+		phase = gameplay.PhaseRoundResult
+		roundPhase = gameplay.RoundPhaseResult
 		currentRound = nil
 	}
-	return &contracts.MatchSnapshot{
+	return &gameplay.MatchSnapshot{
 		MatchID:         s.ID,
-		Mode:            contracts.ModeSingleplayer,
-		Kind:            contracts.KindSolo,
+		Mode:            matchkind.ModeSingleplayer,
+		Kind:            matchkind.Solo,
 		State:           s.State,
 		Phase:           phase,
 		RoundPhase:      roundPhase,
@@ -340,10 +340,10 @@ func (s *Session) snapshot() *contracts.MatchSnapshot {
 		PhaseEndsAt:     now,
 		CurrentRound:    currentRound,
 		LastRoundResult: s.LastRoundResult,
-		RoundResults:    append([]*contracts.RoundResult(nil), s.RoundResults...),
+		RoundResults:    append([]*gameplay.RoundResult(nil), s.RoundResults...),
 		RoundMSLeft:     0,
 		Players:         players,
-		Config:          contracts.NormalizeMatchConfig(s.Config),
+		Config:          gameplay.NormalizeMatchConfig(s.Config),
 		EventSequence:   s.EventSeq,
 		ServerUnixMS:    now,
 		GraceWindowSec:  0,

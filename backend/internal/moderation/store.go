@@ -11,7 +11,6 @@ import (
 	"geoduels/internal/audit"
 	"geoduels/internal/jobs"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 	pkgstaff "geoduels/pkg/staff"
 )
@@ -28,14 +27,14 @@ type Store interface {
 	RecordAudit(ctx context.Context, entry audit.Entry) (int64, error)
 
 	// Review
-	SearchSubjects(ctx context.Context, viewer pkgstaff.Actor, query string, limit int) ([]contracts.AdminPlayerSummary, error)
+	SearchSubjects(ctx context.Context, viewer pkgstaff.Actor, query string, limit int) ([]PlayerSummary, error)
 	GetSubject(ctx context.Context, viewer pkgstaff.Actor, userID string) (SubjectDetail, error)
-	ListSignals(ctx context.Context, subjectID string, limit int) ([]contracts.ModerationSignalSummary, error)
-	ListAudit(ctx context.Context, subjectID string, limit int) ([]contracts.ModerationAuditLogEntry, error)
+	ListSignals(ctx context.Context, subjectID string, limit int) ([]Signal, error)
+	ListAudit(ctx context.Context, subjectID string, limit int) ([]audit.LogEntry, error)
 
 	// Reports
 	ReportEligibility(ctx context.Context, matchID, reporterID, subjectID string) (ReportEligibility, error)
-	SaveReport(ctx context.Context, report PlayerReport) (contracts.ModerationSignalCreated, error)
+	SaveReport(ctx context.Context, report PlayerReport) (ReportResult, error)
 
 	// Enforcement
 	ActiveSeasonID(ctx context.Context) (string, error)

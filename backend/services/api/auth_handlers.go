@@ -13,7 +13,7 @@ import (
 	"geoduels/internal/authsession"
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contentfilter"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/staff"
 )
 
 func (a *api) sessionService() *authsession.Service {
@@ -21,6 +21,29 @@ func (a *api) sessionService() *authsession.Service {
 		return a.authSessionService
 	}
 	return authsession.NewService(a.sessions)
+}
+
+// authSessionPayload is a signed-in session as clients hold it.
+type authSessionPayload struct {
+	AccessToken           string   `json:"accessToken"`
+	NicknameRequired      bool     `json:"nicknameRequired"`
+	SuggestedNickname     string   `json:"suggestedNickname,omitempty"`
+	LinkedProviders       []string `json:"linkedProviders,omitempty"`
+	AuthMigrationRequired bool     `json:"authMigrationRequired,omitempty"`
+	RecoveryAvailable     bool     `json:"recoveryAvailable,omitempty"`
+	CanPlay               bool     `json:"canPlay"`
+	User                  authUser `json:"user"`
+}
+
+type authUser struct {
+	Roles       staff.Roles `json:"roles"`
+	ID          string      `json:"id"`
+	Email       string      `json:"email,omitempty"`
+	DisplayName string      `json:"display_name,omitempty"`
+	AvatarURL   string      `json:"avatar_url,omitempty"`
+	IsGuest     bool        `json:"isGuest"`
+	IsAdmin     bool        `json:"isAdmin,omitempty"`
+	IsModerator bool        `json:"isModerator,omitempty"`
 }
 
 var errMissingRefreshToken = errors.New("missing refresh token")
@@ -243,85 +266,85 @@ func (a *api) writeRotatedSessionResponse(c echo.Context, r *http.Request) error
 	return writeJSON(c, payload)
 }
 
-func (a *api) authSessionFromCookies(r *http.Request) (RefreshTokenRecord, error) {
+func (a *api) authSessionFromCookies(r *http.Request) (authsession.Record, error) {
 	refreshTokens := a.readRefreshCookies(r)
 	if len(refreshTokens) == 0 {
-		return RefreshTokenRecord{}, errMissingRefreshToken
+		return authsession.Record{}, errMissingRefreshToken
 	}
 	for _, refreshToken := range refreshTokens {
 		candidate, ok, err := a.sessionService().Get(r.Context(), auth.RefreshTokenHash(refreshToken))
 		if err != nil {
-			return RefreshTokenRecord{}, err
+			return authsession.Record{}, err
 		}
 		if !ok || candidate.RevokedAt != nil || time.Now().After(candidate.ExpiresAt) {
 			continue
 		}
 		return candidate, nil
 	}
-	return RefreshTokenRecord{}, errUnavailableRefreshSession
+	return authsession.Record{}, errUnavailableRefreshSession
 }
 
-func (a *api) rotateSessionFromCookie(r *http.Request) (contracts.AuthSessionPayload, string, error) {
+func (a *api) rotateSessionFromCookie(r *http.Request) (authSessionPayload, string, error) {
 	rec, err := a.authSessionFromCookies(r)
 	if err != nil {
-		return contracts.AuthSessionPayload{}, "", err
+		return authSessionPayload{}, "", err
 	}
 	currentHash := rec.RefreshTokenHash
 	nextRefreshToken, nextHash, err := auth.NewRefreshToken()
 	if err != nil {
-		return contracts.AuthSessionPayload{}, "", err
+		return authSessionPayload{}, "", err
 	}
 	rotated, ok, err := a.sessionService().Rotate(r.Context(), rec.ID, currentHash, nextHash, time.Now().Add(a.refreshTokenTTL), time.Now())
 	if err != nil {
-		return contracts.AuthSessionPayload{}, "", err
+		return authSessionPayload{}, "", err
 	}
 	if !ok {
-		return contracts.AuthSessionPayload{}, "", errors.New("session rotation failed")
+		return authSessionPayload{}, "", errors.New("session rotation failed")
 	}
 	identity, err := a.accounts.GetIdentity(rotated.UserID)
 	if err != nil {
-		return contracts.AuthSessionPayload{}, "", err
+		return authSessionPayload{}, "", err
 	}
 	payload, err := a.issueAuthSessionPayload(identity, rotated.ID)
 	if err != nil {
-		return contracts.AuthSessionPayload{}, "", err
+		return authSessionPayload{}, "", err
 	}
 	return payload, nextRefreshToken, nil
 }
 
-func (a *api) createSession(userID string, r *http.Request) (string, RefreshTokenRecord, error) {
+func (a *api) createSession(userID string, r *http.Request) (string, authsession.Record, error) {
 	refreshToken, hash, err := auth.NewRefreshToken()
 	if err != nil {
-		return "", RefreshTokenRecord{}, err
+		return "", authsession.Record{}, err
 	}
-	record, err := a.sessionService().Create(r.Context(), userID, hash, time.Now().Add(a.refreshTokenTTL), AuthSessionParams{
+	record, err := a.sessionService().Create(r.Context(), userID, hash, time.Now().Add(a.refreshTokenTTL), authsession.Params{
 		UserAgent: strings.TrimSpace(r.UserAgent()),
 		IPAddress: a.clientIP(r),
 	})
 	if err != nil {
-		return "", RefreshTokenRecord{}, err
+		return "", authsession.Record{}, err
 	}
 	return refreshToken, record, nil
 }
 
-func (a *api) issueAuthSessionPayload(identity Identity, sessionID string) (contracts.AuthSessionPayload, error) {
+func (a *api) issueAuthSessionPayload(identity Identity, sessionID string) (authSessionPayload, error) {
 	bootstrapped, err := a.autoBootstrapAdmin(identity)
 	if err != nil {
-		return contracts.AuthSessionPayload{}, err
+		return authSessionPayload{}, err
 	}
 	identity = bootstrapped
 	if err := a.badges.SyncLoginBadges(identity.Sub); err != nil {
-		return contracts.AuthSessionPayload{}, fmt.Errorf("sync login badges: %w", err)
+		return authSessionPayload{}, fmt.Errorf("sync login badges: %w", err)
 	}
 	accessToken, err := auth.IssueAppAccessToken(a.appAuthSecret, identity.Sub, sessionID, a.accessTokenTTL)
 	if err != nil {
-		return contracts.AuthSessionPayload{}, err
+		return authSessionPayload{}, err
 	}
 	suggestedNickname, err := a.suggestedNickname(identity, "")
 	if err != nil {
-		return contracts.AuthSessionPayload{}, fmt.Errorf("suggest nickname: %w", err)
+		return authSessionPayload{}, fmt.Errorf("suggest nickname: %w", err)
 	}
-	payload := contracts.AuthSessionPayload{
+	payload := authSessionPayload{
 		AccessToken:           accessToken,
 		NicknameRequired:      identity.NicknameRequired,
 		SuggestedNickname:     suggestedNickname,
@@ -359,8 +382,8 @@ func (a *api) autoBootstrapAdmin(identity Identity) (Identity, error) {
 	return a.accounts.GetIdentity(identity.Sub)
 }
 
-func sessionUser(identity Identity) contracts.AuthUser {
-	return contracts.AuthUser{
+func sessionUser(identity Identity) authUser {
+	return authUser{
 		ID:          identity.Sub,
 		Roles:       identity.Roles,
 		Email:       identity.Email,

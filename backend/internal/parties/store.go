@@ -8,13 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 // MapResolver resolves the default/party map. Implemented by maps.PGStore.
 type MapResolver interface {
-	ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error)
+	ResolveGameplayMapID(mode matchkind.Mode, ruleset gameplay.Ruleset, requestedMapID string) (string, error)
 }
 
 // PGStore persists parties data using the pool, or the transaction supplied
@@ -55,6 +56,6 @@ func (s *PGStore) WithinTx(ctx context.Context, fn func(Store) error) error {
 
 var _ Store = (*PGStore)(nil)
 
-func (s *PGStore) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error) {
+func (s *PGStore) ResolveGameplayMapID(mode matchkind.Mode, ruleset gameplay.Ruleset, requestedMapID string) (string, error) {
 	return s.maps.ResolveGameplayMapID(mode, ruleset, requestedMapID)
 }

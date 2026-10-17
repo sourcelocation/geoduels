@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -69,8 +68,23 @@ func Record(ctx context.Context, conn db.DBTX, entry Entry) (int64, error) {
 	})
 }
 
+// LogEntry is a recorded entry as staff read it back, with the names of who it was about and by.
+type LogEntry struct {
+	ID            int64
+	SubjectUserID string
+	SubjectName   string
+	ActorUserID   string
+	ActorName     string
+	Action        string
+	Reason        string
+	ExpiresAt     time.Time
+	SignalIDs     []int64
+	Metadata      json.RawMessage
+	CreatedAt     time.Time
+}
+
 // List returns the newest entries, optionally for one subject.
-func List(ctx context.Context, conn db.DBTX, subjectID string, limit int) ([]contracts.ModerationAuditLogEntry, error) {
+func List(ctx context.Context, conn db.DBTX, subjectID string, limit int) ([]LogEntry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -89,9 +103,9 @@ func List(ctx context.Context, conn db.DBTX, subjectID string, limit int) ([]con
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.ModerationAuditLogEntry, 0, len(rows))
+	out := make([]LogEntry, 0, len(rows))
 	for _, x := range rows {
-		out = append(out, contracts.ModerationAuditLogEntry{
+		out = append(out, LogEntry{
 			ID: x.LogID, SubjectUserID: storekit.UUIDVal(x.SubjectUserID), SubjectName: storekit.TextVal(x.SubjectDisplayName),
 			ActorUserID: storekit.UUIDVal(x.ActorUserID), ActorName: storekit.TextVal(x.ActorDisplayName), Action: string(x.Action),
 			Reason: x.Reason, ExpiresAt: x.ExpiresAt.Time, SignalIDs: x.SignalIds, Metadata: json.RawMessage(x.Metadata), CreatedAt: x.CreatedAt.Time,

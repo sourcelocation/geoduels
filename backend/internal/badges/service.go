@@ -1,9 +1,6 @@
 package badges
 
-import (
-	"geoduels/pkg/contracts"
-	pkgstaff "geoduels/pkg/staff"
-)
+import pkgstaff "geoduels/pkg/staff"
 
 type Store interface {
 	SyncLoginBadges(userID string) error
@@ -11,8 +8,8 @@ type Store interface {
 	GetDiscordLinkedUser(discordUserID string) (DiscordLinkedUser, bool, error)
 	CreateDonationRef(userID string) (string, error)
 	AwardSupporterByDonationRef(ref string) (bool, error)
-	ListAdminGrantableBadges() []AdminBadgeDefinition
-	GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.PlayerBadge, bool, error)
+	ListAdminGrantableBadges() []CatalogEntry
+	GrantBadgeToUser(nickname, badgeID, actorUserID string) (Badge, bool, error)
 }
 
 type Service struct{ store Store }
@@ -21,8 +18,8 @@ func NewService(store Store) *Service { return &Service{store: store} }
 
 // Grant is the result of granting a badge by nickname.
 type Grant struct {
-	Badge   contracts.PlayerBadge `json:"badge"`
-	Changed bool                  `json:"changed"`
+	Badge   Badge `json:"badge"`
+	Changed bool  `json:"changed"`
 }
 
 func (s *Service) SyncLoginBadges(userID string) error { return s.store.SyncLoginBadges(userID) }
@@ -36,7 +33,7 @@ func (s *Service) AwardSupporterByDonationRef(ref string) (bool, error) {
 }
 
 // Catalog lists the badges staff may grant by hand.
-func (s *Service) Catalog(actor pkgstaff.Actor) ([]AdminBadgeDefinition, error) {
+func (s *Service) Catalog(actor pkgstaff.Actor) ([]CatalogEntry, error) {
 	if err := actor.RequireCap(pkgstaff.CapManageAccess); err != nil {
 		return nil, err
 	}

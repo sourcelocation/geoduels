@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
@@ -21,7 +21,7 @@ import (
 type MatchPlanRequest struct {
 	MatchID string
 	Spec    matchkind.Spec
-	Config  contracts.MatchConfig
+	Config  gameplay.MatchConfig
 	// MapAccessUserID is whose private maps the match may play.
 	MapAccessUserID string
 	Players         []string
@@ -29,7 +29,7 @@ type MatchPlanRequest struct {
 
 // MatchPlan is the map a match plays; its rounds are in match_round_plans.
 type MatchPlan struct {
-	Config contracts.MatchConfig
+	Config gameplay.MatchConfig
 	MapID  string
 }
 
@@ -41,7 +41,7 @@ func (s *PGStore) PlanMatchTx(ctx context.Context, tx pgx.Tx, req MatchPlanReque
 		return MatchPlan{}, errors.New("match required")
 	}
 	q := db.New(tx)
-	cfg := contracts.NormalizeMatchConfig(req.Config)
+	cfg := gameplay.NormalizeMatchConfig(req.Config)
 	mapID := strings.TrimSpace(cfg.MapID)
 	if req.Spec.Maps == matchkind.MapsRotation || mapID == "" {
 		resolved, err := s.ResolveGameplayMapID(req.Spec.Mode, cfg.Ruleset, "")
@@ -70,7 +70,7 @@ func (s *PGStore) PlanMatchTx(ctx context.Context, tx pgx.Tx, req MatchPlanReque
 		return MatchPlan{}, errors.New("selected map is not accessible")
 	}
 	requiredRounds := plannedRoundCount
-	if req.Spec.Mode == contracts.ModeFreeForAll || req.Spec.Mode == contracts.ModeSingleplayer {
+	if req.Spec.Mode == matchkind.ModeFreeForAll || req.Spec.Mode == matchkind.ModeSingleplayer {
 		requiredRounds = minMapLocations
 	}
 	if int(selectedMap.LocationCount) < requiredRounds {
@@ -98,7 +98,7 @@ func (s *PGStore) PlanMatchTx(ctx context.Context, tx pgx.Tx, req MatchPlanReque
 }
 
 // MatchRounds returns a match's planned round locations, in order.
-func (s *PGStore) MatchRounds(ctx context.Context, matchID string) ([]contracts.LocationPoint, error) {
+func (s *PGStore) MatchRounds(ctx context.Context, matchID string) ([]gameplay.LocationPoint, error) {
 	id, err := storekit.ProfileUUID(matchID)
 	if err != nil {
 		return nil, err
@@ -107,9 +107,9 @@ func (s *PGStore) MatchRounds(ctx context.Context, matchID string) ([]contracts.
 	if err != nil {
 		return nil, err
 	}
-	rounds := make([]contracts.LocationPoint, 0, len(rows))
+	rounds := make([]gameplay.LocationPoint, 0, len(rows))
 	for _, row := range rows {
-		point := contracts.LocationPoint{Lat: row.Lat, Lng: row.Lng, Country: row.Country}
+		point := gameplay.LocationPoint{Lat: row.Lat, Lng: row.Lng, Country: row.Country}
 		if row.PanoID.Valid {
 			v := row.PanoID.String
 			point.PanoID = &v
@@ -143,7 +143,7 @@ func selectedMapAccessible(ownerUserID, accessUserID, visibility string) bool {
 }
 
 type plannedLocation struct {
-	contracts.LocationPoint
+	gameplay.LocationPoint
 }
 
 func valueOrEmpty(v *string) string {

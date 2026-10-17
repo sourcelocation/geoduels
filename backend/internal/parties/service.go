@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 )
 
@@ -23,13 +23,13 @@ const (
 
 // PartyStateOwner is a primitive ownership/state read.
 type PartyStateOwner struct {
-	State       contracts.PartyState
+	State       State
 	OwnerUserID string
 }
 
 // PartyStateExpiry is a primitive state/expiry read.
 type PartyStateExpiry struct {
-	State     contracts.PartyState
+	State     State
 	ExpiresAt time.Time
 }
 
@@ -39,7 +39,7 @@ type PartyInsert struct {
 	ID          string
 	InviteCode  string
 	OwnerUserID string
-	Mode        contracts.MatchMode
+	Mode        matchkind.Mode
 	MapScope    string
 	MapID       string
 	ExpiresAt   time.Time
@@ -66,16 +66,16 @@ func (s *Service) op() (context.Context, context.CancelFunc) {
 
 // CreateParty owns validation, defaults, map resolution, expiry, invite-code
 // allocation and the retry loop. Persistence only inserts.
-func (s *Service) CreateParty(ownerUserID string, mode contracts.MatchMode, mapScope string, ttl time.Duration) (contracts.PartySnapshot, error) {
+func (s *Service) CreateParty(ownerUserID string, mode matchkind.Mode, mapScope string, ttl time.Duration) (Party, error) {
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if ownerUserID == "" {
-		return contracts.PartySnapshot{}, errors.New("owner required")
+		return Party{}, errors.New("owner required")
 	}
 	if mode == "" {
-		mode = contracts.ModeDuel
+		mode = matchkind.ModeDuel
 	}
 	if _, ok := matchkind.ForParty(mode); !ok {
-		return contracts.PartySnapshot{}, errors.New("unsupported party mode")
+		return Party{}, errors.New("unsupported party mode")
 	}
 	if strings.TrimSpace(mapScope) == "" {
 		mapScope = "world"
@@ -83,9 +83,9 @@ func (s *Service) CreateParty(ownerUserID string, mode contracts.MatchMode, mapS
 	if ttl <= 0 {
 		ttl = 2 * time.Hour
 	}
-	mapID, err := s.store.ResolveGameplayMapID(contracts.ModeDuel, contracts.RulesetMoving, "")
+	mapID, err := s.store.ResolveGameplayMapID(matchkind.ModeDuel, gameplay.RulesetMoving, "")
 	if err != nil {
-		return contracts.PartySnapshot{}, fmt.Errorf("resolve party map: %w", err)
+		return Party{}, fmt.Errorf("resolve party map: %w", err)
 	}
 	expiresAt := s.now().Add(ttl)
 	ctx, cancel := s.op()
@@ -106,32 +106,32 @@ func (s *Service) CreateParty(ownerUserID string, mode contracts.MatchMode, mapS
 		})
 		if err != nil {
 			if attempt == 4 {
-				return contracts.PartySnapshot{}, fmt.Errorf("insert party: %w", err)
+				return Party{}, fmt.Errorf("insert party: %w", err)
 			}
 			continue
 		}
 		snap, _, err := s.store.GetPartyByID(ctx, partyID)
 		if err != nil {
-			return contracts.PartySnapshot{}, fmt.Errorf("read created party: %w", err)
+			return Party{}, fmt.Errorf("read created party: %w", err)
 		}
 		return snap, nil
 	}
-	return contracts.PartySnapshot{}, errors.New("could not allocate party invite code")
+	return Party{}, errors.New("could not allocate party invite code")
 }
 
-func (s *Service) GetCurrentParty(userID string) (*contracts.CurrentParty, error) {
+func (s *Service) GetCurrentParty(userID string) (*CurrentParty, error) {
 	ctx, cancel := s.op()
 	defer cancel()
 	return s.store.GetCurrentParty(ctx, userID)
 }
 
-func (s *Service) GetPartyByID(lobbyID string) (contracts.PartySnapshot, bool, error) {
+func (s *Service) GetPartyByID(lobbyID string) (Party, bool, error) {
 	ctx, cancel := s.op()
 	defer cancel()
 	return s.store.GetPartyByID(ctx, lobbyID)
 }
 
-func (s *Service) GetPartyByInviteCode(inviteCode string) (contracts.PartySnapshot, bool, error) {
+func (s *Service) GetPartyByInviteCode(inviteCode string) (Party, bool, error) {
 	ctx, cancel := s.op()
 	defer cancel()
 	return s.store.GetPartyByInviteCode(ctx, inviteCode)
@@ -154,7 +154,7 @@ func (s *Service) ClearMemberSeen(partyID, userID string) (bool, error) {
 
 // SetPartyMode owns the party-open check and the team-shuffle decision that
 // runs when switching into team duel.
-func (s *Service) SetPartyMode(lobbyID string, mode contracts.MatchMode) error {
+func (s *Service) SetPartyMode(lobbyID string, mode matchkind.Mode) error {
 	partyID := strings.TrimSpace(lobbyID)
 	if _, ok := matchkind.ForParty(mode); partyID == "" || !ok {
 		return errors.New("invalid party mode")
@@ -169,7 +169,7 @@ func (s *Service) SetPartyMode(lobbyID string, mode contracts.MatchMode) error {
 			}
 			return err
 		}
-		if current != contracts.ModeTeamDuel && mode == contracts.ModeTeamDuel {
+		if current != matchkind.ModeTeamDuel && mode == matchkind.ModeTeamDuel {
 			if err := store.ShufflePartyTeams(ctx, partyID); err != nil {
 				return err
 			}
@@ -180,9 +180,9 @@ func (s *Service) SetPartyMode(lobbyID string, mode contracts.MatchMode) error {
 
 // SetPartyConfig owns map canonicalization, accessibility and ready-reset
 // policy inside one transaction.
-func (s *Service) SetPartyConfig(lobbyID string, cfg contracts.MatchConfig) (contracts.PartySnapshot, error) {
+func (s *Service) SetPartyConfig(lobbyID string, cfg gameplay.MatchConfig) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
-	cfg = contracts.NormalizeMatchConfig(cfg)
+	cfg = gameplay.NormalizeMatchConfig(cfg)
 	ctx, cancel := s.op()
 	defer cancel()
 	err := s.store.WithinTx(ctx, func(store Store) error {
@@ -209,14 +209,14 @@ func (s *Service) SetPartyConfig(lobbyID string, cfg contracts.MatchConfig) (con
 		return store.ResetPartyMembersReady(ctx, partyID)
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	snap, _, err := s.store.GetPartyByID(ctx, partyID)
 	return snap, err
 }
 
 // JoinParty owns joinability, capacity and owner-role policy.
-func (s *Service) JoinParty(lobbyID, userID string) (contracts.PartySnapshot, error) {
+func (s *Service) JoinParty(lobbyID, userID string) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
 	ctx, cancel := s.op()
 	defer cancel()
@@ -228,7 +228,7 @@ func (s *Service) JoinParty(lobbyID, userID string) (contracts.PartySnapshot, er
 		if err != nil {
 			return err
 		}
-		if active >= contracts.MaxPartyMembers {
+		if active >= matchkind.MaxPartyMembers {
 			return errors.New("party is full")
 		}
 		role := MemberRoleMember
@@ -248,14 +248,14 @@ func (s *Service) JoinParty(lobbyID, userID string) (contracts.PartySnapshot, er
 		return store.TouchPartyUpdated(ctx, partyID)
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	snap, _, err := s.store.GetPartyByID(ctx, partyID)
 	return snap, err
 }
 
 // LeaveParty owns the in-progress leader rule and the ownership handoff policy.
-func (s *Service) LeaveParty(lobbyID, userID string) (contracts.PartySnapshot, error) {
+func (s *Service) LeaveParty(lobbyID, userID string) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
 	ctx, cancel := s.op()
 	defer cancel()
@@ -265,10 +265,10 @@ func (s *Service) LeaveParty(lobbyID, userID string) (contracts.PartySnapshot, e
 			return err
 		}
 		state := party.State
-		if state != contracts.PartyOpen && state != contracts.PartyInMatch {
+		if state != StateOpen && state != StateInMatch {
 			return errors.New("party is not joinable")
 		}
-		if party.OwnerUserID == userID && state != contracts.PartyOpen {
+		if party.OwnerUserID == userID && state != StateOpen {
 			return errors.New("leader cannot leave the party while a game is in progress")
 		}
 		removed, err := store.LeavePartyMember(ctx, partyID, userID)
@@ -305,18 +305,18 @@ func (s *Service) LeaveParty(lobbyID, userID string) (contracts.PartySnapshot, e
 		return store.TouchPartyUpdated(ctx, partyID)
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	next, _, err := s.store.GetPartyByID(ctx, partyID)
 	return next, err
 }
 
 // ShufflePartyTeams owns ownership authorization and the team-duel-only rule.
-func (s *Service) ShufflePartyTeams(lobbyID, ownerUserID string) (contracts.PartySnapshot, error) {
+func (s *Service) ShufflePartyTeams(lobbyID, ownerUserID string) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if partyID == "" || ownerUserID == "" {
-		return contracts.PartySnapshot{}, errors.New("invalid party")
+		return Party{}, errors.New("invalid party")
 	}
 	ctx, cancel := s.op()
 	defer cancel()
@@ -331,7 +331,7 @@ func (s *Service) ShufflePartyTeams(lobbyID, ownerUserID string) (contracts.Part
 		if !found {
 			return ErrNotFound
 		}
-		if snap.Mode != contracts.ModeTeamDuel {
+		if snap.Mode != matchkind.ModeTeamDuel {
 			return errors.New("shuffle is only available in team duels")
 		}
 		if err := store.ShufflePartyTeams(ctx, partyID); err != nil {
@@ -340,19 +340,19 @@ func (s *Service) ShufflePartyTeams(lobbyID, ownerUserID string) (contracts.Part
 		return store.TouchOpenParty(ctx, partyID)
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	next, _, err := s.store.GetPartyByID(ctx, partyID)
 	return next, err
 }
 
 // SetPartyMemberTeam owns open-state and team-value validation.
-func (s *Service) SetPartyMemberTeam(lobbyID, userID, teamID string) (contracts.PartySnapshot, error) {
+func (s *Service) SetPartyMemberTeam(lobbyID, userID, teamID string) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
 	userID = strings.TrimSpace(userID)
 	teamID = strings.ToLower(strings.TrimSpace(teamID))
 	if partyID == "" || userID == "" || (teamID != "a" && teamID != "b") {
-		return contracts.PartySnapshot{}, errors.New("invalid party team")
+		return Party{}, errors.New("invalid party team")
 	}
 	ctx, cancel := s.op()
 	defer cancel()
@@ -370,19 +370,19 @@ func (s *Service) SetPartyMemberTeam(lobbyID, userID, teamID string) (contracts.
 		return store.TouchOpenParty(ctx, partyID)
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	snap, _, err := s.store.GetPartyByID(ctx, partyID)
 	return snap, err
 }
 
 // KickPartyMember owns ownership authorization and member validation.
-func (s *Service) KickPartyMember(lobbyID, ownerUserID, targetUserID string) (contracts.PartySnapshot, error) {
+func (s *Service) KickPartyMember(lobbyID, ownerUserID, targetUserID string) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	targetUserID = strings.TrimSpace(targetUserID)
 	if ownerUserID == "" || targetUserID == "" || ownerUserID == targetUserID {
-		return contracts.PartySnapshot{}, errors.New("invalid party member")
+		return Party{}, errors.New("invalid party member")
 	}
 	ctx, cancel := s.op()
 	defer cancel()
@@ -400,7 +400,7 @@ func (s *Service) KickPartyMember(lobbyID, ownerUserID, targetUserID string) (co
 		return nil
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	snap, _, err := s.store.GetPartyByID(ctx, partyID)
 	return snap, err
@@ -408,7 +408,7 @@ func (s *Service) KickPartyMember(lobbyID, ownerUserID, targetUserID string) (co
 
 // TransferPartyOwner owns ownership authorization, target validation and the
 // active-member check before reassigning roles.
-func (s *Service) TransferPartyOwner(lobbyID, ownerUserID, targetUserID string) (contracts.PartySnapshot, error) {
+func (s *Service) TransferPartyOwner(lobbyID, ownerUserID, targetUserID string) (Party, error) {
 	partyID := strings.TrimSpace(lobbyID)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	targetUserID = strings.TrimSpace(targetUserID)
@@ -434,7 +434,7 @@ func (s *Service) TransferPartyOwner(lobbyID, ownerUserID, targetUserID string) 
 		return store.ReassignPartyRoles(ctx, partyID, targetUserID)
 	})
 	if err != nil {
-		return contracts.PartySnapshot{}, err
+		return Party{}, err
 	}
 	snap, _, err := s.store.GetPartyByID(ctx, partyID)
 	return snap, err
@@ -468,7 +468,7 @@ func authorizeOwner(ctx context.Context, store Store, partyID, ownerUserID strin
 	if err != nil {
 		return err
 	}
-	if party.State != contracts.PartyOpen {
+	if party.State != StateOpen {
 		return errors.New("party is not open")
 	}
 	if party.OwnerUserID != ownerUserID {
@@ -483,7 +483,7 @@ func (s *Service) requireOpen(ctx context.Context, store Store, partyID string) 
 	if err != nil {
 		return err
 	}
-	if party.State != contracts.PartyOpen {
+	if party.State != StateOpen {
 		return errors.New("party is not open")
 	}
 	if s.now().After(party.ExpiresAt) {
@@ -499,7 +499,7 @@ func (s *Service) requireJoinable(ctx context.Context, store Store, partyID stri
 	if err != nil {
 		return err
 	}
-	if party.State != contracts.PartyOpen && party.State != contracts.PartyInMatch {
+	if party.State != StateOpen && party.State != StateInMatch {
 		return errors.New("party is not joinable")
 	}
 	if s.now().After(party.ExpiresAt) {

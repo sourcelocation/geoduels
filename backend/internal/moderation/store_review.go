@@ -10,12 +10,11 @@ import (
 
 	"geoduels/internal/audit"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 	pkgstaff "geoduels/pkg/staff"
 )
 
-func (a *PGStore) SearchSubjects(ctx context.Context, viewer pkgstaff.Actor, query string, limit int) ([]contracts.AdminPlayerSummary, error) {
+func (a *PGStore) SearchSubjects(ctx context.Context, viewer pkgstaff.Actor, query string, limit int) ([]PlayerSummary, error) {
 	if limit <= 0 {
 		limit = 30
 	}
@@ -44,7 +43,7 @@ func (a *PGStore) SearchSubjects(ctx context.Context, viewer pkgstaff.Actor, que
 	if err != nil {
 		return nil, err
 	}
-	result := make([]contracts.AdminPlayerSummary, 0, len(rows))
+	result := make([]PlayerSummary, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, playerSummaryFromRow(row))
 	}
@@ -71,14 +70,14 @@ func (a *PGStore) GetSubject(ctx context.Context, viewer pkgstaff.Actor, userID 
 	return SubjectDetail{Player: summary}, nil
 }
 
-func (a *PGStore) getSubjectSummary(ctx context.Context, includeSensitive bool, userID string) (contracts.AdminPlayerSummary, error) {
+func (a *PGStore) getSubjectSummary(ctx context.Context, includeSensitive bool, userID string) (PlayerSummary, error) {
 	uid, err := storekit.ProfileUUID(userID)
 	if err != nil {
-		return contracts.AdminPlayerSummary{}, ErrNotFound
+		return PlayerSummary{}, ErrNotFound
 	}
 	seasonID, err := storekit.ActiveSeasonID(ctx, a.pool)
 	if err != nil {
-		return contracts.AdminPlayerSummary{}, err
+		return PlayerSummary{}, err
 	}
 	rows, err := a.q().SearchAdminPlayers(ctx, db.SearchAdminPlayersParams{
 		Mode:             db.GdMatchMode(modeDuel),
@@ -90,16 +89,16 @@ func (a *PGStore) getSubjectSummary(ctx context.Context, includeSensitive bool, 
 		IncludeSensitive: includeSensitive,
 	})
 	if err != nil {
-		return contracts.AdminPlayerSummary{}, err
+		return PlayerSummary{}, err
 	}
 	if len(rows) == 0 {
-		return contracts.AdminPlayerSummary{}, ErrNotFound
+		return PlayerSummary{}, ErrNotFound
 	}
 	item := playerSummaryFromRow(rows[0])
 	if includeSensitive {
-		items := []contracts.AdminPlayerSummary{item}
+		items := []PlayerSummary{item}
 		if err := a.populateIdentities(ctx, items); err != nil {
-			return contracts.AdminPlayerSummary{}, err
+			return PlayerSummary{}, err
 		}
 		item = items[0]
 	}
@@ -125,7 +124,7 @@ func (a *PGStore) subjectStats(ctx context.Context, userID string) (adminStats, 
 	}, nil
 }
 
-func applyStats(player *contracts.AdminPlayerSummary, stats adminStats) {
+func applyStats(player *PlayerSummary, stats adminStats) {
 	player.TrackedMatches = stats.total
 	player.RankedMatches = stats.ranked
 	player.DuelMatches = stats.duel
@@ -136,8 +135,8 @@ func applyStats(player *contracts.AdminPlayerSummary, stats adminStats) {
 	}
 }
 
-func playerSummaryFromRow(row db.SearchAdminPlayersRow) contracts.AdminPlayerSummary {
-	var item contracts.AdminPlayerSummary
+func playerSummaryFromRow(row db.SearchAdminPlayersRow) PlayerSummary {
+	var item PlayerSummary
 	item.UserID = storekit.UUIDVal(row.UserID)
 	item.Email = row.Email
 	item.DisplayName = row.DisplayName
@@ -175,7 +174,7 @@ func playerSummaryFromRow(row db.SearchAdminPlayersRow) contracts.AdminPlayerSum
 	return item
 }
 
-func (a *PGStore) populateIdentities(ctx context.Context, players []contracts.AdminPlayerSummary) error {
+func (a *PGStore) populateIdentities(ctx context.Context, players []PlayerSummary) error {
 	if len(players) == 0 {
 		return nil
 	}
@@ -191,7 +190,7 @@ func (a *PGStore) populateIdentities(ctx context.Context, players []contracts.Ad
 		return err
 	}
 	for _, row := range rows {
-		var identity contracts.AdminUserIdentity
+		var identity PlayerIdentity
 		identity.Provider = string(row.Provider)
 		identity.ProviderUserID = row.ProviderUserID
 		identity.Email = row.Email
@@ -209,7 +208,7 @@ func (a *PGStore) populateIdentities(ctx context.Context, players []contracts.Ad
 	return nil
 }
 
-func (a *PGStore) ListSignals(ctx context.Context, subjectID string, limit int) ([]contracts.ModerationSignalSummary, error) {
+func (a *PGStore) ListSignals(ctx context.Context, subjectID string, limit int) ([]Signal, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -230,9 +229,9 @@ func (a *PGStore) ListSignals(ctx context.Context, subjectID string, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.ModerationSignalSummary, 0, len(rows))
+	out := make([]Signal, 0, len(rows))
 	for _, x := range rows {
-		item := contracts.ModerationSignalSummary{
+		item := Signal{
 			ID: x.SignalID, SubjectUserID: storekit.UUIDVal(x.SubjectUserID), SubjectName: storekit.TextVal(x.SubjectDisplayName),
 			SignalType: x.SignalType, Source: string(x.Source), Severity: string(x.Severity), EvidenceStrength: string(x.EvidenceStrength),
 			DetectorKey: x.DetectorKey, DetectorVersion: x.DetectorVersion, ReasonCode: x.ReasonCode, Score: x.Score,
@@ -248,7 +247,7 @@ func (a *PGStore) ListSignals(ctx context.Context, subjectID string, limit int) 
 	return out, nil
 }
 
-func (a *PGStore) ListAudit(ctx context.Context, subjectID string, limit int) ([]contracts.ModerationAuditLogEntry, error) {
+func (a *PGStore) ListAudit(ctx context.Context, subjectID string, limit int) ([]audit.LogEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	return audit.List(ctx, a.conn(), subjectID, limit)

@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"geoduels/internal/audit"
-	"geoduels/pkg/contracts"
 	pkgstaff "geoduels/pkg/staff"
 )
 
@@ -105,36 +104,36 @@ func (s *Service) Warn(ctx context.Context, actor pkgstaff.Actor, userID string,
 }
 
 // Warnings is the staff view of a player's warnings.
-func (s *Service) Warnings(ctx context.Context, actor pkgstaff.Actor, userID string) ([]contracts.ModerationWarning, error) {
+func (s *Service) Warnings(ctx context.Context, actor pkgstaff.Actor, userID string) ([]Warning, error) {
 	if err := requireReviewer(actor); err != nil {
 		return nil, err
 	}
-	warnings, err := s.store.ListWarnings(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]contracts.ModerationWarning, 0, len(warnings))
-	for _, w := range warnings {
-		out = append(out, contracts.ModerationWarning{ID: w.ID, Category: w.Category, Message: w.Message,
-			PreviousNickname: w.PreviousNickname, ResetNickname: w.ResetNickname, EvidenceMessageID: w.EvidenceMessageID,
-			ActorUserID: w.ActorUserID, ActorName: w.ActorName, CreatedAt: w.CreatedAt, AcknowledgedAt: w.AcknowledgedAt, WithdrawnAt: w.WithdrawnAt})
-	}
-	return out, nil
+	return s.store.ListWarnings(ctx, userID)
+}
+
+// PlayerWarning is a player's view of their own warning. Reading it does not acknowledge it.
+type PlayerWarning struct {
+	ID             int64
+	Category       string
+	Message        string
+	ResetNickname  string
+	CreatedAt      time.Time
+	AcknowledgedAt *time.Time
 }
 
 // PlayerWarnings is a player's own view: no issuer or evidence details, and no
 // withdrawn warnings. Callers pass the authenticated subject.
-func (s *Service) PlayerWarnings(ctx context.Context, userID string) ([]contracts.PlayerWarning, error) {
+func (s *Service) PlayerWarnings(ctx context.Context, userID string) ([]PlayerWarning, error) {
 	warnings, err := s.store.ListWarnings(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.PlayerWarning, 0, len(warnings))
+	out := make([]PlayerWarning, 0, len(warnings))
 	for _, w := range warnings {
 		if w.WithdrawnAt != nil {
 			continue
 		}
-		out = append(out, contracts.PlayerWarning{ID: w.ID, Category: w.Category, Message: w.Message,
+		out = append(out, PlayerWarning{ID: w.ID, Category: w.Category, Message: w.Message,
 			ResetNickname: w.ResetNickname, CreatedAt: w.CreatedAt, AcknowledgedAt: w.AcknowledgedAt})
 	}
 	return out, nil

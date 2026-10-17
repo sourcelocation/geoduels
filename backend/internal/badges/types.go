@@ -1,7 +1,5 @@
 package badges
 
-import "geoduels/pkg/contracts"
-
 const (
 	DiscordSyncActionSync         = "sync"
 	DiscordSyncActionCleanupRoles = "cleanup_roles"
@@ -21,7 +19,16 @@ const (
 	badgeCodeEventWinner2026     = int16(12)
 )
 
-type AdminBadgeDefinition = contracts.AdminBadgeDefinition
+// CatalogEntry is a badge staff may grant by hand.
+type CatalogEntry struct {
+	ID          string
+	Kind        string
+	Label       string
+	Description string
+	ImageURL    string
+	Rarity      string
+	MaxLevel    int
+}
 
 type DiscordLinkedUser struct {
 	UserID             string
@@ -29,4 +36,18 @@ type DiscordLinkedUser struct {
 	HighestEloBadgeMMR int
 }
 
-type PlayerBadge = contracts.PlayerBadge
+// Badge is a badge as a player has it, or could. Its JSON is how a badge_unlocked notification
+// stores the badge it announces.
+type Badge struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Label        string `json:"label"`
+	Description  string `json:"description"`
+	ImageURL     string `json:"imageUrl"`
+	Rarity       string `json:"rarity,omitempty"`
+	Level        int    `json:"level,omitempty"`
+	MaxLevel     int    `json:"maxLevel,omitempty"`
+	Extra        int    `json:"extra,omitempty"`
+	Owned        bool   `json:"owned"`
+	Unobtainable bool   `json:"unobtainable,omitempty"`
+}

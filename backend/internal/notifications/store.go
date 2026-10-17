@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -26,7 +25,7 @@ func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
 func (s *PGStore) q() *db.Queries { return db.New(s.pool) }
 
-func (s *PGStore) ListUserNotifications(ctx context.Context, userID string, limit int) ([]contracts.UserNotification, error) {
+func (s *PGStore) ListUserNotifications(ctx context.Context, userID string, limit int) ([]Notification, error) {
 	u, err := requireUser(userID)
 	if err != nil {
 		return nil, err
@@ -37,14 +36,14 @@ func (s *PGStore) ListUserNotifications(ctx context.Context, userID string, limi
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.UserNotification, 0, len(rows))
+	out := make([]Notification, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, notification(row.ID, row.Type, row.PayloadJson, row.CreatedAt, row.ActorUserID, row.ActorDisplayName))
 	}
 	return out, nil
 }
 
-func (s *PGStore) ListNotificationInbox(ctx context.Context, userID string, limit int, beforeID int64) ([]contracts.UserNotification, error) {
+func (s *PGStore) ListNotificationInbox(ctx context.Context, userID string, limit int, beforeID int64) ([]Notification, error) {
 	u, err := requireUser(userID)
 	if err != nil {
 		return nil, err
@@ -55,7 +54,7 @@ func (s *PGStore) ListNotificationInbox(ctx context.Context, userID string, limi
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.UserNotification, 0, len(rows))
+	out := make([]Notification, 0, len(rows))
 	for _, row := range rows {
 		item := notification(row.ID, row.Type, row.PayloadJson, row.CreatedAt, row.ActorUserID, row.ActorDisplayName)
 		item.Category = string(row.Category)
@@ -114,8 +113,8 @@ func (s *PGStore) MarkAllUserNotificationsRead(ctx context.Context, userID strin
 	return s.q().MarkAllUserNotificationsRead(ctx, u)
 }
 
-func notification(id int64, kind db.GdNotificationType, payload []byte, createdAt pgtype.Timestamptz, actor pgtype.UUID, actorName string) contracts.UserNotification {
-	return contracts.UserNotification{
+func notification(id int64, kind db.GdNotificationType, payload []byte, createdAt pgtype.Timestamptz, actor pgtype.UUID, actorName string) Notification {
+	return Notification{
 		ID: id, Type: string(kind), Payload: json.RawMessage(payload), CreatedAt: createdAt.Time,
 		ActorUserID: storekit.UUIDVal(actor), ActorDisplayName: strings.TrimSpace(actorName),
 	}

@@ -10,19 +10,18 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
 // readGameplaySettingsTx reads the configured gameplay map settings inside the
 // caller's transaction.
-func readGameplaySettingsTx(ctx context.Context, q db.DBTX) (contracts.GameplayMapSettings, error) {
+func readGameplaySettingsTx(ctx context.Context, q db.DBTX) (GameplaySettings, error) {
 	raw, err := db.New(q).GetGameplayMapSettings(ctx, gameplayMapSettingsKey)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return defaultGameplayMapSettings(), nil
 		}
-		return contracts.GameplayMapSettings{}, err
+		return GameplaySettings{}, err
 	}
 	var legacy struct {
 		MovingMapID             string `json:"movingMapId"`
@@ -44,7 +43,7 @@ func readGameplaySettingsTx(ctx context.Context, q db.DBTX) (contracts.GameplayM
 		}
 		return ""
 	}
-	return normalizeGameplayMapSettings(contracts.GameplayMapSettings{
+	return normalizeGameplayMapSettings(GameplaySettings{
 		MovingMapID: firstNonEmpty(legacy.MovingMapID, legacy.RankedMovingMapID, legacy.SingleplayerMovingMapID),
 		// Ranked NMPZ became ranked No Move; keep that map for the no-move slot.
 		NoMoveMapID: firstNonEmpty(legacy.NoMoveMapID, legacy.RankedNMPZMapID),
@@ -52,71 +51,71 @@ func readGameplaySettingsTx(ctx context.Context, q db.DBTX) (contracts.GameplayM
 	}), nil
 }
 
-func (s *PGStore) SetMapOfficial(adminUserID, mapID string, official bool) (contracts.CustomMap, error) {
+func (s *PGStore) SetMapOfficial(adminUserID, mapID string, official bool) (Map, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	mapID = strings.TrimSpace(mapID)
 	if mapID == "" {
-		return contracts.CustomMap{}, errors.New("map required")
+		return Map{}, errors.New("map required")
 	}
 	canonicalID, _, err := resolveMapIdentity(ctx, s.pool, mapID)
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	mapID = canonicalID
 	var affected int64
 	mapUUID := pgtype.UUID{}
 	if err := mapUUID.Scan(mapID); err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	adminUUID := pgtype.UUID{}
 	if strings.TrimSpace(adminUserID) != "" {
 		if err := adminUUID.Scan(strings.TrimSpace(adminUserID)); err != nil {
-			return contracts.CustomMap{}, err
+			return Map{}, err
 		}
 	}
 	if official {
 		if err := s.ensureReadyMap(ctx, mapID, minMapLocations); err != nil {
-			return contracts.CustomMap{}, err
+			return Map{}, err
 		}
 		affected, err = s.q().SetMapOfficial(ctx, db.SetMapOfficialParams{MapID: mapUUID, OfficialBy: adminUUID})
 	} else {
 		affected, err = s.q().ClearMapOfficial(ctx, mapUUID)
 	}
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	if affected == 0 {
-		return contracts.CustomMap{}, pgx.ErrNoRows
+		return Map{}, pgx.ErrNoRows
 	}
 	details, _, err := s.GetMap(adminUserID, mapID)
 	return details.Map, err
 }
 
-func (s *PGStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts.CustomMap, error) {
+func (s *PGStore) SetGameplayMapRole(adminUserID, mapID, role string) (Map, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	mapID = strings.TrimSpace(mapID)
 	canonicalID, _, err := resolveMapIdentity(ctx, s.pool, mapID)
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	mapID = canonicalID
 	field, err := gameplayMapRoleField(role)
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	defer tx.Rollback(ctx)
 	if err := s.ensureReadyMapTx(ctx, tx, mapID, plannedRoundCount); err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	settings, err := readGameplaySettingsTx(ctx, tx)
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	switch field {
 	case "movingMapId":
@@ -128,13 +127,13 @@ func (s *PGStore) SetGameplayMapRole(adminUserID, mapID, role string) (contracts
 	}
 	payload, err := json.Marshal(normalizeGameplayMapSettings(settings))
 	if err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	if err := db.New(tx).SetGameplayMapSettings(ctx, db.SetGameplayMapSettingsParams{Key: gameplayMapSettingsKey, ValueJson: payload}); err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.CustomMap{}, err
+		return Map{}, err
 	}
 	details, _, err := s.GetMap(adminUserID, mapID)
 	return details.Map, err

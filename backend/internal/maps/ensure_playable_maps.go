@@ -8,23 +8,24 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 )
 
 type requiredMap struct {
 	key         string
 	displayName string
-	mode        contracts.MatchMode
-	ruleset     contracts.GameRuleset
+	mode        matchkind.Mode
+	ruleset     gameplay.Ruleset
 }
 
 // requiredPlayableMaps lists the (mode, ruleset) pairs a development
 // environment cannot play without; each is served by the bundled sample
 // dataset.
 var requiredPlayableMaps = []requiredMap{
-	{key: contracts.MapKeyMoving, displayName: "Sample World", mode: contracts.ModeDuel, ruleset: contracts.RulesetMoving},
-	{key: contracts.MapKeyNMPZ, displayName: "Sample Varied World", mode: contracts.ModeDuel, ruleset: contracts.RulesetNoMove},
-	{key: contracts.MapKeyNMPZ, displayName: "Sample Varied World", mode: contracts.ModeSingleplayer, ruleset: contracts.RulesetNMPZ},
+	{key: MapKeyMoving, displayName: "Sample World", mode: matchkind.ModeDuel, ruleset: gameplay.RulesetMoving},
+	{key: MapKeyNMPZ, displayName: "Sample Varied World", mode: matchkind.ModeDuel, ruleset: gameplay.RulesetNoMove},
+	{key: MapKeyNMPZ, displayName: "Sample Varied World", mode: matchkind.ModeSingleplayer, ruleset: gameplay.RulesetNMPZ},
 }
 
 // EnsurePlayableMaps imports the sample dataset for each required playable
@@ -53,11 +54,11 @@ func (s *PGStore) EnsurePlayableMaps(datasetPath string) error {
 // mapResolver is the configured-map lookup EnsurePlayableMaps depends on;
 // the maps feature store owns dataset imports.
 type mapResolver interface {
-	ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error)
+	ResolveGameplayMapID(mode matchkind.Mode, ruleset gameplay.Ruleset, requestedMapID string) (string, error)
 }
 
 type mapDatasetStore interface {
-	ReplaceMapLocations(mapKey, displayName string, dataset []byte) (contracts.MapImportSummary, error)
+	ReplaceMapLocations(mapKey, displayName string, dataset []byte) (ImportSummary, error)
 }
 
 func ensurePlayableMap(resolver mapResolver, datasets mapDatasetStore, required requiredMap, dataset []byte) (bool, error) {

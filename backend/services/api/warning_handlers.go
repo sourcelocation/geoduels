@@ -4,12 +4,38 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"geoduels/internal/accounts"
 	"geoduels/internal/moderation"
 )
+
+// moderationWarning is a warning as staff review it.
+type moderationWarning struct {
+	ID                int64      `json:"id"`
+	Category          string     `json:"category"`
+	Message           string     `json:"message"`
+	PreviousNickname  string     `json:"previousNickname,omitempty"`
+	ResetNickname     string     `json:"resetNickname,omitempty"`
+	EvidenceMessageID string     `json:"evidenceMessageId,omitempty"`
+	ActorUserID       string     `json:"actorUserId,omitempty"`
+	ActorName         string     `json:"actorName,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	AcknowledgedAt    *time.Time `json:"acknowledgedAt,omitempty"`
+	WithdrawnAt       *time.Time `json:"withdrawnAt,omitempty"`
+}
+
+// playerWarning is a warning as the warned player sees it.
+type playerWarning struct {
+	ID             int64      `json:"id"`
+	Category       string     `json:"category"`
+	Message        string     `json:"message"`
+	ResetNickname  string     `json:"resetNickname,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
+}
 
 // Warning routes are v1 contracts; existing moderation routes remain compatible.
 func (a *api) staffWarnings(c echo.Context) error {
@@ -21,7 +47,15 @@ func (a *api) staffWarnings(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"warnings": warnings})
+	out := make([]moderationWarning, len(warnings))
+	for i, w := range warnings {
+		out[i] = moderationWarning{
+			ID: w.ID, Category: w.Category, Message: w.Message, PreviousNickname: w.PreviousNickname,
+			ResetNickname: w.ResetNickname, EvidenceMessageID: w.EvidenceMessageID, ActorUserID: w.ActorUserID,
+			ActorName: w.ActorName, CreatedAt: w.CreatedAt, AcknowledgedAt: w.AcknowledgedAt, WithdrawnAt: w.WithdrawnAt,
+		}
+	}
+	return writeJSON(c, map[string]any{"warnings": out})
 }
 
 func (a *api) staffWarn(c echo.Context) error {
@@ -78,7 +112,14 @@ func (a *api) userWarnings(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"warnings": warnings})
+	out := make([]playerWarning, len(warnings))
+	for i, w := range warnings {
+		out[i] = playerWarning{
+			ID: w.ID, Category: w.Category, Message: w.Message, ResetNickname: w.ResetNickname,
+			CreatedAt: w.CreatedAt, AcknowledgedAt: w.AcknowledgedAt,
+		}
+	}
+	return writeJSON(c, map[string]any{"warnings": out})
 }
 
 func (a *api) acknowledgeWarning(c echo.Context) error {

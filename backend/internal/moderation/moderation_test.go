@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"geoduels/internal/audit"
-	"geoduels/pkg/contracts"
 	pkgstaff "geoduels/pkg/staff"
 )
 
@@ -112,9 +111,9 @@ func (f *fakeStore) RecordSignal(_ context.Context, _ string, signal RiskSignal,
 func (f *fakeStore) ReportEligibility(context.Context, string, string, string) (ReportEligibility, error) {
 	return f.reportEligibility, nil
 }
-func (f *fakeStore) SaveReport(_ context.Context, report PlayerReport) (contracts.ModerationSignalCreated, error) {
+func (f *fakeStore) SaveReport(_ context.Context, report PlayerReport) (ReportResult, error) {
 	f.reports = append(f.reports, report)
-	return contracts.ModerationSignalCreated{SignalID: int64(len(f.reports)), Status: "created"}, nil
+	return ReportResult{SignalID: int64(len(f.reports)), Status: "created"}, nil
 }
 func (f *fakeStore) UserExists(_ context.Context, id string) (bool, error) { return id == "u1", nil }
 func (f *fakeStore) ResetNickname(_ context.Context, id string) (string, string, error) {
@@ -305,7 +304,7 @@ func TestPlayerWarningsOmitWithdrawnAndStaffDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []contracts.PlayerWarning{{ID: 2, Category: "other", Message: "active", ResetNickname: "New"}}
+	want := []PlayerWarning{{ID: 2, Category: "other", Message: "active", ResetNickname: "New"}}
 	if !slices.Equal(warnings, want) {
 		t.Fatalf("got %+v", warnings)
 	}

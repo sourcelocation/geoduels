@@ -3,17 +3,15 @@ package profiles
 import (
 	"context"
 	"errors"
-	badgekit "geoduels/internal/badges"
-	"geoduels/internal/seasons"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	badgekit "geoduels/internal/badges"
+	"geoduels/internal/seasons"
 	"geoduels/internal/storekit"
-
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -166,8 +164,8 @@ func (s *PGStore) GetPublicPlayerProfileByNickname(nickname string) (PublicPlaye
 	return p, nil
 }
 
-func ownedPlayerBadges(badges []contracts.PlayerBadge) []contracts.PlayerBadge {
-	owned := make([]contracts.PlayerBadge, 0, len(badges))
+func ownedPlayerBadges(badges []badgekit.Badge) []badgekit.Badge {
+	owned := make([]badgekit.Badge, 0, len(badges))
 	for _, badge := range badges {
 		if badge.Owned {
 			owned = append(owned, badge)
@@ -232,8 +230,8 @@ func (s *PGStore) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
 	return s.GetProfile(userID)
 }
 
-func (s *PGStore) profileBadges(ctx context.Context, userID, selectedBadgeID string) ([]contracts.PlayerBadge, *contracts.PlayerBadge, error) {
-	badges := []contracts.PlayerBadge{}
+func (s *PGStore) profileBadges(ctx context.Context, userID, selectedBadgeID string) ([]badgekit.Badge, *badgekit.Badge, error) {
+	badges := []badgekit.Badge{}
 	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, nil, err
@@ -256,7 +254,7 @@ func (s *PGStore) profileBadges(ctx context.Context, userID, selectedBadgeID str
 			badges = append(badges, badge)
 		}
 	}
-	var selected *contracts.PlayerBadge
+	var selected *badgekit.Badge
 	for i := range badges {
 		if badges[i].ID == selectedBadgeID && badges[i].Owned {
 			selected = &badges[i]

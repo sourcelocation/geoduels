@@ -3,16 +3,15 @@ package matches
 import (
 	"testing"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/matchkind"
 )
 
 // A new match closes the player's matches that are over, replaces the replaceable ones still
 // running, and is blocked by any other running one, whatever kind the new match is.
 func TestSeatOutcome(t *testing.T) {
-	statuses := []contracts.MatchSessionStatus{
-		contracts.MatchSessionStarting, contracts.MatchSessionLive,
-		contracts.MatchSessionEnded, contracts.MatchSessionInterrupted, contracts.MatchSessionMissing,
+	statuses := []SessionStatus{
+		SessionStarting, SessionLive,
+		SessionEnded, SessionInterrupted, SessionMissing,
 	}
 	for _, kind := range matchkind.All() {
 		for _, status := range statuses {

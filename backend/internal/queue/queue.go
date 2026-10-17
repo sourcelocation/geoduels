@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -59,23 +59,23 @@ func isRanked(variant Variant) bool {
 }
 
 // Config is the match config a variant plays.
-func Config(variant Variant) contracts.MatchConfig {
-	cfg := contracts.MatchConfig{
-		Ruleset:        contracts.RulesetMoving,
-		StreetNames:    contracts.StreetNamesShown,
-		MultiplierMode: contracts.MultiplierIndividual,
+func Config(variant Variant) gameplay.MatchConfig {
+	cfg := gameplay.MatchConfig{
+		Ruleset:        gameplay.RulesetMoving,
+		StreetNames:    gameplay.StreetNamesShown,
+		MultiplierMode: gameplay.MultiplierIndividual,
 	}
 	switch variant {
 	case NoMove, NoMoveHidden:
-		cfg.Ruleset = contracts.RulesetNoMove
+		cfg.Ruleset = gameplay.RulesetNoMove
 	case NMPZ, NMPZHidden:
-		cfg.Ruleset = contracts.RulesetNMPZ
+		cfg.Ruleset = gameplay.RulesetNMPZ
 	}
 	switch variant {
 	case MovingHidden, NoMoveHidden, NMPZHidden:
-		cfg.StreetNames = contracts.StreetNamesHidden
+		cfg.StreetNames = gameplay.StreetNamesHidden
 	}
-	return contracts.NormalizeMatchConfig(cfg)
+	return gameplay.NormalizeMatchConfig(cfg)
 }
 
 // freshFor is how long a ticket counts after its player's socket last refreshed it.

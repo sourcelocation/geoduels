@@ -1,10 +1,6 @@
 package social
 
-import (
-	"time"
-
-	"geoduels/pkg/contracts"
-)
+import "time"
 
 type RelationshipState string
 
@@ -17,18 +13,17 @@ const (
 )
 
 type CompactPlayer struct {
-	UserID         string                 `json:"userId"`
-	DisplayName    string                 `json:"displayName"`
-	AvatarURL      string                 `json:"avatarUrl,omitempty"`
-	MMR            int                    `json:"mmr,omitempty"`
-	SelectedBadge  *contracts.PlayerBadge `json:"selectedBadge,omitempty"`
-	Relationship   RelationshipState      `json:"relationship"`
-	RequestID      string                 `json:"requestId,omitempty"`
-	PresenceStatus string                 `json:"presenceStatus,omitempty"`
-	Activity       string                 `json:"activity,omitempty"`
-	LastSeenAt     *time.Time             `json:"lastSeenAt,omitempty"`
-	SharedMatchAt  *time.Time             `json:"sharedMatchAt,omitempty"`
-	PartyInvite    *CompactPartyInvite    `json:"partyInvite,omitempty"`
+	UserID         string              `json:"userId"`
+	DisplayName    string              `json:"displayName"`
+	AvatarURL      string              `json:"avatarUrl,omitempty"`
+	MMR            int                 `json:"mmr,omitempty"`
+	Relationship   RelationshipState   `json:"relationship"`
+	RequestID      string              `json:"requestId,omitempty"`
+	PresenceStatus string              `json:"presenceStatus,omitempty"`
+	Activity       string              `json:"activity,omitempty"`
+	LastSeenAt     *time.Time          `json:"lastSeenAt,omitempty"`
+	SharedMatchAt  *time.Time          `json:"sharedMatchAt,omitempty"`
+	PartyInvite    *CompactPartyInvite `json:"partyInvite,omitempty"`
 }
 
 type CompactPartyInvite struct {

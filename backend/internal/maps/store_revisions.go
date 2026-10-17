@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
@@ -17,17 +16,17 @@ import (
 // ReplaceMapLocations atomically replaces the current dataset for an official
 // map. Match plans contain copied coordinates, so active matches do not depend
 // on retaining old map datasets.
-func (s *PGStore) ReplaceMapLocations(mapKey, displayName string, dataset []byte) (contracts.MapImportSummary, error) {
+func (s *PGStore) ReplaceMapLocations(mapKey, displayName string, dataset []byte) (ImportSummary, error) {
 	mapKey = strings.TrimSpace(mapKey)
 	if mapKey == "" {
-		return contracts.MapImportSummary{}, errors.New("map key required")
+		return ImportSummary{}, errors.New("map key required")
 	}
 	rows, err := parseMapRows(dataset)
 	if err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if len(rows) == 0 {
-		return contracts.MapImportSummary{}, errors.New("no valid rows")
+		return ImportSummary{}, errors.New("no valid rows")
 	}
 	if strings.TrimSpace(displayName) == "" {
 		displayName = mapKey
@@ -37,28 +36,28 @@ func (s *PGStore) ReplaceMapLocations(mapKey, displayName string, dataset []byte
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	defer tx.Rollback(ctx)
 
 	mapID := entityid.Derive("map", mapKey)
 	var id pgtype.UUID
 	if err := id.Scan(mapID); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	q := db.New(s.pool)
 	if err := q.WithTx(tx).UpsertMap(ctx, db.UpsertMapParams{ID: id, DisplayName: displayName, ContentHash: digest[:]}); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if err := q.WithTx(tx).UpsertMapAlias(ctx, db.UpsertMapAliasParams{Alias: mapKey, MapID: id}); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	storage, err := q.WithTx(tx).LockMapStorageID(ctx, id)
 	if err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if err := q.WithTx(tx).DeleteMapLocations(ctx, storage); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	lat, lng, country, pano := make([]int32, len(rows)), make([]int32, len(rows)), make([]string, len(rows)), make([]string, len(rows))
 	heading, pitch, rand := make([]int16, len(rows)), make([]int16, len(rows)), make([]int32, len(rows))
@@ -76,19 +75,19 @@ func (s *PGStore) ReplaceMapLocations(mapKey, displayName string, dataset []byte
 		}
 	}
 	if err := q.WithTx(tx).InsertMapLocations(ctx, db.InsertMapLocationsParams{MapStorageID: storage, LatE7: lat, LngE7: lng, Country: country, PanoID: pano, HeadingCdeg: heading, PitchCdeg: pitch, RandKeyI: rand}); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if err := q.WithTx(tx).DeleteMapCountryStats(ctx, id); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if err := q.WithTx(tx).InsertMapCountryStats(ctx, db.InsertMapCountryStatsParams{MapID: id, MapStorageID: storage}); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if err := q.WithTx(tx).FinalizeMap(ctx, db.FinalizeMapParams{ID: id, LocationCount: int32(len(rows)), ContentHash: digest[:]}); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.MapImportSummary{}, err
+		return ImportSummary{}, err
 	}
-	return contracts.MapImportSummary{MapID: mapID, MapKey: mapKey, LocationCount: len(rows), DisplayName: displayName}, nil
+	return ImportSummary{MapID: mapID, MapKey: mapKey, LocationCount: len(rows), DisplayName: displayName}, nil
 }

@@ -27,6 +27,14 @@ that takes the caller's transaction, such as `badges.AwardBadgeTx` or
 `internal/architecture` enforces query ownership and the allowed module imports
 as part of `go test ./...`.
 
+A type lives in the slice that owns it; there is no shared package of types.
+Entities stay in their module (`internal/*`, or `pkg/gameplay` and `pkg/matchkind`
+for matches) and carry JSON tags only when that JSON is how they are stored,
+such as a replay or a match config. What clients send and receive are DTOs
+defined beside the handler that speaks them in `services/api` or
+`services/gameplay-node`, mapped from entities explicitly; match state reaches
+clients only through the `Client*` views in `pkg/gameplay`.
+
 ### Matches
 
 A match's kind (`pkg/matchkind`) is its one description: rated or not, which maps it plays, who may

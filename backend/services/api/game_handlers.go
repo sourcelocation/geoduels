@@ -5,13 +5,57 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
+	"geoduels/internal/badges"
+	"geoduels/internal/notifications"
 	"geoduels/pkg/auth"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/maintenance"
 )
+
+// playerBadge is a badge as clients show it.
+type playerBadge struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Label        string `json:"label"`
+	Description  string `json:"description"`
+	ImageURL     string `json:"imageUrl"`
+	Rarity       string `json:"rarity,omitempty"`
+	Level        int    `json:"level,omitempty"`
+	MaxLevel     int    `json:"maxLevel,omitempty"`
+	Extra        int    `json:"extra,omitempty"`
+	Owned        bool   `json:"owned"`
+	Unobtainable bool   `json:"unobtainable,omitempty"`
+}
+
+func newPlayerBadge(b badges.Badge) playerBadge {
+	return playerBadge{
+		ID: b.ID, Kind: b.Kind, Label: b.Label, Description: b.Description, ImageURL: b.ImageURL, Rarity: b.Rarity,
+		Level: b.Level, MaxLevel: b.MaxLevel, Extra: b.Extra, Owned: b.Owned, Unobtainable: b.Unobtainable,
+	}
+}
+
+func newPlayerBadgeRef(b *badges.Badge) *playerBadge {
+	if b == nil {
+		return nil
+	}
+	dto := newPlayerBadge(*b)
+	return &dto
+}
+
+func newPlayerBadges(list []badges.Badge) []playerBadge {
+	if list == nil {
+		return nil
+	}
+	out := make([]playerBadge, len(list))
+	for i, b := range list {
+		out[i] = newPlayerBadge(b)
+	}
+	return out
+}
 
 func (a *api) updateSelectedBadge(c echo.Context) error {
 	claims, err := a.authenticatedClaims(c.Request())
@@ -32,9 +76,39 @@ func (a *api) updateSelectedBadge(c echo.Context) error {
 		return plainTextError(c, http.StatusInternalServerError, "profile unavailable")
 	}
 	return json.NewEncoder(c.Response()).Encode(map[string]any{
-		"badges":        profile.Badges,
-		"selectedBadge": profile.SelectedBadge,
+		"badges":        newPlayerBadges(profile.Badges),
+		"selectedBadge": newPlayerBadgeRef(profile.SelectedBadge),
 	})
+}
+
+// userNotification is a notification as clients show it; payload is its stored JSON.
+type userNotification struct {
+	ID               int64           `json:"id"`
+	Type             string          `json:"type"`
+	Category         string          `json:"category,omitempty"`
+	Payload          json.RawMessage `json:"payload"`
+	ReadAt           *time.Time      `json:"readAt,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	ActorUserID      string          `json:"actorUserId,omitempty"`
+	ActorDisplayName string          `json:"actorDisplayName,omitempty"`
+}
+
+func newUserNotification(n notifications.Notification) userNotification {
+	return userNotification{
+		ID: n.ID, Type: n.Type, Category: n.Category, Payload: n.Payload, ReadAt: n.ReadAt, CreatedAt: n.CreatedAt,
+		ActorUserID: n.ActorUserID, ActorDisplayName: n.ActorDisplayName,
+	}
+}
+
+func newUserNotifications(list []notifications.Notification) []userNotification {
+	if list == nil {
+		return nil
+	}
+	out := make([]userNotification, len(list))
+	for i, n := range list {
+		out[i] = newUserNotification(n)
+	}
+	return out
 }
 
 func (a *api) userNotifications(c echo.Context) error {
@@ -47,18 +121,18 @@ func (a *api) userNotifications(c echo.Context) error {
 		if a.notificationService != nil {
 			limit := queryLimit(r, 30)
 			beforeID, _ := strconv.ParseInt(r.URL.Query().Get("beforeId"), 10, 64)
-			notifications, err := a.notificationService.Inbox(r.Context(), claims.Sub, limit, beforeID)
+			inbox, err := a.notificationService.Inbox(r.Context(), claims.Sub, limit, beforeID)
 			if err != nil {
 				return plainTextError(c, http.StatusInternalServerError, "notifications unavailable")
 			}
-			return writeJSON(c, map[string]any{"notifications": notifications})
+			return writeJSON(c, map[string]any{"notifications": newUserNotifications(inbox)})
 		}
 	}
-	notifications, err := a.notificationService.List(r.Context(), claims.Sub, 20)
+	unseen, err := a.notificationService.List(r.Context(), claims.Sub, 20)
 	if err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "notifications unavailable")
 	}
-	return writeJSON(c, map[string]any{"notifications": notifications})
+	return writeJSON(c, map[string]any{"notifications": newUserNotifications(unseen)})
 }
 
 func (a *api) markAllUserNotificationsRead(c echo.Context) error {
@@ -73,7 +147,7 @@ func (a *api) markAllUserNotificationsRead(c echo.Context) error {
 		return plainTextError(c, http.StatusInternalServerError, "failed to mark notifications")
 	}
 	if a.live != nil {
-		a.live.publish(claims.Sub, contracts.LiveEvent{Type: contracts.LiveNotificationReadAll})
+		a.live.publish(claims.Sub, liveEvent{Type: liveNotificationReadAll})
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -91,7 +165,7 @@ func (a *api) markUserNotificationRead(c echo.Context) error {
 		return plainTextError(c, http.StatusInternalServerError, "failed to mark notification")
 	}
 	if a.live != nil {
-		a.live.publish(claims.Sub, contracts.LiveEvent{Type: contracts.LiveNotificationRead, NotificationID: notificationID})
+		a.live.publish(claims.Sub, liveEvent{Type: liveNotificationRead, NotificationID: notificationID})
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -192,27 +266,28 @@ func (a *api) match(c echo.Context) error {
 		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
 	id := a.resolveEntityID("match", c.Param("id"))
-	snapshot, found, err := a.getPublicFinalMatchSnapshot(id)
+	result, found, err := a.publicMatchResult(id)
 	if err != nil || !found {
 		return plainTextError(c, http.StatusNotFound, "match not found")
 	}
-	return json.NewEncoder(c.Response()).Encode(snapshot)
+	return json.NewEncoder(c.Response()).Encode(result)
 }
 
-func (a *api) getPublicFinalMatchSnapshot(matchID string) (*contracts.MatchSnapshot, bool, error) {
+// publicMatchResult is a recorded match's final snapshot as anyone may see it.
+func (a *api) publicMatchResult(matchID string) (*gameplay.ClientMatchResult, bool, error) {
 	recorded, ok, err := a.matchStore.FinalMatchSnapshot(matchID)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
 	snapshot := sanitizeFinalMatchSnapshot(*recorded)
 	if snapshot.State == "" {
-		snapshot.State = contracts.MatchEnded
+		snapshot.State = gameplay.MatchEnded
 	}
-	return &snapshot, true, nil
+	return gameplay.NewClientMatchResult(&snapshot), true, nil
 }
 
-func sanitizeFinalMatchSnapshot(snapshot contracts.MatchSnapshot) contracts.MatchSnapshot {
-	if snapshot.State == contracts.MatchEnded {
+func sanitizeFinalMatchSnapshot(snapshot gameplay.MatchSnapshot) gameplay.MatchSnapshot {
+	if snapshot.State == gameplay.MatchEnded {
 		snapshot.CurrentRound = nil
 		snapshot.RoundMSLeft = 0
 		snapshot.PhaseEndsAt = 0
@@ -249,7 +324,13 @@ func (a *api) createMatchReport(c echo.Context) error {
 	if err != nil {
 		return plainTextError(c, http.StatusBadRequest, err.Error())
 	}
-	return writeJSONStatus(c, http.StatusCreated, created)
+	return writeJSONStatus(c, http.StatusCreated, moderationSignalCreated{SignalID: created.SignalID, Status: created.Status})
+}
+
+// moderationSignalCreated is what a player learns of their report.
+type moderationSignalCreated struct {
+	SignalID int64  `json:"signalId"`
+	Status   string `json:"status"`
 }
 
 func maintenancePlayMessage(status maintenance.Status) string {

@@ -14,8 +14,9 @@ import (
 	"geoduels/internal/badges"
 	mapsdomain "geoduels/internal/maps"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -23,7 +24,7 @@ var ErrPartyMapUnavailable = errors.New("selected map is not accessible or ready
 
 // --- snapshot reads (PartyReads) ---
 
-func (s *PGStore) GetCurrentParty(ctx context.Context, userID string) (*contracts.CurrentParty, error) {
+func (s *PGStore) GetCurrentParty(ctx context.Context, userID string) (*CurrentParty, error) {
 	id, err := profileUUID(userID)
 	if err != nil {
 		return nil, err
@@ -35,13 +36,13 @@ func (s *PGStore) GetCurrentParty(ctx context.Context, userID string) (*contract
 	if err != nil {
 		return nil, err
 	}
-	return &contracts.CurrentParty{ID: row.ID.String(), InviteCode: row.InviteCode}, nil
+	return &CurrentParty{ID: row.ID.String(), InviteCode: row.InviteCode}, nil
 }
 
-func (s *PGStore) GetPartyByID(ctx context.Context, partyID string) (contracts.PartySnapshot, bool, error) {
+func (s *PGStore) GetPartyByID(ctx context.Context, partyID string) (Party, bool, error) {
 	partyID = strings.TrimSpace(partyID)
 	if partyID == "" {
-		return contracts.PartySnapshot{}, false, nil
+		return Party{}, false, nil
 	}
 	return s.getParty(ctx, func(ctx context.Context) (partySnapshotRow, error) {
 		id, err := profileUUID(partyID)
@@ -53,7 +54,7 @@ func (s *PGStore) GetPartyByID(ctx context.Context, partyID string) (contracts.P
 	})
 }
 
-func (s *PGStore) GetPartyByInviteCode(ctx context.Context, inviteCode string) (contracts.PartySnapshot, bool, error) {
+func (s *PGStore) GetPartyByInviteCode(ctx context.Context, inviteCode string) (Party, bool, error) {
 	code := strings.ToUpper(strings.TrimSpace(inviteCode))
 	return s.getParty(ctx, func(ctx context.Context) (partySnapshotRow, error) {
 		row, err := s.q().GetPartySnapshotByInviteCode(ctx, code)
@@ -79,7 +80,7 @@ func (s *PGStore) GetPartyStateAndOwner(ctx context.Context, partyID string) (Pa
 	if err != nil {
 		return PartyStateOwner{}, err
 	}
-	return PartyStateOwner{State: contracts.PartyState(row.State), OwnerUserID: row.OwnerUserID.String()}, nil
+	return PartyStateOwner{State: State(row.State), OwnerUserID: row.OwnerUserID.String()}, nil
 }
 
 func (s *PGStore) GetPartyStateAndExpiry(ctx context.Context, partyID string) (PartyStateExpiry, error) {
@@ -91,7 +92,7 @@ func (s *PGStore) GetPartyStateAndExpiry(ctx context.Context, partyID string) (P
 	if err != nil {
 		return PartyStateExpiry{}, err
 	}
-	return PartyStateExpiry{State: contracts.PartyState(row.State), ExpiresAt: row.ExpiresAt.Time}, nil
+	return PartyStateExpiry{State: State(row.State), ExpiresAt: row.ExpiresAt.Time}, nil
 }
 
 func (s *PGStore) PartyMemberActive(ctx context.Context, partyID, userID string) (bool, error) {
@@ -140,13 +141,13 @@ func (s *PGStore) InsertParty(ctx context.Context, input PartyInsert) error {
 	return q.AddPartyOwner(ctx, db.AddPartyOwnerParams{PartyID: partyUUID, UserID: ownerUUID})
 }
 
-func (s *PGStore) LockOpenPartyMode(ctx context.Context, partyID string) (contracts.MatchMode, error) {
+func (s *PGStore) LockOpenPartyMode(ctx context.Context, partyID string) (matchkind.Mode, error) {
 	id, err := profileUUID(partyID)
 	if err != nil {
 		return "", partyStoreError(err)
 	}
 	mode, err := s.q().LockOpenPartyMode(ctx, id)
-	return contracts.MatchMode(mode), partyStoreError(err)
+	return matchkind.Mode(mode), partyStoreError(err)
 }
 
 func (s *PGStore) ShufflePartyTeams(ctx context.Context, partyID string) error {
@@ -157,7 +158,7 @@ func (s *PGStore) ShufflePartyTeams(ctx context.Context, partyID string) error {
 	return s.q().ShufflePartyTeams(ctx, id)
 }
 
-func (s *PGStore) SetPartyMode(ctx context.Context, partyID string, mode contracts.MatchMode) error {
+func (s *PGStore) SetPartyMode(ctx context.Context, partyID string, mode matchkind.Mode) error {
 	id, err := profileUUID(partyID)
 	if err != nil {
 		return err
@@ -332,7 +333,7 @@ func (s *PGStore) TouchMemberSeen(ctx context.Context, partyID, userID string) (
 	if err != nil {
 		return false, err
 	}
-	return memberPresence(time.Now(), previous) != contracts.PartyPresenceOnline, nil
+	return memberPresence(time.Now(), previous) != PresenceOnline, nil
 }
 
 // ClearMemberSeen marks the member as gone from the party. It reports whether they were there.
@@ -352,17 +353,17 @@ const (
 
 // memberPresence is online while the member had the party open within the last 15 seconds, away
 // within the last minute, and offline after.
-func memberPresence(now time.Time, seenAt pgtype.Timestamptz) contracts.PartyPresenceStatus {
+func memberPresence(now time.Time, seenAt pgtype.Timestamptz) Presence {
 	if !seenAt.Valid {
-		return contracts.PartyPresenceOffline
+		return PresenceOffline
 	}
 	switch age := now.Sub(seenAt.Time); {
 	case age <= partyPresenceOnlineFor:
-		return contracts.PartyPresenceOnline
+		return PresenceOnline
 	case age <= partyPresenceAwayFor:
-		return contracts.PartyPresenceAway
+		return PresenceAway
 	default:
-		return contracts.PartyPresenceOffline
+		return PresenceOffline
 	}
 }
 
@@ -410,37 +411,43 @@ type partySnapshotRow struct {
 	MapLocationCount                  int32
 }
 
-func (s *PGStore) getParty(ctx context.Context, fetch func(ctx context.Context) (partySnapshotRow, error)) (contracts.PartySnapshot, bool, error) {
-	var snap contracts.PartySnapshot
+func (s *PGStore) getParty(ctx context.Context, fetch func(ctx context.Context) (partySnapshotRow, error)) (Party, bool, error) {
+	var snap Party
 	row, err := fetch(ctx)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return contracts.PartySnapshot{}, false, nil
+			return Party{}, false, nil
 		}
-		return contracts.PartySnapshot{}, false, err
+		return Party{}, false, err
 	}
 	snap.ID, snap.InviteCode, snap.OwnerUserID = row.ID.String(), row.InviteCode, row.OwnerUserID.String()
-	snap.State, snap.Mode, snap.MapScope = contracts.PartyState(row.State), contracts.MatchMode(row.Mode), row.MapScope
+	snap.State, snap.Mode, snap.MapScope = State(row.State), matchkind.Mode(row.Mode), row.MapScope
 	snap.LastMatchID = row.LastMatchID
 	// An open party whose last match is starting or live is in that match.
-	if snap.State == contracts.PartyOpen && contracts.MatchSessionStatus(row.LastMatchStatus).Open() {
-		snap.State = contracts.PartyInMatch
+	if snap.State == StateOpen && lastMatchOpen(row.LastMatchStatus) {
+		snap.State = StateInMatch
 		snap.ActiveMatchID = row.LastMatchID
 	}
 	snap.CreatedAt, snap.ExpiresAt = row.CreatedAt.Time, row.ExpiresAt.Time
 	snap.MapName, snap.MapLocationCount = row.MapName, int(row.MapLocationCount)
 	_ = json.Unmarshal([]byte(row.ConfigJSON), &snap.Config)
-	snap.Config = contracts.NormalizeMatchConfig(snap.Config)
+	snap.Config = gameplay.NormalizeMatchConfig(snap.Config)
 	if row.MapID != "" {
 		snap.Config.MapID = row.MapID
 		snap.Config.MapName = snap.MapName
 	}
 	members, err := s.listPartyMembers(ctx, snap.ID)
 	if err != nil {
-		return contracts.PartySnapshot{}, false, err
+		return Party{}, false, err
 	}
 	snap.Members = members
 	return snap, true, nil
+}
+
+// lastMatchOpen reports whether gd_match_status says a party's last match is starting or live, as
+// the party state queries do.
+func lastMatchOpen(status string) bool {
+	return status == "starting" || status == "live"
 }
 
 func toPartySnapshotRow(row db.GetPartySnapshotByIDRow) partySnapshotRow {
@@ -454,7 +461,7 @@ func toPartySnapshotRow(row db.GetPartySnapshotByIDRow) partySnapshotRow {
 	}
 }
 
-func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]contracts.PartyMember, error) {
+func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]Member, error) {
 	partyUUID, err := profileUUID(partyID)
 	if err != nil {
 		return nil, err
@@ -463,11 +470,11 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 	if err != nil {
 		return nil, err
 	}
-	out := []contracts.PartyMember{}
+	out := []Member{}
 	selected := map[string]string{}
 	now := time.Now()
 	for _, row := range rows {
-		var member contracts.PartyMember
+		var member Member
 		member.UserID = row.UserID.String()
 		member.DisplayName = row.DisplayName
 		member.AvatarURL = row.AvatarUrl
@@ -479,7 +486,7 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 		member.JoinedAt = row.JoinedAt.Time
 		member.InActiveMatch = row.InActiveMatch
 		member.PresenceStatus = memberPresence(now, row.SeenAt)
-		member.Connected = member.PresenceStatus == contracts.PartyPresenceOnline
+		member.Connected = member.PresenceStatus == PresenceOnline
 		selected[member.UserID] = badges.IDFromCode(row.SelectedBadgeCode)
 		out = append(out, member)
 	}
@@ -493,9 +500,9 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]contr
 	return out, nil
 }
 
-func (s *PGStore) selectedPartyBadges(ctx context.Context, selected map[string]string) (map[string]*contracts.PlayerBadge, error) {
+func (s *PGStore) selectedPartyBadges(ctx context.Context, selected map[string]string) (map[string]*badges.Badge, error) {
 	if len(selected) == 0 {
-		return map[string]*contracts.PlayerBadge{}, nil
+		return map[string]*badges.Badge{}, nil
 	}
 	userIDs := make([]pgtype.UUID, 0, len(selected))
 	for userID := range selected {
@@ -504,14 +511,14 @@ func (s *PGStore) selectedPartyBadges(ctx context.Context, selected map[string]s
 		}
 	}
 	if len(userIDs) == 0 {
-		return map[string]*contracts.PlayerBadge{}, nil
+		return map[string]*badges.Badge{}, nil
 	}
 	rows, err := s.q().ListPartyMemberBadges(ctx, userIDs)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]*contracts.PlayerBadge{}
-	fallback := map[string]*contracts.PlayerBadge{}
+	out := map[string]*badges.Badge{}
+	fallback := map[string]*badges.Badge{}
 	for _, row := range rows {
 		userID := row.UserID.String()
 		badge := badges.FromParts(row.BadgeCode, row.Level, row.Extra, true)

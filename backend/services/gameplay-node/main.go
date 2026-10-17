@@ -25,9 +25,9 @@ import (
 	"geoduels/internal/jobs"
 	"geoduels/internal/maps"
 	"geoduels/internal/matches"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/controlplane"
 	"geoduels/pkg/duel"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchkind"
 	"geoduels/pkg/observability"
@@ -78,7 +78,7 @@ type gameplayNode struct {
 	connID       map[string]string
 	userMatch    map[string]string
 	matchUsers   map[string][]string
-	matchKinds   map[string]contracts.MatchKind
+	matchKinds   map[string]matchkind.Kind
 	heldSince    map[string]time.Time
 	finalizing   map[string]bool
 	lastTeamPing map[string]time.Time
@@ -132,7 +132,7 @@ func main() {
 	}
 
 	plans := newRoundPlanRegistry()
-	roundForPlan := func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
+	roundForPlan := func(matchID string, roundIndex int) (gameplay.LocationPoint, error) {
 		return plans.Get(matchID, roundIndex)
 	}
 	g := &gameplayNode{
@@ -153,7 +153,7 @@ func main() {
 		connID:       map[string]string{},
 		userMatch:    map[string]string{},
 		matchUsers:   map[string][]string{},
-		matchKinds:   map[string]contracts.MatchKind{},
+		matchKinds:   map[string]matchkind.Kind{},
 		heldSince:    map[string]time.Time{},
 		finalizing:   map[string]bool{},
 		lastTeamPing: map[string]time.Time{},
@@ -373,7 +373,7 @@ func (g *gameplayNode) startMatch(m matches.PickedUp) error {
 		return err
 	}
 	g.plans.Set(m.MatchID, rounds)
-	created := newMatch{MatchID: m.MatchID, Kind: m.Kind, Profiles: map[string]contracts.PlayerProfile{}, Teams: m.Spec.SeatTeams(), SeasonID: m.Spec.SeasonID, Config: m.Config}
+	created := newMatch{MatchID: m.MatchID, Kind: m.Kind, Profiles: map[string]gameplay.PlayerProfile{}, Teams: m.Spec.SeatTeams(), SeasonID: m.Spec.SeasonID, Config: m.Config}
 	for _, seat := range m.Spec.Seats {
 		created.Players = append(created.Players, seat.Profile.UserID)
 		created.Profiles[seat.Profile.UserID] = seat.Profile
@@ -458,7 +458,7 @@ func (g *gameplayNode) ws(c echo.Context) error {
 	g.publishRuntimeState(matchID, snap, userID)
 
 	for {
-		var cmd contracts.CommandEnvelope
+		var cmd commandEnvelope
 		if err := conn.ReadJSON(&cmd); err != nil {
 			return nil
 		}
@@ -475,23 +475,23 @@ func (g *gameplayNode) ws(c echo.Context) error {
 	}
 }
 
-func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.CommandEnvelope) (contracts.CommandAck, *contracts.MatchSnapshot) {
+func (g *gameplayNode) executeCommand(userID, matchID string, cmd commandEnvelope) (commandAck, *gameplay.MatchSnapshot) {
 	start := time.Now()
-	ack := contracts.CommandAck{Kind: "ack", CommandID: cmd.CommandID, Status: "ok", ServerTS: time.Now().UnixMilli()}
+	ack := commandAck{Kind: "ack", CommandID: cmd.CommandID, Status: "ok", ServerTS: time.Now().UnixMilli()}
 	status := "ok"
 	errorCode := "none"
 	defer func() {
 		g.metrics.CommandLatencySeconds.WithLabelValues(cmd.Type).Observe(time.Since(start).Seconds())
 		g.metrics.CommandTotal.WithLabelValues(cmd.Type, status, errorCode).Inc()
 	}()
-	fail := func(code, message string) (contracts.CommandAck, *contracts.MatchSnapshot) {
+	fail := func(code, message string) (commandAck, *gameplay.MatchSnapshot) {
 		status, errorCode = "error", code
 		ack.Status, ack.ErrorCode, ack.Message = "error", code, message
 		return ack, nil
 	}
 	runtime, ok := g.runtimeForMatch(matchID)
 	if !ok {
-		return fail(contracts.ErrMatchNotFound, "match not found")
+		return fail(errMatchNotFound, "match not found")
 	}
 	if cmd.Type != "ping" && cmd.Type != "session.leave_match" {
 		g.played(matchID)
@@ -500,7 +500,7 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 	case "ping", "session.leave_match":
 		return ack, nil
 	case "guess.place", "guess.finalize":
-		snap, err := runtime.SubmitGuess(contracts.GuessPayload{
+		snap, err := runtime.SubmitGuess(gameplay.Guess{
 			UserID:         userID,
 			MatchID:        matchID,
 			RoundID:        strPayload(cmd.Payload, "roundId"),
@@ -510,7 +510,7 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 			Finalize:       cmd.Type == "guess.finalize",
 		})
 		if err != nil {
-			return fail(contracts.ErrMatchNotFound, err.Error())
+			return fail(errMatchNotFound, err.Error())
 		}
 		return ack, snap
 	case "team.ping":
@@ -521,17 +521,17 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 	case "round.advance":
 		snap, err := runtime.AdvanceRound(matchID, userID)
 		if err != nil {
-			return fail(contracts.ErrMatchNotFound, err.Error())
+			return fail(errMatchNotFound, err.Error())
 		}
 		return ack, snap
 	case "match.forfeit":
 		snap, err := runtime.Forfeit(matchID, userID)
 		if err != nil {
-			return fail(contracts.ErrMatchNotFound, err.Error())
+			return fail(errMatchNotFound, err.Error())
 		}
 		return ack, snap
 	default:
-		return fail(contracts.ErrMatchNotFound, "unsupported command")
+		return fail(errMatchNotFound, "unsupported command")
 	}
 }
 
@@ -545,10 +545,10 @@ func (g *gameplayNode) sendTeamPing(userID, matchID, roundID string, lat, lng fl
 		return err
 	}
 	self, ok := snap.Players[userID]
-	if snap.Mode != contracts.ModeTeamDuel || !ok || self.TeamID == "" {
+	if snap.Mode != matchkind.ModeTeamDuel || !ok || self.TeamID == "" {
 		return errors.New("team ping is unavailable")
 	}
-	if snap.Phase != contracts.PhaseLive || snap.RoundPhase != contracts.RoundPhaseLive || snap.CurrentRound == nil || snap.CurrentRound.RoundID != roundID {
+	if snap.Phase != gameplay.PhaseLive || snap.RoundPhase != gameplay.RoundPhaseLive || snap.CurrentRound == nil || snap.CurrentRound.RoundID != roundID {
 		return errors.New("round is not live")
 	}
 	if !self.Finalized {
@@ -569,7 +569,7 @@ func (g *gameplayNode) sendTeamPing(userID, matchID, roundID string, lat, lng fl
 	payload := map[string]any{"id": "ping-" + shortID(), "roundId": roundID, "senderUserId": userID, "lat": lat, "lng": lng, "expiresAt": now.Add(5 * time.Second).UnixMilli()}
 	for _, targetID := range users {
 		if target, exists := snap.Players[targetID]; exists && target.TeamID == self.TeamID {
-			_ = g.safeWriteMatch(targetID, matchID, contracts.EventEnvelope{Kind: "event", EventID: "evt-" + shortID(), Type: contracts.EventTeamPing, MatchID: matchID, Seq: snap.EventSequence, ServerTS: now.UnixMilli(), Payload: payload})
+			_ = g.safeWriteMatch(targetID, matchID, eventEnvelope{Kind: "event", EventID: "evt-" + shortID(), Type: eventTeamPing, MatchID: matchID, Seq: snap.EventSequence, ServerTS: now.UnixMilli(), Payload: payload})
 		}
 	}
 	return nil
@@ -642,17 +642,17 @@ func (g *gameplayNode) retryFinalization(justPublished map[string]bool) {
 	}
 	g.mu.RUnlock()
 	for _, matchID := range pending {
-		if snap, ok := g.getSnapshot(matchID); ok && snap.State == contracts.MatchEnded {
+		if snap, ok := g.getSnapshot(matchID); ok && snap.State == gameplay.MatchEnded {
 			g.terminalize(matchID, snap)
 		}
 	}
 }
 
-func (g *gameplayNode) publishRuntimeState(matchID string, snap *contracts.MatchSnapshot, excludeUserID string) {
+func (g *gameplayNode) publishRuntimeState(matchID string, snap *gameplay.MatchSnapshot, excludeUserID string) {
 	if snap == nil {
 		return
 	}
-	if snap.State == contracts.MatchEnded {
+	if snap.State == gameplay.MatchEnded {
 		g.terminalize(matchID, snap)
 		return
 	}
@@ -661,7 +661,7 @@ func (g *gameplayNode) publishRuntimeState(matchID string, snap *contracts.Match
 
 // terminalize records an ended match, which ends it in the database and frees its players' seats,
 // then lets it go.
-func (g *gameplayNode) terminalize(matchID string, snap *contracts.MatchSnapshot) {
+func (g *gameplayNode) terminalize(matchID string, snap *gameplay.MatchSnapshot) {
 	if snap == nil {
 		return
 	}
@@ -756,7 +756,7 @@ func (g *gameplayNode) runtimeForMatch(matchID string) (gameplayRuntime, bool) {
 	return runtime, ok
 }
 
-func (g *gameplayNode) getSnapshot(matchID string) (*contracts.MatchSnapshot, bool) {
+func (g *gameplayNode) getSnapshot(matchID string) (*gameplay.MatchSnapshot, bool) {
 	runtime, ok := g.runtimeForMatch(matchID)
 	if !ok {
 		return nil, false
@@ -816,42 +816,43 @@ func (g *gameplayNode) onDisconnect(userID, matchID, connID string) {
 	}
 }
 
-func (g *gameplayNode) broadcastState(matchID string, snap *contracts.MatchSnapshot, excludeUserID string) {
+func (g *gameplayNode) broadcastState(matchID string, snap *gameplay.MatchSnapshot, excludeUserID string) {
 	if snap == nil {
 		return
 	}
 	g.mu.RLock()
 	users := append([]string(nil), g.matchUsers[matchID]...)
 	g.mu.RUnlock()
+	view := gameplay.NewClientView(snap)
 	for _, userID := range users {
 		if userID == excludeUserID {
 			continue
 		}
-		evt := contracts.EventEnvelope{
+		evt := eventEnvelope{
 			Kind:     "event",
 			EventID:  "evt-" + shortID(),
-			Type:     contracts.EventMatchState,
+			Type:     eventMatchState,
 			MatchID:  matchID,
 			Seq:      snap.EventSequence,
 			ServerTS: time.Now().UnixMilli(),
-			Payload:  contracts.ClientSnapshotForPlayer(snap, userID),
+			Payload:  view.For(userID),
 		}
 		_ = g.safeWriteMatch(userID, matchID, evt)
 	}
 }
 
-func (g *gameplayNode) writeSnapshotToUser(userID, matchID string, snap *contracts.MatchSnapshot) {
+func (g *gameplayNode) writeSnapshotToUser(userID, matchID string, snap *gameplay.MatchSnapshot) {
 	if snap == nil {
 		return
 	}
-	evt := contracts.EventEnvelope{
+	evt := eventEnvelope{
 		Kind:     "event",
 		EventID:  "evt-" + shortID(),
-		Type:     contracts.EventMatchSnapshot,
+		Type:     eventMatchSnapshot,
 		MatchID:  matchID,
 		Seq:      snap.EventSequence,
 		ServerTS: time.Now().UnixMilli(),
-		Payload:  contracts.ClientSnapshotForPlayer(snap, userID),
+		Payload:  gameplay.ClientSnapshotForPlayer(snap, userID),
 	}
 	_ = g.safeWriteMatch(userID, matchID, evt)
 }

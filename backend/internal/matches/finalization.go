@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 )
 
 type duelOutcome uint8
@@ -21,7 +21,7 @@ const (
 type duelParticipantResult struct {
 	userID     pgtype.UUID
 	userIDText string
-	player     contracts.PlayerState
+	player     gameplay.PlayerState
 	won        bool
 	guest      bool
 	rating     RatingState
@@ -33,7 +33,7 @@ type duelResult struct {
 	participants [2]duelParticipantResult
 }
 
-func newDuelResult(snap *contracts.MatchSnapshot) (duelResult, error) {
+func newDuelResult(snap *gameplay.MatchSnapshot) (duelResult, error) {
 	if snap == nil {
 		return duelResult{}, fmt.Errorf("duel snapshot is required")
 	}

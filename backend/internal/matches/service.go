@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 )
 
 // Store is the match lifecycle and history: starting matches, the node side of running them,
@@ -17,12 +17,12 @@ type Store interface {
 	EndMatch(ctx context.Context, matchID, outcome string) (bool, error)
 	PickUp(ctx context.Context, node Node, run func(PickedUp) error) (string, error)
 	NodeOpenMatches(ctx context.Context, node Node) (map[string]bool, error)
-	FinalizeMatch(snap contracts.MatchSnapshot) (contracts.MatchSnapshot, error)
-	MatchSessionStatus(ctx context.Context, matchID string) (contracts.MatchSessionStatus, error)
+	FinalizeMatch(snap gameplay.MatchSnapshot) (gameplay.MatchSnapshot, error)
+	MatchSessionStatus(ctx context.Context, matchID string) (SessionStatus, error)
 	GetSession(ctx context.Context, matchID string) (Session, bool, error)
 	ActiveMatchForUser(ctx context.Context, userID string) (ActiveMatch, bool, error)
 	UsersInLiveMatches(ctx context.Context, userIDs []string) (map[string]bool, error)
-	FinalMatchSnapshot(matchID string) (*contracts.MatchSnapshot, bool, error)
+	FinalMatchSnapshot(matchID string) (*gameplay.MatchSnapshot, bool, error)
 	ListPlayerMatchHistory(userID string, limit int) ([]MatchHistorySummary, error)
 	ListPlayerMatchHistoryPage(userID string, limit int, beforeEndedAt time.Time, beforeMatchID string, rankedOnly bool) (MatchHistoryPage, error)
 	PlayerParticipatedInMatch(userID, matchID string) (bool, error)

@@ -4,22 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"geoduels/internal/badges"
-	"geoduels/internal/seasons"
-	"geoduels/internal/storekit"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"geoduels/pkg/contracts"
+	"geoduels/internal/badges"
+	"geoduels/internal/seasons"
+	"geoduels/internal/storekit"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 	"geoduels/pkg/pgnotify"
 )
 
-func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot) (contracts.MatchSnapshot, error) {
+func (s *PGStore) FinalizeMatch(snap gameplay.MatchSnapshot) (gameplay.MatchSnapshot, error) {
 	if strings.TrimSpace(snap.MatchID) == "" {
 		return snap, errors.New("match id required")
 	}
@@ -53,7 +53,7 @@ func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot) (contracts.MatchSn
 		return snap, err
 	}
 	// The match's row says what it is; the snapshot only reports it.
-	spec := matchkind.Of(contracts.MatchKind(session.Kind))
+	spec := matchkind.Of(matchkind.Kind(session.Kind))
 	snap.Kind = spec.Kind
 	if session.Ended {
 		if err := applyPersistedRatingsToSnapshot(ctx, tx, q, &snap); err != nil {
@@ -87,7 +87,7 @@ func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot) (contracts.MatchSn
 	); err != nil {
 		return snap, err
 	}
-	if spec.Mode == contracts.ModeDuel {
+	if spec.Mode == matchkind.ModeDuel {
 		result, err := newDuelResult(&snap)
 		if err != nil {
 			return snap, err
@@ -121,7 +121,7 @@ func (s *PGStore) FinalizeMatch(snap contracts.MatchSnapshot) (contracts.MatchSn
 // finalizeDuelResultTx counts a duel toward its players' games and wins, and when it is rated,
 // toward their rating, ranked stats and badges. Guests never queue for rated duels, but a guest
 // account is still never rated.
-func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *contracts.MatchSnapshot, result *duelResult, rated bool) error {
+func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *gameplay.MatchSnapshot, result *duelResult, rated bool) error {
 	if snap == nil || result == nil {
 		return errors.New("duel result is required")
 	}
@@ -233,8 +233,8 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *c
 	return nil
 }
 
-func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *contracts.MatchSnapshot) error {
-	if snap == nil || snap.Mode != contracts.ModeDuel {
+func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *gameplay.MatchSnapshot) error {
+	if snap == nil || snap.Mode != matchkind.ModeDuel {
 		return nil
 	}
 	seasonID := strings.TrimSpace(snap.SeasonID)
@@ -276,7 +276,7 @@ func applyPersistedRatingsToSnapshot(ctx context.Context, tx pgx.Tx, q *db.Queri
 	return nil
 }
 
-func rankedSpeedrunnerUsers(snap contracts.MatchSnapshot) map[string]bool {
+func rankedSpeedrunnerUsers(snap gameplay.MatchSnapshot) map[string]bool {
 	out := map[string]bool{}
 	for _, round := range snap.RoundResults {
 		if round == nil {
@@ -296,7 +296,7 @@ func rankedSpeedrunnerUsers(snap contracts.MatchSnapshot) map[string]bool {
 // into user-referencing tables satisfy their foreign keys. It is idempotent and
 // safe to call for any mode. Blank user ids are skipped rather than inserted —
 // they would fail the uuid cast and never belong in a match snapshot.
-func ensureMatchUsersTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap contracts.MatchSnapshot) error {
+func ensureMatchUsersTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap gameplay.MatchSnapshot) error {
 	if len(snap.Players) == 0 {
 		return nil
 	}
@@ -347,7 +347,7 @@ func recordMatchHistory(
 	ctx context.Context,
 	q *db.Queries,
 	matchUUID pgtype.UUID,
-	snap contracts.MatchSnapshot,
+	snap gameplay.MatchSnapshot,
 	spec matchkind.Spec,
 	partyID string,
 	compressedReplay []byte,
@@ -365,7 +365,7 @@ func recordMatchHistory(
 	if partyID != "" {
 		sourcePartyID = partyID
 	}
-	ruleset := string(contracts.NormalizeRuleset(snap.Config.Ruleset))
+	ruleset := string(gameplay.NormalizeRuleset(snap.Config.Ruleset))
 	mapID := snap.Config.MapID
 	if planMapID, err := q.GetMatchRoundPlanMapID(ctx, matchUUID); err == nil && planMapID.Valid {
 		mapID = storekit.UUIDVal(planMapID)
@@ -436,9 +436,9 @@ func recordMatchHistory(
 	}); err != nil {
 		return err
 	}
-	if snap.Mode == contracts.ModeSingleplayer && len(snap.RoundResults) == 5 && strings.TrimSpace(mapID) != "" {
+	if snap.Mode == matchkind.ModeSingleplayer && len(snap.RoundResults) == 5 && strings.TrimSpace(mapID) != "" {
 		rulesetCode := 0
-		if contracts.NormalizeRuleset(snap.Config.Ruleset) == contracts.RulesetNMPZ {
+		if gameplay.NormalizeRuleset(snap.Config.Ruleset) == gameplay.RulesetNMPZ {
 			rulesetCode = 1
 		}
 		if err := q.UpsertPlayerMapBests(ctx, db.UpsertPlayerMapBestsParams{
@@ -499,7 +499,7 @@ func recordMatchHistory(
 	return nil
 }
 
-func finalReplaySnapshotJSON(snap contracts.MatchSnapshot) ([]byte, error) {
+func finalReplaySnapshotJSON(snap gameplay.MatchSnapshot) ([]byte, error) {
 	snap.CurrentRound = nil
 	snap.RoundMSLeft = 0
 	snap.PhaseEndsAt = 0
@@ -551,7 +551,7 @@ func guessEvidence(score int, guessMS int64) float64 {
 	return evidence
 }
 
-func snapshotStartedAt(snap contracts.MatchSnapshot) time.Time {
+func snapshotStartedAt(snap gameplay.MatchSnapshot) time.Time {
 	if len(snap.RoundResults) > 0 {
 		first := snap.RoundResults[0]
 		if first != nil {
@@ -571,8 +571,8 @@ func snapshotStartedAt(snap contracts.MatchSnapshot) time.Time {
 	return time.Now()
 }
 
-func snapshotWinner(snap contracts.MatchSnapshot) string {
-	if snap.Mode == contracts.ModeSingleplayer {
+func snapshotWinner(snap gameplay.MatchSnapshot) string {
+	if snap.Mode == matchkind.ModeSingleplayer {
 		return ""
 	}
 	winner := ""

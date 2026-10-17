@@ -10,12 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *PGStore) ListMapComments(userID, mapID string) ([]contracts.MapComment, error) {
+func (s *PGStore) ListMapComments(userID, mapID string) ([]Comment, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	canonicalID, _, err := resolveMapIdentity(ctx, s.pool, mapID)
@@ -37,86 +36,86 @@ func (s *PGStore) ListMapComments(userID, mapID string) ([]contracts.MapComment,
 	return s.listMapComments(ctx, strings.TrimSpace(userID), canonicalID)
 }
 
-func (s *PGStore) CreateMapComment(userID, mapID string, input contracts.MapCommentCreate) (contracts.MapComment, error) {
+func (s *PGStore) CreateMapComment(userID, mapID string, input NewComment) (Comment, error) {
 	body := sanitizeMapCommentBody(input.Body)
 	if body == "" {
-		return contracts.MapComment{}, errors.New("comment is empty")
+		return Comment{}, errors.New("comment is empty")
 	}
 	parentID := strings.TrimSpace(input.ParentID)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	defer tx.Rollback(ctx)
 	canonicalID, _, err := resolveMapIdentity(ctx, tx, mapID)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	mapID = canonicalID
 	var visible bool
 	mapUID, err := mapUUID(mapID)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	visible, err = db.New(tx).MapCommentsVisible(ctx, db.MapCommentsVisibleParams{MapID: mapUID, ViewerUserID: strings.TrimSpace(userID)})
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	if !visible {
-		return contracts.MapComment{}, pgx.ErrNoRows
+		return Comment{}, pgx.ErrNoRows
 	}
 	if parentID != "" {
 		pid, err := mapUUID(parentID)
 		if err != nil {
-			return contracts.MapComment{}, err
+			return Comment{}, err
 		}
 		parentParent, err := db.New(tx).MapCommentParent(ctx, db.MapCommentParentParams{CommentID: pid, MapID: mapUID})
 		if err != nil {
-			return contracts.MapComment{}, err
+			return Comment{}, err
 		}
 		if parentParent.Valid {
-			return contracts.MapComment{}, errors.New("only one reply level is supported")
+			return Comment{}, errors.New("only one reply level is supported")
 		}
 		var dup bool
 		dup, err = db.New(tx).MapCommentDuplicate(ctx, db.MapCommentDuplicateParams{MapID: mapUID, UserID: mustMapUUID(userID), ParentID: parentID, Body: pgtype.Text{String: body, Valid: true}})
 		if err != nil {
-			return contracts.MapComment{}, err
+			return Comment{}, err
 		}
 		if dup {
-			return contracts.MapComment{}, errors.New("duplicate comment")
+			return Comment{}, errors.New("duplicate comment")
 		}
 	} else {
 		var dup bool
 		dup, err := db.New(tx).MapCommentDuplicate(ctx, db.MapCommentDuplicateParams{MapID: mapUID, UserID: mustMapUUID(userID), Body: pgtype.Text{String: body, Valid: true}})
 		if err != nil {
-			return contracts.MapComment{}, err
+			return Comment{}, err
 		}
 		if dup {
-			return contracts.MapComment{}, errors.New("duplicate comment")
+			return Comment{}, errors.New("duplicate comment")
 		}
 	}
 	id := entityid.New()
 	if err := db.New(tx).InsertMapComment(ctx, db.InsertMapCommentParams{CommentID: mustMapUUID(id), MapID: mustMapUUID(mapID), ParentID: parentID, UserID: mustMapUUID(userID), Body: pgtype.Text{String: body, Valid: true}}); err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	if err := incrementMapCommentStats(ctx, tx, strings.TrimSpace(mapID), strings.TrimSpace(userID)); err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	comments, err := s.ListMapComments(userID, mapID)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	for _, comment := range flattenMapComments(comments) {
 		if comment.ID == id {
 			return comment, nil
 		}
 	}
-	return contracts.MapComment{}, pgx.ErrNoRows
+	return Comment{}, pgx.ErrNoRows
 }
 
 func (s *PGStore) DeleteMapComment(userID, mapID, commentID string, moderator bool) error {
@@ -153,79 +152,79 @@ func (s *PGStore) DeleteMapComment(userID, mapID, commentID string, moderator bo
 	return tx.Commit(ctx)
 }
 
-func (s *PGStore) SetMapCommentLike(userID, mapID, commentID string, liked bool) (contracts.MapComment, error) {
+func (s *PGStore) SetMapCommentLike(userID, mapID, commentID string, liked bool) (Comment, error) {
 	userID, mapID, commentID = strings.TrimSpace(userID), strings.TrimSpace(mapID), strings.TrimSpace(commentID)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	defer tx.Rollback(ctx)
 	canonicalID, _, err := resolveMapIdentity(ctx, tx, mapID)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	mapID = canonicalID
 	var visible bool
 	q := db.New(tx)
 	visible, err = q.MapCommentLikeVisible(ctx, db.MapCommentLikeVisibleParams{CommentID: mustMapUUID(commentID), MapID: mustMapUUID(mapID), ViewerUserID: userID})
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	if !visible {
-		return contracts.MapComment{}, pgx.ErrNoRows
+		return Comment{}, pgx.ErrNoRows
 	}
 	var changed bool
 	if liked {
 		tag, err := q.AddMapCommentLike(ctx, db.AddMapCommentLikeParams{CommentID: mustMapUUID(commentID), UserID: mustMapUUID(userID)})
 		if err != nil {
-			return contracts.MapComment{}, err
+			return Comment{}, err
 		}
 		changed = tag > 0
 		if changed {
 			if err := q.IncrementMapCommentLike(ctx, mustMapUUID(commentID)); err != nil {
-				return contracts.MapComment{}, err
+				return Comment{}, err
 			}
 		}
 	} else {
 		tag, err := q.RemoveMapCommentLike(ctx, db.RemoveMapCommentLikeParams{CommentID: mustMapUUID(commentID), UserID: mustMapUUID(userID)})
 		if err != nil {
-			return contracts.MapComment{}, err
+			return Comment{}, err
 		}
 		changed = tag > 0
 		if changed {
 			if err := q.DecrementMapCommentLike(ctx, mustMapUUID(commentID)); err != nil {
-				return contracts.MapComment{}, err
+				return Comment{}, err
 			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	comments, err := s.ListMapComments(userID, mapID)
 	if err != nil {
-		return contracts.MapComment{}, err
+		return Comment{}, err
 	}
 	for _, comment := range flattenMapComments(comments) {
 		if comment.ID == commentID {
 			return comment, nil
 		}
 	}
-	return contracts.MapComment{}, pgx.ErrNoRows
+	return Comment{}, pgx.ErrNoRows
 }
 
-func (s *PGStore) listMapComments(ctx context.Context, userID, mapID string) ([]contracts.MapComment, error) {
+func (s *PGStore) listMapComments(ctx context.Context, userID, mapID string) ([]Comment, error) {
 	canModerate := s.commentModerationRights(ctx, userID)
 	rows, err := s.q().ListMapComments(ctx, db.ListMapCommentsParams{MapID: mustMapUUID(mapID), ViewerUserID: userID, CanModerate: canModerate})
 	if err != nil {
 		return nil, err
 	}
-	roots := []contracts.MapComment{}
+	roots := []Comment{}
 	byID := map[string]int{}
-	replies := map[string][]contracts.MapComment{}
+	replies := map[string][]Comment{}
 	for _, row := range rows {
-		var item contracts.MapComment
+		var item Comment
 		item.ID, item.MapID, item.UserID = storekit.UUIDVal(row.ID), storekit.UUIDVal(row.MapID), storekit.UUIDVal(row.UserID)
 		item.ParentID = storekit.UUIDVal(row.ParentID)
 		item.UserDisplayName = row.UserDisplayName
@@ -259,8 +258,8 @@ func (s *PGStore) listMapComments(ctx context.Context, userID, mapID string) ([]
 	return roots, nil
 }
 
-func flattenMapComments(items []contracts.MapComment) []contracts.MapComment {
-	out := []contracts.MapComment{}
+func flattenMapComments(items []Comment) []Comment {
+	out := []Comment{}
 	for _, item := range items {
 		out = append(out, item)
 		out = append(out, item.Replies...)

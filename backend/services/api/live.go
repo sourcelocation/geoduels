@@ -13,7 +13,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"geoduels/pkg/auth"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/pgnotify"
 )
 
@@ -29,9 +28,30 @@ const (
 	liveAnnounceLookback = 30 * time.Second
 )
 
+const (
+	liveHello               = "hello"
+	liveNotificationUpsert  = "notification.upsert"
+	liveNotificationRead    = "notification.read"
+	liveNotificationReadAll = "notification.read_all"
+	liveInvalidate          = "invalidate"
+	liveGlobalStatus        = "global_status.changed"
+	// liveMatchStarted tells a player a match they are seated in has started.
+	liveMatchStarted = "match.started"
+)
+
+// liveEvent is a message on a player's live socket. Processes pass it to each other as is.
+type liveEvent struct {
+	Type           string              `json:"type"`
+	Notification   *userNotification   `json:"notification,omitempty"`
+	NotificationID int64               `json:"notificationId,omitempty"`
+	Resources      []string            `json:"resources,omitempty"`
+	Global         *bootstrapGlobal    `json:"global,omitempty"`
+	Match          *activeMatchSummary `json:"match,omitempty"`
+}
+
 type liveConn struct {
 	userID string
-	send   chan contracts.LiveEvent
+	send   chan liveEvent
 	conn   *websocket.Conn
 }
 
@@ -120,7 +140,7 @@ func (a *api) liveClaims(r *http.Request) (auth.AppClaims, error) {
 }
 
 func (h *liveHub) serve(ctx context.Context, userID string, conn *websocket.Conn) {
-	session := &liveConn{userID: userID, send: make(chan contracts.LiveEvent, 16), conn: conn}
+	session := &liveConn{userID: userID, send: make(chan liveEvent, 16), conn: conn}
 	h.add(session)
 	defer h.remove(session)
 
@@ -131,7 +151,7 @@ func (h *liveHub) serve(ctx context.Context, userID string, conn *websocket.Conn
 		return conn.SetReadDeadline(time.Now().Add(livePongWait))
 	})
 	h.api.touchViewerPresence(context.Background(), userID)
-	h.enqueue(session, contracts.LiveEvent{Type: contracts.LiveHello})
+	h.enqueue(session, liveEvent{Type: liveHello})
 
 	global, stopGlobal := h.api.statusHub().subscribe()
 	defer stopGlobal()
@@ -157,9 +177,9 @@ func (h *liveHub) serve(ctx context.Context, userID string, conn *websocket.Conn
 		case <-done:
 			return
 		case snapshot := <-global:
-			h.enqueue(session, contracts.LiveEvent{
-				Type: contracts.LiveGlobalStatus,
-				Global: &contracts.BootstrapGlobal{
+			h.enqueue(session, liveEvent{
+				Type: liveGlobalStatus,
+				Global: &bootstrapGlobal{
 					OnlinePlayers: snapshot.OnlinePlayers,
 					Maintenance:   snapshot.Maintenance,
 				},
@@ -226,12 +246,12 @@ func (h *liveHub) dropLocked(session *liveConn) {
 	_ = session.conn.Close()
 }
 
-func closeQuiet(ch chan contracts.LiveEvent) {
+func closeQuiet(ch chan liveEvent) {
 	defer func() { _ = recover() }()
 	close(ch)
 }
 
-func (h *liveHub) enqueue(session *liveConn, event contracts.LiveEvent) {
+func (h *liveHub) enqueue(session *liveConn, event liveEvent) {
 	select {
 	case session.send <- event:
 	default:
@@ -243,7 +263,7 @@ func (h *liveHub) subscribeUser(userID string) context.CancelFunc {
 	events, cancel := h.api.events.Subscribe(pgnotify.LiveTopic(userID))
 	go func() {
 		for message := range events {
-			var event contracts.LiveEvent
+			var event liveEvent
 			if message.Resync || json.Unmarshal(message.Data, &event) != nil || event.Type == "" {
 				continue
 			}
@@ -253,7 +273,7 @@ func (h *liveHub) subscribeUser(userID string) context.CancelFunc {
 	return cancel
 }
 
-func (h *liveHub) dispatchLocal(userID string, event contracts.LiveEvent) {
+func (h *liveHub) dispatchLocal(userID string, event liveEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, session := range h.conns[userID] {
@@ -262,7 +282,7 @@ func (h *liveHub) dispatchLocal(userID string, event contracts.LiveEvent) {
 }
 
 // publish sends the event to the user's sockets in every process.
-func (h *liveHub) publish(userID string, event contracts.LiveEvent) {
+func (h *liveHub) publish(userID string, event liveEvent) {
 	if strings.TrimSpace(userID) == "" {
 		return
 	}
@@ -295,8 +315,8 @@ func (h *liveHub) announce(since time.Time) bool {
 			continue
 		}
 		h.announced[item.Notification.ID] = item.Notification.CreatedAt
-		notification := item.Notification
-		h.dispatchLocal(item.UserID, contracts.LiveEvent{Type: contracts.LiveNotificationUpsert, Notification: &notification})
+		notification := newUserNotification(item.Notification)
+		h.dispatchLocal(item.UserID, liveEvent{Type: liveNotificationUpsert, Notification: &notification})
 	}
 	for id, createdAt := range h.announced {
 		if createdAt.Before(since) {
@@ -307,7 +327,7 @@ func (h *liveHub) announce(since time.Time) bool {
 }
 
 func (h *liveHub) publishInvalidate(userIDs ...string) {
-	event := contracts.LiveEvent{Type: contracts.LiveInvalidate, Resources: []string{"friends-page"}}
+	event := liveEvent{Type: liveInvalidate, Resources: []string{"friends-page"}}
 	seen := map[string]struct{}{}
 	for _, userID := range userIDs {
 		if userID == "" {

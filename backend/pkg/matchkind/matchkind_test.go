@@ -3,7 +3,6 @@ package matchkind_test
 import (
 	"testing"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/matchkind"
 )
 
@@ -11,45 +10,45 @@ import (
 // and whether a party started it. Each start path produced exactly one shape.
 type legacyMatch struct {
 	name     string
-	mode     contracts.MatchMode
+	mode     matchkind.Mode
 	unranked bool
 	party    bool
 	kind     matchkind.Kind // what the same start path creates now
 }
 
 var legacyStarts = []legacyMatch{
-	{name: "queue", mode: contracts.ModeDuel, kind: matchkind.RankedDuel},
-	{name: "party duel", mode: contracts.ModeDuel, unranked: true, party: true, kind: matchkind.PrivateDuel},
-	{name: "party team duel", mode: contracts.ModeTeamDuel, unranked: true, party: true, kind: matchkind.TeamDuel},
-	{name: "party free for all", mode: contracts.ModeFreeForAll, unranked: true, party: true, kind: matchkind.FreeForAll},
-	{name: "solo", mode: contracts.ModeSingleplayer, kind: matchkind.Solo},
+	{name: "queue", mode: matchkind.ModeDuel, kind: matchkind.RankedDuel},
+	{name: "party duel", mode: matchkind.ModeDuel, unranked: true, party: true, kind: matchkind.PrivateDuel},
+	{name: "party team duel", mode: matchkind.ModeTeamDuel, unranked: true, party: true, kind: matchkind.TeamDuel},
+	{name: "party free for all", mode: matchkind.ModeFreeForAll, unranked: true, party: true, kind: matchkind.FreeForAll},
+	{name: "solo", mode: matchkind.ModeSingleplayer, kind: matchkind.Solo},
 }
 
 // legacyRotation is the old rule for whether a match played the ruleset's rotation map.
 func legacyRotation(m legacyMatch) bool {
-	return m.mode == contracts.ModeDuel && !m.unranked && !m.party
+	return m.mode == matchkind.ModeDuel && !m.unranked && !m.party
 }
 
 // The rules each place used to apply to whether a match was rated, as they were written, before
 // the kind table replaced them.
 var legacyRules = map[string]func(m legacyMatch) bool{
-	"session ranked column": func(m legacyMatch) bool { return !m.unranked && m.mode == contracts.ModeDuel && !m.party },
-	"finalize rating":       func(m legacyMatch) bool { return m.mode == contracts.ModeDuel && !m.unranked && !m.party },
-	"history ranked":        func(m legacyMatch) bool { return m.mode == contracts.ModeDuel && !m.unranked && !m.party },
-	"risk analysis":         func(m legacyMatch) bool { return m.mode == contracts.ModeDuel && !m.unranked },
-	"engine rating preview": func(m legacyMatch) bool { return m.mode == contracts.ModeDuel && !m.unranked },
+	"session ranked column": func(m legacyMatch) bool { return !m.unranked && m.mode == matchkind.ModeDuel && !m.party },
+	"finalize rating":       func(m legacyMatch) bool { return m.mode == matchkind.ModeDuel && !m.unranked && !m.party },
+	"history ranked":        func(m legacyMatch) bool { return m.mode == matchkind.ModeDuel && !m.unranked && !m.party },
+	"risk analysis":         func(m legacyMatch) bool { return m.mode == matchkind.ModeDuel && !m.unranked },
+	"engine rating preview": func(m legacyMatch) bool { return m.mode == matchkind.ModeDuel && !m.unranked },
 	"engine disconnect forfeit": func(m legacyMatch) bool {
-		return m.mode != contracts.ModeSingleplayer && !m.unranked
+		return m.mode != matchkind.ModeSingleplayer && !m.unranked
 	},
 }
 
 func legacyPreset(m legacyMatch) matchkind.Kind {
 	switch m.mode {
-	case contracts.ModeSingleplayer:
+	case matchkind.ModeSingleplayer:
 		return matchkind.Solo
-	case contracts.ModeTeamDuel:
+	case matchkind.ModeTeamDuel:
 		return matchkind.TeamDuel
-	case contracts.ModeFreeForAll:
+	case matchkind.ModeFreeForAll:
 		return matchkind.FreeForAll
 	default:
 		if m.party || m.unranked {
@@ -68,7 +67,7 @@ func TestKindsAgreeWithTheRulesTheyReplaced(t *testing.T) {
 			t.Fatalf("%s: no spec for %s", m.name, m.kind)
 		}
 		for rule, rated := range legacyRules {
-			if rule == "engine disconnect forfeit" && m.mode == contracts.ModeSingleplayer {
+			if rule == "engine disconnect forfeit" && m.mode == matchkind.ModeSingleplayer {
 				continue
 			}
 			if got := rated(m); got != spec.Rated {
@@ -85,7 +84,7 @@ func TestKindsAgreeWithTheRulesTheyReplaced(t *testing.T) {
 			t.Errorf("%s: mode was %s, the kind says %s", m.name, m.mode, spec.Mode)
 		}
 		// Starting another match never replaced a duel, team duel or free-for-all, only solo.
-		if replaceable := m.mode == contracts.ModeSingleplayer; spec.Replaceable != replaceable {
+		if replaceable := m.mode == matchkind.ModeSingleplayer; spec.Replaceable != replaceable {
 			t.Errorf("%s: replaceable was %v, the kind says %v", m.name, replaceable, spec.Replaceable)
 		}
 		historyRanked := legacyRules["history ranked"](m)
@@ -118,7 +117,7 @@ func TestEveryKindIsDescribedConsistently(t *testing.T) {
 		if spec.Replaceable != (spec.Origin == matchkind.OriginDirect) || (spec.Replaceable && spec.MaxPlayers != 1) {
 			t.Errorf("%s: only a match a player starts alone may be replaced", kind)
 		}
-		if (spec.Engine == matchkind.EngineSolo) != (spec.Mode == contracts.ModeSingleplayer) {
+		if (spec.Engine == matchkind.EngineSolo) != (spec.Mode == matchkind.ModeSingleplayer) {
 			t.Errorf("%s: engine %s does not run mode %s", kind, spec.Engine, spec.Mode)
 		}
 		if spec.Origin == matchkind.OriginParty {
@@ -127,7 +126,7 @@ func TestEveryKindIsDescribedConsistently(t *testing.T) {
 			}
 		}
 	}
-	if _, ok := matchkind.ForParty(contracts.ModeSingleplayer); ok {
+	if _, ok := matchkind.ForParty(matchkind.ModeSingleplayer); ok {
 		t.Error("a party cannot play solo")
 	}
 }

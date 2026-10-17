@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/gameplay"
 	"geoduels/pkg/singleplayer"
 )
@@ -24,8 +23,8 @@ func TestSingleplayerInvariantsUnderGeneratedSequences(t *testing.T) {
 			base := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 			var nowMs int64
 			clock := func() time.Time { return base.Add(time.Duration(nowMs) * time.Millisecond) }
-			eng := singleplayer.NewWithClock(func(string, int) (contracts.LocationPoint, error) {
-				return contracts.LocationPoint{Lat: rng.Float64()*140 - 70, Lng: rng.Float64()*360 - 180, Country: "xx"}, nil
+			eng := singleplayer.NewWithClock(func(string, int) (gameplay.LocationPoint, error) {
+				return gameplay.LocationPoint{Lat: rng.Float64()*140 - 70, Lng: rng.Float64()*360 - 180, Country: "xx"}, nil
 			}, clock)
 			if _, err := eng.CreateMatch("solo", []string{"player"}, nil); err != nil {
 				t.Fatalf("create session: %v", err)
@@ -63,7 +62,7 @@ func TestSingleplayerInvariantsUnderGeneratedSequences(t *testing.T) {
 				if p.TotalScore != sum {
 					t.Fatalf("step %d: total score %d does not equal the sum of round scores %d", step, p.TotalScore, sum)
 				}
-				if snap.State == contracts.MatchEnded {
+				if snap.State == gameplay.MatchEnded {
 					endedSeen = true
 					if snap.CurrentRound != nil {
 						t.Fatalf("step %d: ended session still exposes a current round", step)
@@ -76,8 +75,8 @@ func TestSingleplayerInvariantsUnderGeneratedSequences(t *testing.T) {
 
 				// Commands from anyone but the session owner are rejected
 				// while the session is live.
-				if snap.State == contracts.MatchLive {
-					if _, err := eng.SubmitGuess(contracts.GuessPayload{UserID: "intruder", MatchID: "solo", RoundID: "any", Lat: 1, Lng: 1, Finalize: true}); err == nil {
+				if snap.State == gameplay.MatchLive {
+					if _, err := eng.SubmitGuess(gameplay.Guess{UserID: "intruder", MatchID: "solo", RoundID: "any", Lat: 1, Lng: 1, Finalize: true}); err == nil {
 						t.Fatalf("step %d: intruder guess accepted", step)
 					}
 					if _, err := eng.Forfeit("solo", "intruder"); err == nil {
@@ -87,9 +86,9 @@ func TestSingleplayerInvariantsUnderGeneratedSequences(t *testing.T) {
 
 				// Drive forward deterministically enough to make progress.
 				current := snap.CurrentRound
-				if snap.State == contracts.MatchLive && current != nil {
+				if snap.State == gameplay.MatchLive && current != nil {
 					progressedRounds = len(snap.RoundResults) + 1
-					if _, err := eng.SubmitGuess(contracts.GuessPayload{
+					if _, err := eng.SubmitGuess(gameplay.Guess{
 						UserID: "player", MatchID: "solo", RoundID: current.RoundID,
 						Lat: rng.Float64()*180 - 90, Lng: rng.Float64()*360 - 180, Finalize: true,
 					}); err != nil {

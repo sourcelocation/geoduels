@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
@@ -23,8 +23,8 @@ import (
 
 // Seat is one player's place in a new match, with the profile they play under.
 type Seat struct {
-	Profile contracts.PlayerProfile `json:"profile"`
-	Team    string                  `json:"team,omitempty"`
+	Profile gameplay.PlayerProfile `json:"profile"`
+	Team    string                 `json:"team,omitempty"`
 }
 
 // LaunchSpec is what a node needs to run a match, beyond its kind, config and round plan.
@@ -35,18 +35,18 @@ type LaunchSpec struct {
 
 // Plan is the map a match plays, chosen inside its start transaction.
 type Plan struct {
-	Config contracts.MatchConfig
+	Config gameplay.MatchConfig
 	MapID  string
 }
 
 type StartParams struct {
 	MatchID      string
-	Kind         contracts.MatchKind
+	Kind         matchkind.Kind
 	Seats        []Seat
 	SeasonID     string
-	Config       contracts.MatchConfig
+	Config       gameplay.MatchConfig
 	PartyID      string
-	ReturnTarget *contracts.MatchReturnTarget
+	ReturnTarget *ReturnTarget
 	// Plan picks the map and writes the round plan in the start transaction.
 	Plan func(ctx context.Context, tx pgx.Tx) (Plan, error)
 	// After runs in the start transaction once the match is written.
@@ -57,7 +57,7 @@ type StartParams struct {
 type ConflictError struct {
 	UserID  string
 	MatchID string
-	Kind    contracts.MatchKind
+	Kind    matchkind.Kind
 }
 
 func (e *ConflictError) Error() string {
@@ -103,15 +103,15 @@ func (s *PGStore) StartTx(ctx context.Context, tx pgx.Tx, p StartParams) error {
 		if err := clearSeatsTx(ctx, q, userIDs); err != nil {
 			return err
 		}
-		plan := Plan{Config: contracts.NormalizeMatchConfig(p.Config)}
+		plan := Plan{Config: gameplay.NormalizeMatchConfig(p.Config)}
 		if p.Plan != nil {
 			if plan, err = p.Plan(ctx, tx); err != nil {
 				return err
 			}
 		}
-		config, _ := json.Marshal(contracts.NormalizeMatchConfig(plan.Config))
+		config, _ := json.Marshal(gameplay.NormalizeMatchConfig(plan.Config))
 		launch, _ := json.Marshal(LaunchSpec{SeasonID: p.SeasonID, Seats: p.Seats})
-		target := contracts.NormalizeMatchReturnTarget(p.ReturnTarget)
+		target := NormalizeReturnTarget(p.ReturnTarget)
 		partyID, err := storekit.OptionalUUID(p.PartyID)
 		if err != nil {
 			return err
@@ -176,8 +176,8 @@ func clearSeatsTx(ctx context.Context, q *db.Queries, userIDs []string) error {
 		return err
 	}
 	for _, row := range rows {
-		kind := contracts.MatchKind(row.Kind)
-		outcome, blocks := SeatOutcome(contracts.MatchSessionStatus(row.Status), kind)
+		kind := matchkind.Kind(row.Kind)
+		outcome, blocks := SeatOutcome(SessionStatus(row.Status), kind)
 		if blocks {
 			return &ConflictError{UserID: storekit.UUIDVal(row.UserID), MatchID: storekit.UUIDVal(row.MatchID), Kind: kind}
 		}
@@ -191,7 +191,7 @@ func clearSeatsTx(ctx context.Context, q *db.Queries, userIDs []string) error {
 // SeatOutcome decides what happens to a player's seat in another match when a new one starts: a
 // match that is over just closes (interrupted, if nothing ended it); a replaceable one still
 // running ends as replaced; any other running match blocks the new one.
-func SeatOutcome(status contracts.MatchSessionStatus, kind contracts.MatchKind) (outcome string, blocks bool) {
+func SeatOutcome(status SessionStatus, kind matchkind.Kind) (outcome string, blocks bool) {
 	if !status.Open() {
 		return OutcomeInterrupted, false
 	}
@@ -229,8 +229,8 @@ type Node struct {
 // PickedUp is a match a node took.
 type PickedUp struct {
 	MatchID string
-	Kind    contracts.MatchKind
-	Config  contracts.MatchConfig
+	Kind    matchkind.Kind
+	Config  gameplay.MatchConfig
 	Spec    LaunchSpec
 }
 
@@ -248,11 +248,11 @@ func (s *PGStore) PickUp(ctx context.Context, node Node, run func(PickedUp) erro
 		if err != nil {
 			return err
 		}
-		match := PickedUp{MatchID: storekit.UUIDVal(row.MatchID), Kind: contracts.MatchKind(row.Kind)}
+		match := PickedUp{MatchID: storekit.UUIDVal(row.MatchID), Kind: matchkind.Kind(row.Kind)}
 		if err := json.Unmarshal(row.ConfigJson, &match.Config); err != nil {
 			return err
 		}
-		match.Config = contracts.NormalizeMatchConfig(match.Config)
+		match.Config = gameplay.NormalizeMatchConfig(match.Config)
 		if err := json.Unmarshal(row.SpecJson, &match.Spec); err != nil {
 			return err
 		}
@@ -283,32 +283,100 @@ func (s *PGStore) NodeOpenMatches(ctx context.Context, node Node) (map[string]bo
 	return out, nil
 }
 
+// SessionStatus is what a match is now, derived from its session and never stored
+// (gd_match_status): starting until a gameplay node picks it up, live while that node's lease holds,
+// ended once it ended, and interrupted when its node is gone or none picked it up in time.
+type SessionStatus string
+
+const (
+	SessionMissing     SessionStatus = ""
+	SessionStarting    SessionStatus = "starting"
+	SessionLive        SessionStatus = "live"
+	SessionEnded       SessionStatus = "ended"
+	SessionInterrupted SessionStatus = "interrupted"
+)
+
+// Over reports whether the match will see no more play: it ended or was interrupted.
+func (s SessionStatus) Over() bool {
+	return s == SessionEnded || s == SessionInterrupted
+}
+
+// Open reports whether the match is starting or live.
+func (s SessionStatus) Open() bool {
+	return s == SessionStarting || s == SessionLive
+}
+
 // MatchSessionStatus says whether a match is starting, live, ended or interrupted;
-// MatchSessionMissing when it has no session (never started, or cleaned up).
-func (s *PGStore) MatchSessionStatus(ctx context.Context, matchID string) (contracts.MatchSessionStatus, error) {
+// SessionMissing when it has no session (never started, or cleaned up).
+func (s *PGStore) MatchSessionStatus(ctx context.Context, matchID string) (SessionStatus, error) {
 	id, err := profileUUID(matchID)
 	if err != nil {
-		return contracts.MatchSessionMissing, errors.New("matchID required")
+		return SessionMissing, errors.New("matchID required")
 	}
 	status, err := s.db.GetMatchSessionStatus(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.MatchSessionMissing, nil
+		return SessionMissing, nil
 	}
 	if err != nil {
-		return contracts.MatchSessionMissing, err
+		return SessionMissing, err
 	}
-	return contracts.MatchSessionStatus(status), nil
+	return SessionStatus(status), nil
+}
+
+// ReturnTarget is where a match sends its players when they leave it. It is deliberately separate
+// from the match's config: the map that was played does not decide where a player goes next.
+type ReturnTarget struct {
+	Kind            ReturnKind
+	MapID           string
+	PartyID         string
+	PartyInviteCode string
+}
+
+type ReturnKind string
+
+const (
+	ReturnHome  ReturnKind = "home"
+	ReturnMap   ReturnKind = "map"
+	ReturnParty ReturnKind = "party"
+)
+
+// NormalizeReturnTarget keeps only what a target's kind uses; anything incomplete goes home.
+func NormalizeReturnTarget(target *ReturnTarget) *ReturnTarget {
+	if target == nil {
+		return &ReturnTarget{Kind: ReturnHome}
+	}
+	normalized := *target
+	switch normalized.Kind {
+	case ReturnMap:
+		normalized.MapID = strings.TrimSpace(normalized.MapID)
+		if normalized.MapID == "" {
+			return &ReturnTarget{Kind: ReturnHome}
+		}
+		normalized.PartyID = ""
+		normalized.PartyInviteCode = ""
+	case ReturnParty:
+		normalized.PartyID = strings.TrimSpace(normalized.PartyID)
+		if normalized.PartyID == "" {
+			return &ReturnTarget{Kind: ReturnHome}
+		}
+		normalized.MapID = ""
+	case ReturnHome:
+		normalized = ReturnTarget{Kind: ReturnHome}
+	default:
+		return &ReturnTarget{Kind: ReturnHome}
+	}
+	return &normalized
 }
 
 // Session is a match's live record.
 type Session struct {
 	MatchID      string
-	Kind         contracts.MatchKind
-	Status       contracts.MatchSessionStatus
+	Kind         matchkind.Kind
+	Status       SessionStatus
 	NodeURL      string
-	Config       contracts.MatchConfig
+	Config       gameplay.MatchConfig
 	PartyID      string
-	ReturnTarget *contracts.MatchReturnTarget
+	ReturnTarget *ReturnTarget
 	CreatedAt    time.Time
 	Outcome      string
 	Seats        []SessionSeat
@@ -346,11 +414,11 @@ func (s *PGStore) GetSession(ctx context.Context, matchID string) (Session, bool
 		return Session{}, false, err
 	}
 	session := Session{
-		MatchID: storekit.UUIDVal(row.MatchID), Kind: contracts.MatchKind(row.Kind),
-		Status: contracts.MatchSessionStatus(row.Status), NodeURL: row.NodeUrl,
+		MatchID: storekit.UUIDVal(row.MatchID), Kind: matchkind.Kind(row.Kind),
+		Status: SessionStatus(row.Status), NodeURL: row.NodeUrl,
 		PartyID: storekit.UUIDVal(row.SourcePartyID), CreatedAt: row.CreatedAt.Time, Outcome: row.Outcome,
-		ReturnTarget: contracts.NormalizeMatchReturnTarget(&contracts.MatchReturnTarget{
-			Kind:    contracts.MatchReturnTargetKind(row.ReturnTargetKind),
+		ReturnTarget: NormalizeReturnTarget(&ReturnTarget{
+			Kind:    ReturnKind(row.ReturnTargetKind),
 			MapID:   storekit.UUIDVal(row.ReturnTargetMapID),
 			PartyID: storekit.UUIDVal(row.ReturnTargetPartyID),
 		}),
@@ -358,7 +426,7 @@ func (s *PGStore) GetSession(ctx context.Context, matchID string) (Session, bool
 	if err := json.Unmarshal(row.ConfigJson, &session.Config); err != nil {
 		return Session{}, false, err
 	}
-	session.Config = contracts.NormalizeMatchConfig(session.Config)
+	session.Config = gameplay.NormalizeMatchConfig(session.Config)
 	seats, err := s.db.ListMatchSeats(ctx, id)
 	if err != nil {
 		return Session{}, false, err
@@ -375,8 +443,8 @@ func (s *PGStore) GetSession(ctx context.Context, matchID string) (Session, bool
 // ActiveMatch is the match a player is in now.
 type ActiveMatch struct {
 	MatchID string
-	Kind    contracts.MatchKind
-	Status  contracts.MatchSessionStatus
+	Kind    matchkind.Kind
+	Status  SessionStatus
 }
 
 // ActiveMatchForUser returns the starting or live match the player is in, if any.
@@ -392,7 +460,7 @@ func (s *PGStore) ActiveMatchForUser(ctx context.Context, userID string) (Active
 	if err != nil {
 		return ActiveMatch{}, false, err
 	}
-	return ActiveMatch{MatchID: storekit.UUIDVal(row.MatchID), Kind: contracts.MatchKind(row.Kind), Status: contracts.MatchSessionStatus(row.Status)}, true, nil
+	return ActiveMatch{MatchID: storekit.UUIDVal(row.MatchID), Kind: matchkind.Kind(row.Kind), Status: SessionStatus(row.Status)}, true, nil
 }
 
 // UsersInLiveMatches says which of the players are in a starting or live match.

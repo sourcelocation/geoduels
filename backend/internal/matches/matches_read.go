@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
@@ -22,7 +22,7 @@ func mu(s string) (pgtype.UUID, error) {
 
 // FinalMatchSnapshot returns a recorded match's final snapshot, with its kind: a match recorded
 // before kinds existed gets the kind its history row describes.
-func (s *PGStore) FinalMatchSnapshot(id string) (*contracts.MatchSnapshot, bool, error) {
+func (s *PGStore) FinalMatchSnapshot(id string) (*gameplay.MatchSnapshot, bool, error) {
 	if id == "" {
 		return nil, false, errors.New("matchID required")
 	}
@@ -53,12 +53,12 @@ func (s *PGStore) FinalMatchSnapshot(id string) (*contracts.MatchSnapshot, bool,
 	if len(raw) == 0 {
 		return nil, false, nil
 	}
-	var snap contracts.MatchSnapshot
+	var snap gameplay.MatchSnapshot
 	if e := json.Unmarshal(raw, &snap); e != nil {
 		return nil, false, e
 	}
 	if snap.Kind == "" {
-		snap.Kind = matchkind.FromHistory(contracts.MatchMode(r.Mode), r.Ranked)
+		snap.Kind = matchkind.FromHistory(matchkind.Mode(r.Mode), r.Ranked)
 	}
 	return &snap, true, nil
 }

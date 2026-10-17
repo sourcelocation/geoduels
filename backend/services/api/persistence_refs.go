@@ -8,19 +8,14 @@ import (
 	"geoduels/internal/content"
 	"geoduels/internal/maps"
 	socialdomain "geoduels/internal/social"
-	"geoduels/pkg/contracts"
 )
 
 type (
 	Identity                   = accounts.Identity
-	RefreshTokenRecord         = contracts.RefreshTokenRecord
-	AuthSessionParams          = contracts.AuthSessionParams
 	ChangelogPostInput         = content.ChangelogPostInput
 	LobbyChangelogContent      = content.LobbyChangelogContent
 	ModerationSettings         = content.ModerationSettings
 	DiscordIntegrationSettings = content.DiscordIntegrationSettings
-	AdminPlayerSummary         = contracts.AdminPlayerSummary
-	UserNotification           = contracts.UserNotification
 	MapCreatorAdminRepository  = maps.MapCreatorAdminRepository
 	OfficialMapImportInput     = maps.OfficialMapImportInput
 )

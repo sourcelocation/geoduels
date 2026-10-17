@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
 )
@@ -36,10 +35,10 @@ func (a *PGStore) ReportEligibility(ctx context.Context, matchID, reporterID, su
 }
 
 // SaveReport persists and deduplicates the signal together with its notification job.
-func (a *PGStore) SaveReport(ctx context.Context, report PlayerReport) (contracts.ModerationSignalCreated, error) {
+func (a *PGStore) SaveReport(ctx context.Context, report PlayerReport) (ReportResult, error) {
 	tx, err := a.requireTx()
 	if err != nil {
-		return contracts.ModerationSignalCreated{}, err
+		return ReportResult{}, err
 	}
 	payload := map[string]any{"category": report.Category}
 	if report.Reason != "" {
@@ -47,7 +46,7 @@ func (a *PGStore) SaveReport(ctx context.Context, report PlayerReport) (contract
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return contracts.ModerationSignalCreated{}, err
+		return ReportResult{}, err
 	}
 	id, err := a.q().CreatePlayerReportSignal(ctx, db.CreatePlayerReportSignalParams{
 		SubjectUserID: storekit.MustUUID(report.SubjectID), SignalType: "player_report:" + report.Category,
@@ -55,15 +54,15 @@ func (a *PGStore) SaveReport(ctx context.Context, report PlayerReport) (contract
 		ReporterUserID: storekit.MustUUID(report.ReporterID), MatchID: storekit.MustUUID(report.MatchID), PayloadJson: body,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.ModerationSignalCreated{Status: "duplicate"}, nil
+		return ReportResult{Status: "duplicate"}, nil
 	}
 	if err != nil {
-		return contracts.ModerationSignalCreated{}, err
+		return ReportResult{}, err
 	}
 	if a.jobs != nil {
 		if err := a.jobs.EnqueueModerationSignal(ctx, tx, id); err != nil {
-			return contracts.ModerationSignalCreated{}, err
+			return ReportResult{}, err
 		}
 	}
-	return contracts.ModerationSignalCreated{SignalID: id, Status: "created"}, nil
+	return ReportResult{SignalID: id, Status: "created"}, nil
 }

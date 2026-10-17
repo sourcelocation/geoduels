@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/matchkind"
 )
 
 type memoryStore struct {
 	Store
-	snapshot          contracts.PartySnapshot
+	snapshot          Party
 	expires           time.Time
 	members           map[string]MemberRole
 	touches, shuffles int
@@ -45,7 +45,7 @@ func (m *memoryStore) CountActivePartyMembers(_ context.Context, _, id string) (
 	}
 	return n, nil
 }
-func (m *memoryStore) GetPartyByID(context.Context, string) (contracts.PartySnapshot, bool, error) {
+func (m *memoryStore) GetPartyByID(context.Context, string) (Party, bool, error) {
 	return m.snapshot, true, nil
 }
 func (m *memoryStore) JoinPartyMember(_ context.Context, _, id string, role MemberRole) error {
@@ -72,7 +72,7 @@ func (m *memoryStore) NextPartyOwnerID(context.Context, string) (string, error) 
 	return ids[0], nil
 }
 func (m *memoryStore) CloseParty(context.Context, string) error {
-	m.snapshot.State = contracts.PartyClosed
+	m.snapshot.State = StateClosed
 	return nil
 }
 func (m *memoryStore) PartyMemberActive(_ context.Context, _, id string) (bool, error) {
@@ -90,20 +90,20 @@ func (m *memoryStore) ReassignPartyRoles(_ context.Context, _, owner string) err
 	m.members[owner] = MemberRoleOwner
 	return nil
 }
-func (m *memoryStore) LockOpenPartyMode(context.Context, string) (contracts.MatchMode, error) {
-	if m.snapshot.State != contracts.PartyOpen {
+func (m *memoryStore) LockOpenPartyMode(context.Context, string) (matchkind.Mode, error) {
+	if m.snapshot.State != StateOpen {
 		return "", ErrNotFound
 	}
 	return m.snapshot.Mode, nil
 }
 func (m *memoryStore) ShufflePartyTeams(context.Context, string) error { m.shuffles++; return nil }
-func (m *memoryStore) SetPartyMode(_ context.Context, _ string, mode contracts.MatchMode) error {
+func (m *memoryStore) SetPartyMode(_ context.Context, _ string, mode matchkind.Mode) error {
 	m.snapshot.Mode = mode
 	return nil
 }
 
 func newPartyStore(now time.Time) *memoryStore {
-	return &memoryStore{snapshot: contracts.PartySnapshot{ID: "party", OwnerUserID: "owner", State: contracts.PartyOpen, Mode: contracts.ModeDuel}, expires: now.Add(time.Hour), members: map[string]MemberRole{"owner": MemberRoleOwner}}
+	return &memoryStore{snapshot: Party{ID: "party", OwnerUserID: "owner", State: StateOpen, Mode: matchkind.ModeDuel}, expires: now.Add(time.Hour), members: map[string]MemberRole{"owner": MemberRoleOwner}}
 }
 
 func TestJoinChecksExpiryCapacityAndOwnerRole(t *testing.T) {
@@ -122,7 +122,7 @@ func TestJoinChecksExpiryCapacityAndOwnerRole(t *testing.T) {
 				store.expires = now.Add(-time.Second)
 			}
 			if tc.full {
-				for i := 1; i < contracts.MaxPartyMembers; i++ {
+				for i := 1; i < matchkind.MaxPartyMembers; i++ {
 					store.members[string(rune('a'+i))] = MemberRoleMember
 				}
 			}
@@ -166,7 +166,7 @@ func TestLeavingOwnerTransfersOrClosesParty(t *testing.T) {
 			if store.snapshot.OwnerUserID != "next" || store.members["next"] != MemberRoleOwner {
 				t.Fatal("ownership not transferred")
 			}
-		} else if store.snapshot.State != contracts.PartyClosed {
+		} else if store.snapshot.State != StateClosed {
 			t.Fatal("empty party not closed")
 		}
 	}
@@ -174,7 +174,7 @@ func TestLeavingOwnerTransfersOrClosesParty(t *testing.T) {
 
 func TestInProgressOwnerCannotLeave(t *testing.T) {
 	store := newPartyStore(time.Now())
-	store.snapshot.State = contracts.PartyInMatch
+	store.snapshot.State = StateInMatch
 	if _, err := NewService(store).LeaveParty("party", "owner"); err == nil {
 		t.Fatal("in-progress owner left")
 	}
@@ -199,11 +199,11 @@ func TestTeamModeShufflesOnlyWhenEntering(t *testing.T) {
 	store := newPartyStore(time.Now())
 	svc := NewService(store)
 	for range 2 {
-		if err := svc.SetPartyMode("party", contracts.ModeTeamDuel); err != nil {
+		if err := svc.SetPartyMode("party", matchkind.ModeTeamDuel); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if store.shuffles != 1 || store.snapshot.Mode != contracts.ModeTeamDuel {
+	if store.shuffles != 1 || store.snapshot.Mode != matchkind.ModeTeamDuel {
 		t.Fatal("team mode transition repeated shuffle")
 	}
 }

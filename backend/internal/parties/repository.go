@@ -4,25 +4,26 @@ import (
 	"context"
 	"time"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 )
 
 // Store persists parties data. WithinTx supplies a store bound to one
 // transaction; callback errors roll back all its writes.
 type Store interface {
 	WithinTx(ctx context.Context, fn func(Store) error) error
-	ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error)
-	GetCurrentParty(ctx context.Context, userID string) (*contracts.CurrentParty, error)
-	GetPartyByID(ctx context.Context, partyID string) (contracts.PartySnapshot, bool, error)
-	GetPartyByInviteCode(ctx context.Context, inviteCode string) (contracts.PartySnapshot, bool, error)
+	ResolveGameplayMapID(mode matchkind.Mode, ruleset gameplay.Ruleset, requestedMapID string) (string, error)
+	GetCurrentParty(ctx context.Context, userID string) (*CurrentParty, error)
+	GetPartyByID(ctx context.Context, partyID string) (Party, bool, error)
+	GetPartyByInviteCode(ctx context.Context, inviteCode string) (Party, bool, error)
 	GetPartyStateAndOwner(ctx context.Context, partyID string) (PartyStateOwner, error)
 	GetPartyStateAndExpiry(ctx context.Context, partyID string) (PartyStateExpiry, error)
 	PartyMemberActive(ctx context.Context, partyID, userID string) (bool, error)
 	CountActivePartyMembers(ctx context.Context, partyID, userID string) (int, error)
 	InsertParty(ctx context.Context, input PartyInsert) error
-	LockOpenPartyMode(ctx context.Context, partyID string) (contracts.MatchMode, error)
+	LockOpenPartyMode(ctx context.Context, partyID string) (matchkind.Mode, error)
 	ShufflePartyTeams(ctx context.Context, partyID string) error
-	SetPartyMode(ctx context.Context, partyID string, mode contracts.MatchMode) error
+	SetPartyMode(ctx context.Context, partyID string, mode matchkind.Mode) error
 	LockOpenPartyOwner(ctx context.Context, partyID string) (string, error)
 	ResolveMapIdentity(ctx context.Context, requestedMapID string) (string, error)
 	PartyMapAccessible(ctx context.Context, mapID, ownerUserID string) (bool, error)

@@ -9,7 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -19,11 +20,11 @@ import (
 
 const gameplayMapSettingsKey = "gameplay_map_settings"
 
-func defaultGameplayMapSettings() contracts.GameplayMapSettings {
-	return contracts.GameplayMapSettings{
-		MovingMapID: contracts.MapKeyMoving,
-		NoMoveMapID: contracts.MapKeyNMPZ,
-		NMPZMapID:   contracts.MapKeyNMPZ,
+func defaultGameplayMapSettings() GameplaySettings {
+	return GameplaySettings{
+		MovingMapID: MapKeyMoving,
+		NoMoveMapID: MapKeyNMPZ,
+		NMPZMapID:   MapKeyNMPZ,
 	}
 }
 
@@ -46,7 +47,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func normalizeGameplayMapSettings(settings contracts.GameplayMapSettings) contracts.GameplayMapSettings {
+func normalizeGameplayMapSettings(settings GameplaySettings) GameplaySettings {
 	defaults := defaultGameplayMapSettings()
 	if strings.TrimSpace(settings.MovingMapID) == "" {
 		settings.MovingMapID = defaults.MovingMapID
@@ -60,12 +61,12 @@ func normalizeGameplayMapSettings(settings contracts.GameplayMapSettings) contra
 	return settings
 }
 
-func decodeGameplayMapSettings(raw string) contracts.GameplayMapSettings {
+func decodeGameplayMapSettings(raw string) GameplaySettings {
 	var legacy legacyGameplayMapSettings
 	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
 		return defaultGameplayMapSettings()
 	}
-	return normalizeGameplayMapSettings(contracts.GameplayMapSettings{
+	return normalizeGameplayMapSettings(GameplaySettings{
 		MovingMapID: firstNonEmpty(legacy.MovingMapID, legacy.RankedMovingMapID, legacy.SingleplayerMovingMapID),
 		// Ranked NMPZ became ranked No Move; keep that map for the no-move slot.
 		NoMoveMapID: firstNonEmpty(legacy.NoMoveMapID, legacy.RankedNMPZMapID),
@@ -73,24 +74,24 @@ func decodeGameplayMapSettings(raw string) contracts.GameplayMapSettings {
 	})
 }
 
-func (s *PGStore) GetGameplayMapSettings() (contracts.GameplayMapSettings, error) {
+func (s *PGStore) GetGameplayMapSettings() (GameplaySettings, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	return s.gameplayMapSettings(ctx, s.pool)
 }
 
-func (s *PGStore) gameplayMapSettings(ctx context.Context, q db.DBTX) (contracts.GameplayMapSettings, error) {
+func (s *PGStore) gameplayMapSettings(ctx context.Context, q db.DBTX) (GameplaySettings, error) {
 	raw, err := db.New(q).GetGameplayMapSettings(ctx, gameplayMapSettingsKey)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return defaultGameplayMapSettings(), nil
 		}
-		return contracts.GameplayMapSettings{}, err
+		return GameplaySettings{}, err
 	}
 	return decodeGameplayMapSettings(string(raw)), nil
 }
 
-func (s *PGStore) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contracts.GameRuleset, requestedMapID string) (string, error) {
+func (s *PGStore) ResolveGameplayMapID(mode matchkind.Mode, ruleset gameplay.Ruleset, requestedMapID string) (string, error) {
 	requestedMapID = strings.TrimSpace(requestedMapID)
 	if requestedMapID != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -102,10 +103,10 @@ func (s *PGStore) ResolveGameplayMapID(mode contracts.MatchMode, ruleset contrac
 	if err != nil {
 		return "", err
 	}
-	switch contracts.NormalizeRuleset(ruleset) {
-	case contracts.RulesetNoMove:
+	switch gameplay.NormalizeRuleset(ruleset) {
+	case gameplay.RulesetNoMove:
 		return s.ResolveGameplayMapID(mode, ruleset, settings.NoMoveMapID)
-	case contracts.RulesetNMPZ:
+	case gameplay.RulesetNMPZ:
 		return s.ResolveGameplayMapID(mode, ruleset, settings.NMPZMapID)
 	default:
 		return s.ResolveGameplayMapID(mode, ruleset, settings.MovingMapID)

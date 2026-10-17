@@ -11,8 +11,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"geoduels/internal/matches"
 	"geoduels/internal/parties"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/pgnotify"
@@ -42,18 +43,102 @@ func (a *api) requirePlayableUser(c echo.Context) (string, error) {
 	return claims.Sub, nil
 }
 
+// partySnapshot is a party as its members see it. The party socket sends it first, then patches.
+type partySnapshot struct {
+	ID               string                     `json:"id"`
+	InviteCode       string                     `json:"inviteCode"`
+	OwnerUserID      string                     `json:"ownerUserId"`
+	State            string                     `json:"state"`
+	Mode             matchkind.Mode             `json:"mode"`
+	MapScope         string                     `json:"mapScope"`
+	MapName          string                     `json:"mapName,omitempty"`
+	MapLocationCount int                        `json:"mapLocationCount,omitempty"`
+	Config           gameplay.ClientMatchConfig `json:"config,omitempty"`
+	ActiveMatchID    string                     `json:"activeMatchId,omitempty"`
+	LastMatchID      string                     `json:"lastMatchId,omitempty"`
+	CreatedAt        time.Time                  `json:"createdAt"`
+	ExpiresAt        time.Time                  `json:"expiresAt"`
+	Members          []partyMember              `json:"members"`
+}
+
+type partyMember struct {
+	UserID         string       `json:"userId"`
+	DisplayName    string       `json:"displayName"`
+	AvatarURL      string       `json:"avatarUrl,omitempty"`
+	IsGuest        bool         `json:"isGuest,omitempty"`
+	IsAdmin        bool         `json:"isAdmin,omitempty"`
+	SelectedBadge  *playerBadge `json:"selectedBadge,omitempty"`
+	TeamID         string       `json:"teamId,omitempty"`
+	Role           string       `json:"role"`
+	Ready          bool         `json:"ready"`
+	Connected      bool         `json:"connected,omitempty"`
+	PresenceStatus string       `json:"presenceStatus,omitempty"`
+	InActiveMatch  bool         `json:"inActiveMatch,omitempty"`
+	JoinedAt       time.Time    `json:"joinedAt"`
+}
+
+func newPartySnapshot(p parties.Party) partySnapshot {
+	out := partySnapshot{
+		ID: p.ID, InviteCode: p.InviteCode, OwnerUserID: p.OwnerUserID, State: string(p.State), Mode: p.Mode,
+		MapScope: p.MapScope, MapName: p.MapName, MapLocationCount: p.MapLocationCount,
+		Config: gameplay.NewClientMatchConfig(p.Config), ActiveMatchID: p.ActiveMatchID, LastMatchID: p.LastMatchID,
+		CreatedAt: p.CreatedAt, ExpiresAt: p.ExpiresAt,
+	}
+	if p.Members != nil {
+		out.Members = make([]partyMember, len(p.Members))
+		for i, m := range p.Members {
+			out.Members[i] = partyMember{
+				UserID: m.UserID, DisplayName: m.DisplayName, AvatarURL: m.AvatarURL, IsGuest: m.IsGuest, IsAdmin: m.IsAdmin,
+				SelectedBadge: newPlayerBadgeRef(m.SelectedBadge), TeamID: m.TeamID, Role: m.Role, Ready: m.Ready,
+				Connected: m.Connected, PresenceStatus: string(m.PresenceStatus), InActiveMatch: m.InActiveMatch, JoinedAt: m.JoinedAt,
+			}
+		}
+	}
+	return out
+}
+
+// partyPatch is what changed since the last snapshot or patch a member received.
+type partyPatch struct {
+	Revision         int64                       `json:"revision"`
+	State            *string                     `json:"state,omitempty"`
+	OwnerUserID      *string                     `json:"ownerUserId,omitempty"`
+	Mode             *matchkind.Mode             `json:"mode,omitempty"`
+	MapScope         *string                     `json:"mapScope,omitempty"`
+	MapName          *string                     `json:"mapName,omitempty"`
+	MapLocationCount *int                        `json:"mapLocationCount,omitempty"`
+	Config           *gameplay.ClientMatchConfig `json:"config,omitempty"`
+	ActiveMatchID    *string                     `json:"activeMatchId,omitempty"`
+	LastMatchID      *string                     `json:"lastMatchId,omitempty"`
+	UpsertMembers    []partyMember               `json:"upsertMembers,omitempty"`
+	RemoveMemberIDs  []string                    `json:"removeMemberIds,omitempty"`
+}
+
+type partyCreateRequest struct {
+	Mode     matchkind.Mode             `json:"mode,omitempty"`
+	MapScope string                     `json:"mapScope,omitempty"`
+	Config   gameplay.ClientMatchConfig `json:"config,omitempty"`
+}
+
+type partyMemberRequest struct {
+	UserID string `json:"userId"`
+}
+
+type partyTeamRequest struct {
+	TeamID string `json:"teamId"`
+}
+
 func (a *api) createParty(c echo.Context) error {
 	userID, err := a.requirePlayableUser(c)
 	if err != nil {
 		return err
 	}
-	var req contracts.PartyCreateRequest
+	var req partyCreateRequest
 	if err := decodeJSONBody(c.Request(), &req); err != nil {
 		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
 	mode := req.Mode
 	if mode == "" {
-		mode = contracts.ModeDuel
+		mode = matchkind.ModeDuel
 	}
 	if _, ok := matchkind.ForParty(mode); !ok {
 		return plainTextError(c, http.StatusBadRequest, "unsupported party mode")
@@ -67,7 +152,7 @@ func (a *api) createParty(c echo.Context) error {
 		if req.Config.MapID == "" && req.Config.MapKey == "" {
 			req.Config.MapID = snap.Config.MapID
 		}
-		snap, err = a.parties.SetPartyConfig(snap.ID, req.Config)
+		snap, err = a.parties.SetPartyConfig(snap.ID, req.Config.MatchConfig())
 		if err != nil {
 			observability.Log("error", "create party settings save failed", map[string]any{"userId": userID, "partyId": snap.ID, "error": err.Error()})
 			return plainTextError(c, http.StatusInternalServerError, "party unavailable")
@@ -111,7 +196,7 @@ func (a *api) setPartySettings(ctx context.Context, id, userID string, req party
 	if snap.OwnerUserID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "forbidden")
 	}
-	if snap.State != contracts.PartyOpen {
+	if snap.State != parties.StateOpen {
 		return echo.NewHTTPError(http.StatusConflict, "party settings are locked")
 	}
 	if req.Mode != "" {
@@ -124,7 +209,7 @@ func (a *api) setPartySettings(ctx context.Context, id, userID string, req party
 			return echo.NewHTTPError(http.StatusBadGateway, "party settings unavailable")
 		}
 	}
-	if _, err := a.parties.SetPartyConfig(snap.ID, req.Config); err != nil {
+	if _, err := a.parties.SetPartyConfig(snap.ID, req.Config.MatchConfig()); err != nil {
 		if errors.Is(err, parties.ErrPartyMapUnavailable) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 		}
@@ -199,7 +284,7 @@ func (a *api) partyWS(c echo.Context) error {
 	}()
 	touch()
 
-	var last contracts.PartySnapshot
+	var last partySnapshot
 	lastFingerprint := ""
 	revision := int64(0)
 	lastMatchID := ""
@@ -213,23 +298,24 @@ func (a *api) partyWS(c echo.Context) error {
 			w.send("party_error", map[string]string{"message": "You left this party"})
 			return false
 		}
-		if fingerprint := partyFingerprint(next); fingerprint != lastFingerprint {
+		view := newPartySnapshot(next)
+		if fingerprint := partyFingerprint(view); fingerprint != lastFingerprint {
 			revision++
 			if revision == 1 {
-				w.send("party_snapshot", next)
+				w.send("party_snapshot", view)
 			} else {
-				w.send("party_patch", partyPatch(last, next, revision))
+				w.send("party_patch", newPartyPatch(last, view, revision))
 			}
-			last, lastFingerprint = next, fingerprint
+			last, lastFingerprint = view, fingerprint
 		}
 		// A member seated in the party's new match goes to it.
 		if next.ActiveMatchID != "" && next.ActiveMatchID != lastMatchID && partySeated(next, userID) {
 			lastMatchID = next.ActiveMatchID
-			if !w.send("match_found", contracts.ActiveMatchSummary{MatchID: next.ActiveMatchID, Status: contracts.MatchViewStarting}) {
+			if !w.send("match_found", activeMatchSummary{MatchID: next.ActiveMatchID, Status: matchViewStarting}) {
 				return false
 			}
 		}
-		return next.State == contracts.PartyOpen || next.State == contracts.PartyInMatch
+		return next.State == parties.StateOpen || next.State == parties.StateInMatch
 	}
 	if !refreshParty() {
 		return nil
@@ -306,7 +392,7 @@ func (a *api) startPartyMatch(ctx context.Context, partyID, userID string) error
 	if snap.OwnerUserID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "forbidden")
 	}
-	if snap.State != contracts.PartyOpen {
+	if snap.State != parties.StateOpen {
 		return echo.NewHTTPError(http.StatusConflict, "party is not open")
 	}
 	kind, ok := matchkind.ForParty(snap.Mode)
@@ -330,7 +416,7 @@ func (a *api) startPartyMatch(ctx context.Context, partyID, userID string) error
 	}
 	if _, err := a.startMatch(ctx, startRequest{
 		Kind: kind, Seats: seats, Config: snap.Config, PartyID: snap.ID, MapAccessUserID: snap.OwnerUserID,
-		ReturnTarget: &contracts.MatchReturnTarget{Kind: contracts.MatchReturnParty, PartyID: snap.ID},
+		ReturnTarget: &matches.ReturnTarget{Kind: matches.ReturnParty, PartyID: snap.ID},
 	}); err != nil {
 		observability.Log("warn", "party match start failed", map[string]any{"partyId": snap.ID, "error": err.Error()})
 		return echo.NewHTTPError(http.StatusConflict, a.startErrorMessage(err))
@@ -338,7 +424,7 @@ func (a *api) startPartyMatch(ctx context.Context, partyID, userID string) error
 	return nil
 }
 
-func requirePartyPresence(snap contracts.PartySnapshot) error {
+func requirePartyPresence(snap parties.Party) error {
 	missing := make([]string, 0, len(snap.Members))
 	for _, member := range snap.Members {
 		if !member.Connected {
@@ -355,7 +441,7 @@ func requirePartyPresence(snap contracts.PartySnapshot) error {
 	return nil
 }
 
-func partySeated(snap contracts.PartySnapshot, userID string) bool {
+func partySeated(snap parties.Party, userID string) bool {
 	for _, member := range snap.Members {
 		if member.UserID == userID {
 			return member.InActiveMatch
@@ -364,7 +450,7 @@ func partySeated(snap contracts.PartySnapshot, userID string) bool {
 	return false
 }
 
-func partyHasMember(snap contracts.PartySnapshot, userID string) bool {
+func partyHasMember(snap parties.Party, userID string) bool {
 	for _, member := range snap.Members {
 		if member.UserID == userID {
 			return true
@@ -373,13 +459,13 @@ func partyHasMember(snap contracts.PartySnapshot, userID string) bool {
 	return false
 }
 
-func partyFingerprint(snap contracts.PartySnapshot) string {
+func partyFingerprint(snap partySnapshot) string {
 	b, _ := json.Marshal(snap)
 	return string(b)
 }
 
-func partyPatch(prev, next contracts.PartySnapshot, revision int64) contracts.PartyPatch {
-	patch := contracts.PartyPatch{Revision: revision}
+func newPartyPatch(prev, next partySnapshot, revision int64) partyPatch {
+	patch := partyPatch{Revision: revision}
 	if prev.State != next.State {
 		v := next.State
 		patch.State = &v
@@ -416,8 +502,8 @@ func partyPatch(prev, next contracts.PartySnapshot, revision int64) contracts.Pa
 		v := next.LastMatchID
 		patch.LastMatchID = &v
 	}
-	prevMembers := map[string]contracts.PartyMember{}
-	nextMembers := map[string]contracts.PartyMember{}
+	prevMembers := map[string]partyMember{}
+	nextMembers := map[string]partyMember{}
 	for _, member := range prev.Members {
 		prevMembers[member.UserID] = member
 	}
@@ -435,7 +521,7 @@ func partyPatch(prev, next contracts.PartySnapshot, revision int64) contracts.Pa
 	return patch
 }
 
-func partyMemberFingerprint(member contracts.PartyMember) string {
+func partyMemberFingerprint(member partyMember) string {
 	b, _ := json.Marshal(member)
 	return string(b)
 }
@@ -462,8 +548,8 @@ type partyCommandResult struct {
 }
 
 type partySettingsRequest struct {
-	Mode   contracts.MatchMode   `json:"mode"`
-	Config contracts.MatchConfig `json:"config"`
+	Mode   matchkind.Mode             `json:"mode"`
+	Config gameplay.ClientMatchConfig `json:"config"`
 }
 
 func partyErrorMessage(err error) string {
@@ -497,7 +583,7 @@ func (a *api) executePartyCommand(ctx context.Context, partyID, userID string, c
 	}
 	switch command.Type {
 	case "team":
-		var req contracts.PartyTeamRequest
+		var req partyTeamRequest
 		if json.Unmarshal(command.Payload, &req) != nil {
 			return errors.New("invalid payload")
 		}
@@ -511,7 +597,7 @@ func (a *api) executePartyCommand(ctx context.Context, partyID, userID string, c
 		}
 		return a.setPartySettings(ctx, partyID, userID, req)
 	case "kick", "transfer_owner":
-		var req contracts.PartyMemberRequest
+		var req partyMemberRequest
 		if json.Unmarshal(command.Payload, &req) != nil {
 			return errors.New("invalid payload")
 		}

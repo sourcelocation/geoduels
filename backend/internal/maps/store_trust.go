@@ -10,52 +10,51 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
-func (s *PGStore) GetMapUploadQuota(userID string) (contracts.MapUploadQuota, error) {
+func (s *PGStore) GetMapUploadQuota(userID string) (UploadQuota, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		return contracts.MapUploadQuota{}, errors.New("user required")
+		return UploadQuota{}, errors.New("user required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	defer tx.Rollback(ctx)
 	if err := db.New(tx).LockMapUpload(ctx, "map-upload:"+userID); err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	quota, err := refreshMapCreatorTrust(ctx, tx, userID)
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	return quota, nil
 }
 
-func (s *PGStore) SetMapCreatorTierOverride(userID string, tier *int) (contracts.MapUploadQuota, error) {
+func (s *PGStore) SetMapCreatorTierOverride(userID string, tier *int) (UploadQuota, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		return contracts.MapUploadQuota{}, errors.New("user required")
+		return UploadQuota{}, errors.New("user required")
 	}
 	if tier != nil && (*tier < mapCreatorTierBase || *tier > mapCreatorTierEstablished) {
-		return contracts.MapUploadQuota{}, errors.New("invalid map creator tier")
+		return UploadQuota{}, errors.New("invalid map creator tier")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	defer tx.Rollback(ctx)
 	if err := db.New(tx).LockMapUpload(ctx, "map-upload:"+userID); err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	var tierArg pgtype.Int2
 	if tier != nil {
@@ -63,22 +62,22 @@ func (s *PGStore) SetMapCreatorTierOverride(userID string, tier *int) (contracts
 	}
 	tag, err := db.New(tx).SetMapCreatorTierOverride(ctx, db.SetMapCreatorTierOverrideParams{ID: mustMapUUID(userID), MapCreatorTierOverride: tierArg})
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	if tag == 0 {
-		return contracts.MapUploadQuota{}, pgx.ErrNoRows
+		return UploadQuota{}, pgx.ErrNoRows
 	}
 	quota, err := refreshMapCreatorTrust(ctx, tx, userID)
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	return quota, nil
 }
 
-func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (contracts.MapUploadQuota, error) {
+func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (UploadQuota, error) {
 	q := db.New(tx)
 	var (
 		createdAt    time.Time
@@ -89,7 +88,7 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 	)
 	u, err := q.GetMapTrustUser(ctx, mustMapUUID(userID))
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	createdAt = u.CreatedAt.Time
 	if u.BannedAt.Valid {
@@ -107,13 +106,13 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 	}
 	activeSanction := u.ReportMutedAt.Valid && (!u.ReportMuteExpiresAt.Valid || u.ReportMuteExpiresAt.Time.After(time.Now()))
 	if false {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 
 	var qualifiedFavorites, qualifiedMaps int
 	f, err := q.GetQualifiedMapFavorites(ctx, mustMapUUID(userID))
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	qualifiedFavorites = int(f.QualifiedFavorites)
 	qualifiedMaps = int(f.QualifiedMaps)
@@ -130,15 +129,15 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 	var currentMaps, currentLocations int
 	c, err := q.GetActiveMapCounts(ctx, mustMapUUID(userID))
 	if err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 	currentMaps = int(c.CurrentMaps)
 	currentLocations = int(c.CurrentLocations)
 	if err := q.UpdateMapCreatorTrust(ctx, db.UpdateMapCreatorTrustParams{ID: mustMapUUID(userID), MapCreatorTier: int16(tier), MapCreatorQualifiedFavorites: int32(qualifiedFavorites), MapCreatorQualifiedMaps: int32(qualifiedMaps)}); err != nil {
-		return contracts.MapUploadQuota{}, err
+		return UploadQuota{}, err
 	}
 
-	quota := contracts.MapUploadQuota{
+	quota := UploadQuota{
 		Tier:                     spec.name,
 		QualifiedFavorites:       qualifiedFavorites,
 		QualifiedMaps:            qualifiedMaps,
@@ -165,7 +164,7 @@ func refreshMapCreatorTrust(ctx context.Context, tx pgx.Tx, userID string) (cont
 	return quota, nil
 }
 
-func applyNextTierProgress(quota *contracts.MapUploadQuota, next mapCreatorSpec, qualifiedFavorites, accountAgeDays int) {
+func applyNextTierProgress(quota *UploadQuota, next mapCreatorSpec, qualifiedFavorites, accountAgeDays int) {
 	quota.NextTier = next.name
 	quota.FavoritesNeeded = max(0, next.favoritesNeeded-qualifiedFavorites)
 	quota.DaysNeeded = max(0, next.accountAgeDays-accountAgeDays)

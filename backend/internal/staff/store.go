@@ -3,13 +3,13 @@ package staff
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/internal/audit"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -21,10 +21,21 @@ type Store interface {
 	UserRoles(ctx context.Context, userID string) ([]string, error)
 	GrantRole(ctx context.Context, userID, role, actorID, reason string) error
 	RevokeRole(ctx context.Context, userID, role string) error
-	ListRoleGrants(ctx context.Context) ([]contracts.UserRoleGrant, error)
+	ListRoleGrants(ctx context.Context) ([]RoleGrant, error)
 	RecordAudit(ctx context.Context, entry audit.Entry) (int64, error)
 	AwardTeamBadge(ctx context.Context, userID string) error
 	RemoveTeamBadge(ctx context.Context, userID string) error
+}
+
+// RoleGrant is a staff role a user holds.
+type RoleGrant struct {
+	UserID      string
+	DisplayName string
+	Email       string
+	Role        string
+	GrantedBy   string
+	GrantedAt   time.Time
+	Reason      string
 }
 
 type PGStore struct {

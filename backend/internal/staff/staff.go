@@ -9,7 +9,6 @@ import (
 	"slices"
 
 	"geoduels/internal/audit"
-	"geoduels/pkg/contracts"
 	pkgstaff "geoduels/pkg/staff"
 )
 
@@ -45,7 +44,7 @@ func (s *Service) BootstrapAdmin(ctx context.Context, userID string) error {
 	})
 }
 
-func (s *Service) ListRoleGrants(ctx context.Context, actor pkgstaff.Actor) ([]contracts.UserRoleGrant, error) {
+func (s *Service) ListRoleGrants(ctx context.Context, actor pkgstaff.Actor) ([]RoleGrant, error) {
 	if err := actor.RequireCap(pkgstaff.CapManageAccess); err != nil {
 		return nil, err
 	}

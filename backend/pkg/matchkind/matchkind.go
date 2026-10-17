@@ -6,18 +6,33 @@ package matchkind
 import (
 	"fmt"
 	"time"
-
-	"geoduels/pkg/contracts"
 )
 
-type Kind = contracts.MatchKind
+// Kind is what a match is.
+type Kind string
 
 const (
-	RankedDuel  = contracts.KindRankedDuel
-	PrivateDuel = contracts.KindPrivateDuel
-	TeamDuel    = contracts.KindTeamDuel
-	FreeForAll  = contracts.KindFreeForAll
-	Solo        = contracts.KindSolo
+	RankedDuel  Kind = "ranked_duel"
+	PrivateDuel Kind = "private_duel"
+	TeamDuel    Kind = "team_duel"
+	FreeForAll  Kind = "free_for_all"
+	Solo        Kind = "solo"
+)
+
+// Mode is an engine's layout of players.
+type Mode string
+
+const (
+	ModeDuel         Mode = "duel"
+	ModeSingleplayer Mode = "singleplayer"
+	ModeTeamDuel     Mode = "team_duel"
+	ModeFreeForAll   Mode = "free_for_all"
+)
+
+// A match a party plays seats between these many players.
+const (
+	MinPartyMembers = 2
+	MaxPartyMembers = 64
 )
 
 // Origin is how a match came to be.
@@ -53,7 +68,7 @@ type Spec struct {
 	Kind   Kind
 	Engine Engine
 	// Mode is the engine's layout: duel, team_duel, free_for_all or singleplayer.
-	Mode contracts.MatchMode
+	Mode Mode
 	// Rated matches change rating, ranked stats and badges, and are checked by the risk engine.
 	Rated bool
 	// Stats matches count toward games played and wins.
@@ -76,23 +91,23 @@ const idleEnd = 15 * time.Minute
 
 var specs = map[Kind]Spec{
 	RankedDuel: {
-		Kind: RankedDuel, Engine: EngineVersus, Mode: contracts.ModeDuel, Rated: true, Stats: true,
+		Kind: RankedDuel, Engine: EngineVersus, Mode: ModeDuel, Rated: true, Stats: true,
 		MinPlayers: 2, MaxPlayers: 2, Maps: MapsRotation, IdleEnd: idleEnd, Origin: OriginQueue,
 	},
 	PrivateDuel: {
-		Kind: PrivateDuel, Engine: EngineVersus, Mode: contracts.ModeDuel, Stats: true,
+		Kind: PrivateDuel, Engine: EngineVersus, Mode: ModeDuel, Stats: true,
 		MinPlayers: 2, MaxPlayers: 2, Maps: MapsChosen, IdleEnd: idleEnd, Origin: OriginParty, GuestsAllow: true,
 	},
 	TeamDuel: {
-		Kind: TeamDuel, Engine: EngineVersus, Mode: contracts.ModeTeamDuel, Teams: true,
-		MinPlayers: contracts.MinPartyMembers, MaxPlayers: contracts.MaxPartyMembers, Maps: MapsChosen, IdleEnd: idleEnd, Origin: OriginParty, GuestsAllow: true,
+		Kind: TeamDuel, Engine: EngineVersus, Mode: ModeTeamDuel, Teams: true,
+		MinPlayers: MinPartyMembers, MaxPlayers: MaxPartyMembers, Maps: MapsChosen, IdleEnd: idleEnd, Origin: OriginParty, GuestsAllow: true,
 	},
 	FreeForAll: {
-		Kind: FreeForAll, Engine: EngineVersus, Mode: contracts.ModeFreeForAll,
-		MinPlayers: contracts.MinPartyMembers, MaxPlayers: contracts.MaxPartyMembers, Maps: MapsChosen, IdleEnd: idleEnd, Origin: OriginParty, GuestsAllow: true,
+		Kind: FreeForAll, Engine: EngineVersus, Mode: ModeFreeForAll,
+		MinPlayers: MinPartyMembers, MaxPlayers: MaxPartyMembers, Maps: MapsChosen, IdleEnd: idleEnd, Origin: OriginParty, GuestsAllow: true,
 	},
 	Solo: {
-		Kind: Solo, Engine: EngineSolo, Mode: contracts.ModeSingleplayer,
+		Kind: Solo, Engine: EngineSolo, Mode: ModeSingleplayer,
 		MinPlayers: 1, MaxPlayers: 1, Maps: MapsChosen, Replaceable: true, IdleEnd: idleEnd, Origin: OriginDirect, GuestsAllow: true,
 	},
 }
@@ -114,13 +129,13 @@ func Of(kind Kind) Spec {
 }
 
 // ForParty is the kind a party plays in its mode.
-func ForParty(mode contracts.MatchMode) (Kind, bool) {
+func ForParty(mode Mode) (Kind, bool) {
 	switch mode {
-	case contracts.ModeDuel:
+	case ModeDuel:
 		return PrivateDuel, true
-	case contracts.ModeTeamDuel:
+	case ModeTeamDuel:
 		return TeamDuel, true
-	case contracts.ModeFreeForAll:
+	case ModeFreeForAll:
 		return FreeForAll, true
 	default:
 		return "", false
@@ -128,13 +143,13 @@ func ForParty(mode contracts.MatchMode) (Kind, bool) {
 }
 
 // FromHistory is the kind of a match recorded before kinds existed, from its history row.
-func FromHistory(mode contracts.MatchMode, ranked bool) Kind {
+func FromHistory(mode Mode, ranked bool) Kind {
 	switch mode {
-	case contracts.ModeSingleplayer:
+	case ModeSingleplayer:
 		return Solo
-	case contracts.ModeTeamDuel:
+	case ModeTeamDuel:
 		return TeamDuel
-	case contracts.ModeFreeForAll:
+	case ModeFreeForAll:
 		return FreeForAll
 	default:
 		if ranked {

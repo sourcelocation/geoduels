@@ -13,7 +13,6 @@ import (
 
 	"geoduels/internal/rating"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
@@ -89,7 +88,7 @@ func ResolveMapIdentity(ctx context.Context, q db.DBTX, identifier string) (stri
 	return storekit.UUIDVal(row.ID), textVal(row.Key), err
 }
 
-func mapFromQueryRow(r db.ListMapsRow) contracts.CustomMap {
+func mapFromQueryRow(r db.ListMapsRow) Map {
 	item := mapFromParts(r.ID, r.MapKey, r.OwnerUserID, r.AuthorDisplayName, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.IsSystem, r.IsOfficial, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Favorited, r.OfficialRegion, r.ModeMoving, r.ModeNoMove, r.ModeNmpz, r.CreatedAt, r.UpdatedAt, r.BestScore, r.BestMatchID, r.AchievedAt)
 	item.MOTWCount = int(r.MotwCount)
 	item.MOTWCurrent = r.MotwCurrent
@@ -100,7 +99,7 @@ func mapFromQueryRow(r db.ListMapsRow) contracts.CustomMap {
 	return item
 }
 
-func mapFromGetRow(r db.GetMapRow) contracts.CustomMap {
+func mapFromGetRow(r db.GetMapRow) Map {
 	item := mapFromParts(r.ID, r.MapKey, r.OwnerUserID, r.AuthorDisplayName, r.DisplayName, r.Description, r.Visibility, r.Status, r.Difficulty, r.ThumbnailVariant, r.ThumbnailKey, r.LocationCount, r.IsSystem, r.IsOfficial, r.PublishedAt, r.PlayCount, r.FavoriteCount, r.CommentCount, r.TrendingScore, r.Favorited, r.OfficialRegion, r.ModeMoving, r.ModeNoMove, r.ModeNmpz, r.CreatedAt, r.UpdatedAt, r.BestScore, r.BestMatchID, r.AchievedAt)
 	item.MOTWCount = int(r.MotwCount)
 	item.MOTWCurrent = r.MotwCurrent
@@ -111,19 +110,19 @@ func mapFromGetRow(r db.GetMapRow) contracts.CustomMap {
 	return item
 }
 
-func mapFromParts(id any, key, owner, author any, name, desc string, vis db.GdMapVisibility, status db.GdMapStatus, diff db.GdMapDifficulty, thumbVariant int32, thumbKey string, count int32, system pgtype.Bool, official any, published pgtype.Timestamptz, plays, favs, comments int32, trend float64, favorited bool, region []byte, moving, noMove, nmpz bool, created, updated pgtype.Timestamptz, best pgtype.Int2, match any, achieved pgtype.Timestamptz) contracts.CustomMap {
-	r := contracts.CustomMap{ID: anyText(id), MapKey: fmt.Sprint(key), OwnerUserID: anyText(owner), AuthorName: fmt.Sprint(author), DisplayName: name, Description: desc, Visibility: string(vis), Status: string(status), Difficulty: string(diff), ThumbnailVariant: int(thumbVariant), ThumbnailKey: thumbKey, LocationCount: int(count), System: system.Bool, Official: fmt.Sprint(official) == "true", PlayCount: int(plays), FavoriteCount: int(favs), CommentCount: int(comments), TrendingScore: trend, Favorited: favorited, OfficialRegion: string(region), ModeMoving: moving, ModeNoMove: noMove, ModeNMPZ: nmpz, CreatedAt: created.Time, UpdatedAt: updated.Time}
+func mapFromParts(id any, key, owner, author any, name, desc string, vis db.GdMapVisibility, status db.GdMapStatus, diff db.GdMapDifficulty, thumbVariant int32, thumbKey string, count int32, system pgtype.Bool, official any, published pgtype.Timestamptz, plays, favs, comments int32, trend float64, favorited bool, region []byte, moving, noMove, nmpz bool, created, updated pgtype.Timestamptz, best pgtype.Int2, match any, achieved pgtype.Timestamptz) Map {
+	r := Map{ID: anyText(id), MapKey: fmt.Sprint(key), OwnerUserID: anyText(owner), AuthorName: fmt.Sprint(author), DisplayName: name, Description: desc, Visibility: string(vis), Status: string(status), Difficulty: string(diff), ThumbnailVariant: int(thumbVariant), ThumbnailKey: thumbKey, LocationCount: int(count), System: system.Bool, Official: fmt.Sprint(official) == "true", PlayCount: int(plays), FavoriteCount: int(favs), CommentCount: int(comments), TrendingScore: trend, Favorited: favorited, OfficialRegion: string(region), ModeMoving: moving, ModeNoMove: noMove, ModeNMPZ: nmpz, CreatedAt: created.Time, UpdatedAt: updated.Time}
 	if published.Valid {
 		t := published.Time
 		r.PublishedAt = &t
 	}
 	if best.Valid && achieved.Valid {
-		r.PersonalBest = &contracts.MapPersonalBest{Score: int(best.Int16), MatchID: anyText(match), AchievedAt: achieved.Time}
+		r.PersonalBest = &PersonalBest{Score: int(best.Int16), MatchID: anyText(match), AchievedAt: achieved.Time}
 	}
 	return r
 }
 
-func (s *PGStore) ListMaps(userID string, opts contracts.MapListOptions) ([]contracts.CustomMap, error) {
+func (s *PGStore) ListMaps(userID string, opts ListOptions) ([]Map, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	scope := normalizeMapScope(opts.Scope)
@@ -133,40 +132,40 @@ func (s *PGStore) ListMaps(userID string, opts contracts.MapListOptions) ([]cont
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.CustomMap, 0, len(rows))
+	out := make([]Map, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, mapFromQueryRow(row))
 	}
 	return out, nil
 }
 
-func (s *PGStore) GetMap(userID, mapID string) (contracts.MapDetails, bool, error) {
+func (s *PGStore) GetMap(userID, mapID string) (Details, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	parsedID, parseErr := storekit.ProfileUUID(strings.TrimSpace(mapID))
 	if parseErr != nil {
-		return contracts.MapDetails{}, false, nil
+		return Details{}, false, nil
 	}
 	row, err := s.q().GetMap(ctx, db.GetMapParams{ViewerUserID: strings.TrimSpace(userID), MapID: parsedID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.MapDetails{}, false, nil
+		return Details{}, false, nil
 	}
 	if err != nil {
-		return contracts.MapDetails{}, false, err
+		return Details{}, false, err
 	}
 	item := mapFromGetRow(row)
 	stats, err := s.mapCountryStats(ctx, item.ID)
 	if err != nil {
-		return contracts.MapDetails{}, false, err
+		return Details{}, false, err
 	}
 	comments, err := s.listMapComments(ctx, strings.TrimSpace(userID), item.ID)
 	if err != nil {
-		return contracts.MapDetails{}, false, err
+		return Details{}, false, err
 	}
-	return contracts.MapDetails{Map: item, CountryStats: stats, Comments: comments}, true, nil
+	return Details{Map: item, CountryStats: stats, Comments: comments}, true, nil
 }
 
-func (s *PGStore) mapCountryStats(ctx context.Context, mapID string) ([]contracts.MapCountryStat, error) {
+func (s *PGStore) mapCountryStats(ctx context.Context, mapID string) ([]CountryStat, error) {
 	if strings.TrimSpace(mapID) == "" {
 		return nil, nil
 	}
@@ -174,9 +173,9 @@ func (s *PGStore) mapCountryStats(ctx context.Context, mapID string) ([]contract
 	if err != nil {
 		return nil, err
 	}
-	out := make([]contracts.MapCountryStat, 0, len(rows))
+	out := make([]CountryStat, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, contracts.MapCountryStat{Country: row.Country, LocationCount: int(row.LocationCount)})
+		out = append(out, CountryStat{Country: row.Country, LocationCount: int(row.LocationCount)})
 	}
 	return out, nil
 }

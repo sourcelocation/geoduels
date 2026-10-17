@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"geoduels/internal/storekit"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
 	"github.com/jackc/pgx/v5"
@@ -34,7 +33,7 @@ func chatStr(v interface{}) string {
 	}
 	return v.(string)
 }
-func (s *PGStore) RecordChatMessage(cid, scope, scopeID string, m ChatMessage) error {
+func (s *PGStore) RecordChatMessage(cid, scope, scopeID string, m Message) error {
 	cid, scope, scopeID = strings.TrimSpace(cid), strings.TrimSpace(scope), strings.TrimSpace(scopeID)
 	if cid == "" || scope == "" || scopeID == "" {
 		return errors.New("conversation scope required")
@@ -51,7 +50,7 @@ func (s *PGStore) RecordChatMessage(cid, scope, scopeID string, m ChatMessage) e
 	}
 	match := pgtype.UUID{}
 	team := db.NullGdTeamID{}
-	if m.Audience == contracts.ChatAudienceTeam {
+	if m.Audience == AudienceTeam {
 		var err error
 		match, err = storekit.OptionalUUID(m.MatchID)
 		if err != nil {
@@ -61,10 +60,10 @@ func (s *PGStore) RecordChatMessage(cid, scope, scopeID string, m ChatMessage) e
 	}
 	return s.db.InsertMessage(ctx, db.InsertMessageParams{MessageID: chatUUID(m.ID), ConversationID: chatUUID(sid), TeamMatchID: match, SenderUserID: chatUUID(m.SenderUserID), SenderDisplayName: m.SenderDisplayName, Kind: db.GdChatKind(m.Kind), Body: chatText(m.Body), Emote: chatText(string(m.Emote)), Audience: db.GdChatAudience(m.Audience), TeamID: team, SenderTeamID: db.NullGdTeamID{GdTeamID: db.GdTeamID(m.SenderTeamID), Valid: m.SenderTeamID != ""}, CreatedAt: pgtype.Timestamptz{Time: t, Valid: true}})
 }
-func (s *PGStore) ListChatMessages(id string, n int) ([]ChatMessage, error) {
+func (s *PGStore) ListChatMessages(id string, n int) ([]Message, error) {
 	return s.listChatMessages(id, "", n, false)
 }
-func (s *PGStore) ListChatMessagesForUser(id, u string, n int, revealTeam bool) ([]ChatMessage, error) {
+func (s *PGStore) ListChatMessagesForUser(id, u string, n int, revealTeam bool) ([]Message, error) {
 	return s.listChatMessages(id, strings.TrimSpace(u), n, revealTeam)
 }
 
@@ -78,7 +77,7 @@ func (s *PGStore) MatchOver(ctx context.Context, matchID string) (bool, error) {
 	defer c()
 	return s.db.MatchOver(ctx, chatUUID(matchID))
 }
-func (s *PGStore) listChatMessages(id, u string, n int, revealTeam bool) ([]ChatMessage, error) {
+func (s *PGStore) listChatMessages(id, u string, n int, revealTeam bool) ([]Message, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, nil
@@ -92,13 +91,13 @@ func (s *PGStore) listChatMessages(id, u string, n int, revealTeam bool) ([]Chat
 	if e != nil {
 		return nil, e
 	}
-	out := make([]ChatMessage, 0, len(rs))
+	out := make([]Message, 0, len(rs))
 	for _, r := range rs {
 		teamID := ""
 		if r.TeamID.Valid {
 			teamID = string(r.TeamID.GdTeamID)
 		}
-		out = append(out, ChatMessage{SenderTeamID: string(r.SenderTeamID.GdTeamID), ID: r.ID.String(), ConversationID: chatStr(r.ConversationID), MatchID: storekit.UUIDVal(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: contracts.ChatMessageKind(r.Kind), Body: r.Body, Emote: contracts.ChatEmote(r.Emote), Audience: contracts.ChatAudience(r.Audience), TeamID: teamID, CreatedAt: r.CreatedAt.Time})
+		out = append(out, Message{SenderTeamID: string(r.SenderTeamID.GdTeamID), ID: r.ID.String(), ConversationID: chatStr(r.ConversationID), MatchID: storekit.UUIDVal(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: Kind(r.Kind), Body: r.Body, Emote: Emote(r.Emote), Audience: Audience(r.Audience), TeamID: teamID, CreatedAt: r.CreatedAt.Time})
 	}
 	return out, nil
 }

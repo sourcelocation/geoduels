@@ -10,7 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"geoduels/internal/social"
-	"geoduels/pkg/contracts"
+	"geoduels/pkg/matchkind"
 )
 
 func (a *api) friendsPage(c echo.Context) error {
@@ -285,7 +285,7 @@ func (a *api) createPartyAndInvite(c echo.Context) error {
 	if json.NewDecoder(r.Body).Decode(&body) != nil {
 		return writeSocialError(c, http.StatusBadRequest, "invalid_request")
 	}
-	party, err := a.parties.CreateParty(userID, contracts.ModeDuel, "world", 2*time.Hour)
+	party, err := a.parties.CreateParty(userID, matchkind.ModeDuel, "world", 2*time.Hour)
 	if err != nil {
 		return writeSocialError(c, http.StatusInternalServerError, "party_unavailable")
 	}
@@ -297,7 +297,7 @@ func (a *api) createPartyAndInvite(c echo.Context) error {
 	a.liveInvalidate(userID, body.UserID)
 	return writeJSONStatus(c, http.StatusCreated, map[string]any{
 		"invitation": invitation,
-		"party":      party,
+		"party":      newPartySnapshot(party),
 	})
 }
 

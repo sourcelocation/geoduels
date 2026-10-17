@@ -3,10 +3,6 @@ package badges
 import (
 	"context"
 	"errors"
-	"geoduels/internal/accounts"
-	"geoduels/internal/audit"
-	"geoduels/internal/storekit"
-	"geoduels/pkg/entityid"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +11,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"geoduels/pkg/contracts"
+	"geoduels/internal/accounts"
+	"geoduels/internal/audit"
+	"geoduels/internal/storekit"
+	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
 )
 
@@ -125,8 +124,8 @@ func badgeDefinitionByCode(code int16) (badgeDefinition, bool) {
 	return badgeDefinition{}, false
 }
 
-func Templates() []contracts.PlayerBadge {
-	out := []contracts.PlayerBadge{}
+func Templates() []Badge {
+	out := []Badge{}
 	for _, def := range badgeDefinitions {
 		if !def.Unobtainable {
 			out = append(out, FromParts(def.Code, 1, 0, false))
@@ -135,13 +134,13 @@ func Templates() []contracts.PlayerBadge {
 	return out
 }
 
-func (s *PGStore) ListAdminGrantableBadges() []AdminBadgeDefinition {
-	out := make([]AdminBadgeDefinition, 0)
+func (s *PGStore) ListAdminGrantableBadges() []CatalogEntry {
+	out := make([]CatalogEntry, 0)
 	for _, def := range badgeDefinitions {
 		if !def.AdminGrantable {
 			continue
 		}
-		out = append(out, AdminBadgeDefinition{
+		out = append(out, CatalogEntry{
 			ID: def.ID, Kind: def.Kind, Label: def.Label, Description: def.Description,
 			ImageURL: def.ImageURL, Rarity: def.Rarity, MaxLevel: int(def.MaxLevel),
 		})
@@ -182,10 +181,10 @@ func badgeImageURL(def badgeDefinition, level int16) string {
 	return topFinishImageByLevel[level]
 }
 
-func FromParts(code, level, extra int16, owned bool) contracts.PlayerBadge {
+func FromParts(code, level, extra int16, owned bool) Badge {
 	def, ok := badgeDefinitionByCode(code)
 	if !ok {
-		return contracts.PlayerBadge{}
+		return Badge{}
 	}
 	if level < 1 {
 		level = 1
@@ -193,7 +192,7 @@ func FromParts(code, level, extra int16, owned bool) contracts.PlayerBadge {
 	if def.MaxLevel > 0 && level > def.MaxLevel {
 		level = def.MaxLevel
 	}
-	badge := contracts.PlayerBadge{
+	badge := Badge{
 		ID:           def.ID,
 		Kind:         def.Kind,
 		Label:        def.Label,
@@ -214,7 +213,7 @@ func FromParts(code, level, extra int16, owned bool) contracts.PlayerBadge {
 	return badge
 }
 
-func notifyBadgeUnlock(ctx context.Context, tx pgx.Tx, userID string, badge contracts.PlayerBadge) (bool, error) {
+func notifyBadgeUnlock(ctx context.Context, tx pgx.Tx, userID string, badge Badge) (bool, error) {
 	key := "badge_unlocked:" + userID + ":" + badge.ID + ":" + strconv.Itoa(badge.Level)
 	if _, err := storekit.UpsertUserNotificationTx(ctx, tx, userID, "badge_unlocked", key, map[string]any{"badge": badge}, "", time.Time{}); err != nil {
 		return false, err
@@ -274,10 +273,10 @@ func AwardBadgeTx(ctx context.Context, tx pgx.Tx, userID, badgeID string) (bool,
 	return upsertBadgeTx(ctx, tx, userID, code, 1, 0, true)
 }
 
-func (s *PGStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contracts.PlayerBadge, bool, error) {
+func (s *PGStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (Badge, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	var badge contracts.PlayerBadge
+	var badge Badge
 	var changed bool
 	err := storekit.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
@@ -285,42 +284,42 @@ func (s *PGStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (contr
 		return err
 	})
 	if err != nil {
-		return contracts.PlayerBadge{}, false, err
+		return Badge{}, false, err
 	}
 	return badge, changed, nil
 }
 
 // GrantBadgeToUserTx writes the badge, notification and audit in the caller's transaction.
-func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, nickname, badgeID, actorUserID string) (contracts.PlayerBadge, bool, error) {
+func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, nickname, badgeID, actorUserID string) (Badge, bool, error) {
 	nickname = strings.TrimSpace(nickname)
 	actorUserID = strings.TrimSpace(actorUserID)
 	def, ok := badgeDefinitionByID(badgeID)
 	if nickname == "" {
-		return contracts.PlayerBadge{}, false, ErrBadgeNicknameRequired
+		return Badge{}, false, ErrBadgeNicknameRequired
 	}
 	if !ok || !def.AdminGrantable {
-		return contracts.PlayerBadge{}, false, ErrBadgeUnavailable
+		return Badge{}, false, ErrBadgeUnavailable
 	}
 	userUUID, err := db.New(tx).FindClaimedUser(ctx, nickname)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return contracts.PlayerBadge{}, false, err
+		return Badge{}, false, err
 	}
 	if errors.Is(err, pgx.ErrNoRows) || !userUUID.Valid {
-		return contracts.PlayerBadge{}, false, ErrBadgeUserNotFound
+		return Badge{}, false, ErrBadgeUserNotFound
 	}
 	userID := storekit.UUIDVal(userUUID)
 	changed, err := upsertBadgeTx(ctx, tx, userID, def.Code, 1, 0, true)
 	if err != nil {
-		return contracts.PlayerBadge{}, false, err
+		return Badge{}, false, err
 	}
 	var level, extra int16
 	badge, err := db.New(tx).GetBadge(ctx, db.GetBadgeParams{UserID: chatUUID(userID), BadgeCode: def.Code})
 	if err != nil {
-		return contracts.PlayerBadge{}, false, err
+		return Badge{}, false, err
 	}
 	level, extra = badge.Level, badge.Extra
 	if _, err := audit.Record(ctx, tx, audit.Entry{SubjectID: userID, ActorID: actorUserID, Action: audit.ActionBadgeGranted, Metadata: map[string]any{"badgeId": def.ID, "source": "admin"}}); err != nil {
-		return contracts.PlayerBadge{}, false, err
+		return Badge{}, false, err
 	}
 	return FromParts(def.Code, level, extra, true), changed, nil
 }

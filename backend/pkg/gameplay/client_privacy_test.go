@@ -1,4 +1,4 @@
-package contracts_test
+package gameplay_test
 
 import (
 	"encoding/json"
@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/duel"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/matchkind"
 	"geoduels/pkg/singleplayer"
 )
 
@@ -25,8 +26,8 @@ var permittedTopLevelKeys = map[string]bool{
 
 type scenario struct {
 	name          string
-	mode          contracts.MatchMode
-	kind          contracts.MatchKind
+	mode          matchkind.Mode
+	kind          matchkind.Kind
 	players       []string
 	teams         map[string]string
 	useSoloEngine bool
@@ -43,7 +44,7 @@ func guessFor(playerID string, round int) (float64, float64) {
 }
 
 type harness struct {
-	snap    *contracts.MatchSnapshot
+	snap    *gameplay.MatchSnapshot
 	players []string
 }
 
@@ -56,10 +57,10 @@ func runScenario(t *testing.T, s scenario) map[string]harness {
 	clock := func() time.Time { return base.Add(time.Duration(nowMs) * time.Millisecond) }
 	advance := func(d time.Duration) { nowMs += d.Milliseconds() }
 	phaseSnaps := map[string]harness{}
-	locationProvider := func(string, int) (contracts.LocationPoint, error) {
-		return contracts.LocationPoint{Lat: 52.52, Lng: 13.405, Country: "de"}, nil
+	locationProvider := func(string, int) (gameplay.LocationPoint, error) {
+		return gameplay.LocationPoint{Lat: 52.52, Lng: 13.405, Country: "de"}, nil
 	}
-	captureFrom := func(get func() (*contracts.MatchSnapshot, error)) func(string) {
+	captureFrom := func(get func() (*gameplay.MatchSnapshot, error)) func(string) {
 		return func(name string) {
 			snap, err := get()
 			if err != nil {
@@ -75,26 +76,26 @@ func runScenario(t *testing.T, s scenario) map[string]harness {
 		if _, err := solo.CreateMatch("m1", s.players, nil); err != nil {
 			t.Fatalf("create solo match: %v", err)
 		}
-		capture := captureFrom(func() (*contracts.MatchSnapshot, error) { return solo.GetSnapshot("m1") })
+		capture := captureFrom(func() (*gameplay.MatchSnapshot, error) { return solo.GetSnapshot("m1") })
 		capture("intro")
 		advance(5 * time.Second)
 		capture("live_no_guess")
 		lat, lng := guessFor(player, 1)
-		solo.SubmitGuess(contracts.GuessPayload{UserID: player, MatchID: "m1", RoundID: "m1:r1", Lat: lat, Lng: lng, Finalize: true})
+		solo.SubmitGuess(gameplay.Guess{UserID: player, MatchID: "m1", RoundID: "m1:r1", Lat: lat, Lng: lng, Finalize: true})
 		capture("result")
 		advance(1 * time.Second)
 		solo.AdvanceRound("m1", player)
 		capture("next_round_intro")
 		advance(5 * time.Second)
 		lat2, lng2 := guessFor(player, 2)
-		solo.SubmitGuess(contracts.GuessPayload{UserID: player, MatchID: "m1", RoundID: "m1:r2", Lat: lat2, Lng: lng2, Finalize: true})
+		solo.SubmitGuess(gameplay.Guess{UserID: player, MatchID: "m1", RoundID: "m1:r2", Lat: lat2, Lng: lng2, Finalize: true})
 		solo.Forfeit("m1", player)
 		capture("ended")
 		return phaseSnaps
 	}
 
 	eng := duel.NewWithClock(locationProvider, clock)
-	capture := captureFrom(func() (*contracts.MatchSnapshot, error) { return eng.GetSnapshot("m1") })
+	capture := captureFrom(func() (*gameplay.MatchSnapshot, error) { return eng.GetSnapshot("m1") })
 	if _, err := eng.CreateMatchWithOptions("m1", s.players, nil, duel.MatchOptions{Kind: s.kind, Teams: s.teams}); err != nil {
 		t.Fatalf("create match: %v", err)
 	}
@@ -109,7 +110,7 @@ func runScenario(t *testing.T, s scenario) map[string]harness {
 		roundID := currentRoundID()
 		for _, p := range s.players {
 			lat, lng := guessFor(p, round)
-			eng.SubmitGuess(contracts.GuessPayload{UserID: p, MatchID: "m1", RoundID: roundID, Lat: lat, Lng: lng, Finalize: finalize})
+			eng.SubmitGuess(gameplay.Guess{UserID: p, MatchID: "m1", RoundID: roundID, Lat: lat, Lng: lng, Finalize: finalize})
 		}
 	}
 	capture("intro")
@@ -128,9 +129,9 @@ func runScenario(t *testing.T, s scenario) map[string]harness {
 	return phaseSnaps
 }
 
-func serialize(t *testing.T, snap *contracts.MatchSnapshot, userID string) map[string]any {
+func serialize(t *testing.T, snap *gameplay.MatchSnapshot, userID string) map[string]any {
 	t.Helper()
-	client := contracts.ClientSnapshotForPlayer(snap, userID)
+	client := gameplay.ClientSnapshotForPlayer(snap, userID)
 	if client == nil {
 		t.Fatalf("serializer returned nil for user %q", userID)
 	}
@@ -145,7 +146,7 @@ func serialize(t *testing.T, snap *contracts.MatchSnapshot, userID string) map[s
 	return decoded
 }
 
-func assertPrivacyInvariants(t *testing.T, snap *contracts.MatchSnapshot, h harness, userID string) {
+func assertPrivacyInvariants(t *testing.T, snap *gameplay.MatchSnapshot, h harness, userID string) {
 	t.Helper()
 	decoded := serialize(t, snap, userID)
 
@@ -193,8 +194,8 @@ func assertPrivacyInvariants(t *testing.T, snap *contracts.MatchSnapshot, h harn
 			t.Fatalf("user %q: self block belongs to %v", userID, self["userId"])
 		}
 		guess, hasGuess := self["currentGuess"]
-		expectedVisible := snap.Phase == contracts.PhaseLive &&
-			snap.RoundPhase == contracts.RoundPhaseLive &&
+		expectedVisible := snap.Phase == gameplay.PhaseLive &&
+			snap.RoundPhase == gameplay.RoundPhaseLive &&
 			snap.Players[userID].HasGuess
 		if hasGuess != expectedVisible {
 			t.Fatalf("user %q: self currentGuess visibility = %v, want %v", userID, hasGuess, expectedVisible)
@@ -212,7 +213,7 @@ func assertPrivacyInvariants(t *testing.T, snap *contracts.MatchSnapshot, h harn
 	// round, only for the recipient's own team, and never for the recipient or
 	// an opponent.
 	if team, hasTeam := decoded["team"].(map[string]any); hasTeam {
-		if snap.Mode != contracts.ModeTeamDuel || snap.Phase != contracts.PhaseLive || snap.RoundPhase != contracts.RoundPhaseLive {
+		if snap.Mode != matchkind.ModeTeamDuel || snap.Phase != gameplay.PhaseLive || snap.RoundPhase != gameplay.RoundPhaseLive {
 			t.Fatalf("user %q: team guesses exposed outside a live team-duel round", userID)
 		}
 		selfTeam := snap.Players[userID].TeamID
@@ -233,7 +234,7 @@ func assertPrivacyInvariants(t *testing.T, snap *contracts.MatchSnapshot, h harn
 				t.Fatalf("user %q: teammate %q guess %+v does not match the authoritative guess", userID, id, point)
 			}
 		}
-	} else if snap.Mode == contracts.ModeTeamDuel && snap.Phase == contracts.PhaseLive && snap.RoundPhase == contracts.RoundPhaseLive {
+	} else if snap.Mode == matchkind.ModeTeamDuel && snap.Phase == gameplay.PhaseLive && snap.RoundPhase == gameplay.RoundPhaseLive {
 		for id, p := range snap.Players {
 			if id != userID && p.TeamID == snap.Players[userID].TeamID && p.HasGuess {
 				t.Fatalf("user %q: teammate %q has a guess but no team block was serialized", userID, id)
@@ -242,7 +243,7 @@ func assertPrivacyInvariants(t *testing.T, snap *contracts.MatchSnapshot, h harn
 	}
 }
 
-func roundNumberOf(snap *contracts.MatchSnapshot) int {
+func roundNumberOf(snap *gameplay.MatchSnapshot) int {
 	if snap.CurrentRound != nil {
 		return snap.CurrentRound.RoundNumber
 	}
@@ -254,9 +255,9 @@ func roundNumberOf(snap *contracts.MatchSnapshot) int {
 
 func TestSnapshotPrivacyAcrossModesAndPhases(t *testing.T) {
 	scenarios := []scenario{
-		{name: "duel", mode: contracts.ModeDuel, kind: contracts.KindRankedDuel, players: []string{"alice", "bob"}},
-		{name: "team_duel", mode: contracts.ModeTeamDuel, kind: contracts.KindTeamDuel, players: []string{"alice", "bob", "carol", "dave"}, teams: map[string]string{"alice": "a", "carol": "a", "bob": "b", "dave": "b"}},
-		{name: "free_for_all", mode: contracts.ModeFreeForAll, kind: contracts.KindFreeForAll, players: []string{"alice", "bob", "carol"}},
+		{name: "duel", mode: matchkind.ModeDuel, kind: matchkind.RankedDuel, players: []string{"alice", "bob"}},
+		{name: "team_duel", mode: matchkind.ModeTeamDuel, kind: matchkind.TeamDuel, players: []string{"alice", "bob", "carol", "dave"}, teams: map[string]string{"alice": "a", "carol": "a", "bob": "b", "dave": "b"}},
+		{name: "free_for_all", mode: matchkind.ModeFreeForAll, kind: matchkind.FreeForAll, players: []string{"alice", "bob", "carol"}},
 		{name: "singleplayer", useSoloEngine: true, players: []string{"alice"}},
 	}
 	for _, s := range scenarios {
@@ -285,19 +286,19 @@ func TestSerializationDoesNotMutateAuthoritativeState(t *testing.T) {
 	base := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 	var nowMs int64
 	clock := func() time.Time { return base.Add(time.Duration(nowMs) * time.Millisecond) }
-	prov := func(string, int) (contracts.LocationPoint, error) {
-		return contracts.LocationPoint{Lat: 48.85, Lng: 2.35, Country: "fr"}, nil
+	prov := func(string, int) (gameplay.LocationPoint, error) {
+		return gameplay.LocationPoint{Lat: 48.85, Lng: 2.35, Country: "fr"}, nil
 	}
 	eng := duel.NewWithClock(prov, clock)
 	teams := map[string]string{"alice": "a", "bob": "a", "carol": "b", "dave": "b"}
-	cfg := contracts.MatchConfig{RoundTimerMode: contracts.RoundTimerFixed, RoundTimeLimitMS: 45_000}
-	if _, err := eng.CreateMatchWithOptions("m1", []string{"alice", "bob", "carol", "dave"}, nil, duel.MatchOptions{Kind: contracts.KindTeamDuel, Teams: teams, Config: cfg}); err != nil {
+	cfg := gameplay.MatchConfig{RoundTimerMode: gameplay.RoundTimerFixed, RoundTimeLimitMS: 45_000}
+	if _, err := eng.CreateMatchWithOptions("m1", []string{"alice", "bob", "carol", "dave"}, nil, duel.MatchOptions{Kind: matchkind.TeamDuel, Teams: teams, Config: cfg}); err != nil {
 		t.Fatalf("create match: %v", err)
 	}
 	nowMs += 5000
 	for _, p := range []string{"alice", "bob", "carol", "dave"} {
 		lat, lng := guessFor(p, 1)
-		eng.SubmitGuess(contracts.GuessPayload{UserID: p, MatchID: "m1", RoundID: "m1:r1", Lat: lat, Lng: lng, Finalize: false})
+		eng.SubmitGuess(gameplay.Guess{UserID: p, MatchID: "m1", RoundID: "m1:r1", Lat: lat, Lng: lng, Finalize: false})
 	}
 
 	before, err := eng.GetSnapshot("m1")
@@ -310,7 +311,7 @@ func TestSerializationDoesNotMutateAuthoritativeState(t *testing.T) {
 	}
 
 	for _, userID := range []string{"alice", "bob", "carol", "dave", "outsider"} {
-		contracts.ClientSnapshotForPlayer(before, userID)
+		gameplay.ClientSnapshotForPlayer(before, userID)
 	}
 
 	after, err := eng.GetSnapshot("m1")

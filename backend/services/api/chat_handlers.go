@@ -13,7 +13,6 @@ import (
 
 	"geoduels/internal/chat"
 	"geoduels/pkg/contentfilter"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/pgnotify"
@@ -39,6 +38,41 @@ type chatScope struct {
 type chatClientCommand struct {
 	Type    string         `json:"type"`
 	Payload map[string]any `json:"payload"`
+}
+
+// eventChatMessage sends one chatMessage.
+const eventChatMessage = "chat.message"
+
+// chatMessage is a chat message as clients receive it, and as API processes pass it to each other.
+type chatMessage struct {
+	SenderTeamID      string    `json:"senderTeamId,omitempty"`
+	ID                string    `json:"id"`
+	ConversationID    string    `json:"conversationId,omitempty"`
+	MatchID           string    `json:"matchId"`
+	SenderUserID      string    `json:"senderUserId"`
+	SenderDisplayName string    `json:"senderDisplayName"`
+	Kind              string    `json:"kind"`
+	Audience          string    `json:"audience"`
+	TeamID            string    `json:"teamId,omitempty"`
+	Body              string    `json:"body,omitempty"`
+	Emote             string    `json:"emote,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+func newChatMessage(m chat.Message) chatMessage {
+	return chatMessage{
+		SenderTeamID: m.SenderTeamID, ID: m.ID, ConversationID: m.ConversationID, MatchID: m.MatchID,
+		SenderUserID: m.SenderUserID, SenderDisplayName: m.SenderDisplayName, Kind: string(m.Kind),
+		Audience: string(m.Audience), TeamID: m.TeamID, Body: m.Body, Emote: string(m.Emote), CreatedAt: m.CreatedAt,
+	}
+}
+
+func newChatMessages(messages []chat.Message) []chatMessage {
+	out := make([]chatMessage, len(messages))
+	for i, m := range messages {
+		out[i] = newChatMessage(m)
+	}
+	return out
 }
 
 func (a *api) chatWS(c echo.Context) error {
@@ -89,7 +123,7 @@ func (a *api) chatWS(c echo.Context) error {
 	if messages, err := a.chat.ListChatMessagesForUser(scope.ConversationID, claims.Sub, 100, revealTeam); err == nil && len(messages) > 0 {
 		w.send("chat.history", map[string]any{
 			"conversationId": scope.ConversationID,
-			"messages":       messages,
+			"messages":       newChatMessages(messages),
 			"readOnly":       scope.ReadOnly,
 		})
 	}
@@ -132,7 +166,7 @@ func (a *api) chatWS(c echo.Context) error {
 				w.send("chat.error", map[string]string{"message": err.Error()})
 				continue
 			}
-			if message.Audience == contracts.ChatAudienceTeam {
+			if message.Audience == chat.AudienceTeam {
 				matchID, teamID, ok, teamErr := a.resolveChatTeam(scope, claims.Sub)
 				if teamErr != nil {
 					w.send("chat.error", map[string]string{"message": "chat unavailable"})
@@ -144,7 +178,7 @@ func (a *api) chatWS(c echo.Context) error {
 				}
 				message.MatchID, message.TeamID, message.SenderTeamID = matchID, teamID, teamID
 			}
-			if message.Audience == contracts.ChatAudienceAll {
+			if message.Audience == chat.AudienceAll {
 				_, teamID, ok, err := a.resolveChatTeam(scope, claims.Sub)
 				if err != nil {
 					w.send("chat.error", map[string]string{"message": "chat unavailable"})
@@ -183,12 +217,12 @@ func (a *api) chatWS(c echo.Context) error {
 			if !ok {
 				return nil
 			}
-			var message contracts.ChatMessage
+			var message chatMessage
 			if event.Resync || json.Unmarshal(event.Data, &message) != nil {
 				continue
 			}
 			if a.canViewChatMessage(claims.Sub, message) {
-				w.send(contracts.EventChatMessage, message)
+				w.send(eventChatMessage, message)
 			}
 		case <-pingTicker.C:
 			if !w.ping() {
@@ -229,28 +263,28 @@ func (a *api) authorizeChatConversation(ctx context.Context, conversationID, use
 	}
 }
 
-func (a *api) buildChatMessage(scope chatScope, userID, displayName string, cmd chatClientCommand) (contracts.ChatMessage, error) {
-	message := contracts.ChatMessage{
+func (a *api) buildChatMessage(scope chatScope, userID, displayName string, cmd chatClientCommand) (chat.Message, error) {
+	message := chat.Message{
 		ID:                entityid.New(),
 		ConversationID:    scope.ConversationID,
 		MatchID:           scope.MatchID,
 		SenderUserID:      userID,
 		SenderDisplayName: strings.TrimSpace(displayName),
 		CreatedAt:         time.Now().UTC(),
-		Audience:          contracts.ChatAudienceAll,
+		Audience:          chat.AudienceAll,
 	}
 	if cmd.Payload != nil {
 		if rawAudience, exists := cmd.Payload["audience"]; exists {
 			audience, ok := rawAudience.(string)
 			if !ok {
-				return contracts.ChatMessage{}, errors.New("unsupported chat audience")
+				return chat.Message{}, errors.New("unsupported chat audience")
 			}
-			switch contracts.ChatAudience(strings.TrimSpace(audience)) {
-			case contracts.ChatAudienceAll:
-			case contracts.ChatAudienceTeam:
-				message.Audience = contracts.ChatAudienceTeam
+			switch chat.Audience(strings.TrimSpace(audience)) {
+			case chat.AudienceAll:
+			case chat.AudienceTeam:
+				message.Audience = chat.AudienceTeam
 			default:
-				return contracts.ChatMessage{}, errors.New("unsupported chat audience")
+				return chat.Message{}, errors.New("unsupported chat audience")
 			}
 		}
 	}
@@ -259,30 +293,30 @@ func (a *api) buildChatMessage(scope chatScope, userID, displayName string, cmd 
 	}
 	switch cmd.Type {
 	case "chat.send":
-		message.Kind = contracts.ChatMessageText
+		message.Kind = chat.KindText
 		if cmd.Payload != nil {
 			if body, ok := cmd.Payload["body"].(string); ok {
 				message.Body = sanitizeChatBody(body)
 			}
 		}
 		if message.Body == "" {
-			return contracts.ChatMessage{}, errors.New("message is empty")
+			return chat.Message{}, errors.New("message is empty")
 		}
 		if err := contentfilter.RejectAbusiveText(message.Body); err != nil {
-			return contracts.ChatMessage{}, err
+			return chat.Message{}, err
 		}
 	case "chat.emote":
-		message.Kind = contracts.ChatMessageEmote
+		message.Kind = chat.KindEmote
 		if cmd.Payload != nil {
 			if emote, ok := cmd.Payload["emote"].(string); ok {
-				message.Emote = contracts.ChatEmote(strings.TrimSpace(emote))
+				message.Emote = chat.Emote(strings.TrimSpace(emote))
 			}
 		}
 		if !validChatEmote(message.Emote) {
-			return contracts.ChatMessage{}, errors.New("unsupported emote")
+			return chat.Message{}, errors.New("unsupported emote")
 		}
 	default:
-		return contracts.ChatMessage{}, errors.New("unsupported chat command")
+		return chat.Message{}, errors.New("unsupported chat command")
 	}
 	return message, nil
 }
@@ -298,8 +332,8 @@ func (a *api) resolveChatTeam(scope chatScope, userID string) (string, string, b
 	return "", "", false, nil
 }
 
-func (a *api) canViewChatMessage(userID string, message contracts.ChatMessage) bool {
-	if message.Audience != contracts.ChatAudienceTeam {
+func (a *api) canViewChatMessage(userID string, message chatMessage) bool {
+	if message.Audience != string(chat.AudienceTeam) {
 		return true
 	}
 	teamID, ok, err := a.chat.ChatTeamForMatch(message.MatchID, userID)
@@ -325,9 +359,9 @@ func sanitizeChatBody(body string) string {
 	return contentfilter.NormalizeText(body, chatMaxBodyLen)
 }
 
-func validChatEmote(emote contracts.ChatEmote) bool {
+func validChatEmote(emote chat.Emote) bool {
 	switch emote {
-	case contracts.ChatEmoteSkull, contracts.ChatEmoteSob, contracts.ChatEmoteThinking, contracts.ChatEmoteSunglasses, contracts.ChatEmoteWave:
+	case chat.EmoteSkull, chat.EmoteSob, chat.EmoteThinking, chat.EmoteSunglasses, chat.EmoteWave:
 		return true
 	default:
 		return false
@@ -366,9 +400,10 @@ func (l *chatRateLimiter) allow(conversationID, userID string, now time.Time) bo
 
 // publishChatMessage sends a message to everyone in the conversation, in every process; it falls
 // back to the sender alone if it cannot be published.
-func (a *api) publishChatMessage(ctx context.Context, conversationID string, message contracts.ChatMessage, sender *socketWriter) {
-	if err := pgnotify.Publish(ctx, a.db.Pool(), pgnotify.ChatTopic(conversationID), message); err != nil {
+func (a *api) publishChatMessage(ctx context.Context, conversationID string, message chat.Message, sender *socketWriter) {
+	dto := newChatMessage(message)
+	if err := pgnotify.Publish(ctx, a.db.Pool(), pgnotify.ChatTopic(conversationID), dto); err != nil {
 		observability.Log("warn", "chat publish failed", map[string]any{"conversationId": conversationID, "error": err.Error()})
-		sender.send(contracts.EventChatMessage, message)
+		sender.send(eventChatMessage, dto)
 	}
 }

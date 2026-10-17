@@ -9,11 +9,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"geoduels/internal/badges"
 	"geoduels/internal/maps"
 	"geoduels/internal/matches"
 	"geoduels/internal/parties"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/entityid"
+	"geoduels/pkg/gameplay"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchkind"
 	"geoduels/pkg/pgnotify"
@@ -24,14 +25,14 @@ import (
 // planned, and the match is written for a gameplay node to pick up, all in one transaction.
 
 type startRequest struct {
-	Kind   contracts.MatchKind
+	Kind   matchkind.Kind
 	Seats  []matchkind.Seat
-	Config contracts.MatchConfig
+	Config gameplay.MatchConfig
 	// PartyID is the party the match was started from.
 	PartyID string
 	// MapAccessUserID is whose private maps the match may play.
 	MapAccessUserID string
-	ReturnTarget    *contracts.MatchReturnTarget
+	ReturnTarget    *matches.ReturnTarget
 }
 
 // admissionError says why a player may not play now.
@@ -122,10 +123,10 @@ func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (st
 		if spec.Rated && params.SeasonID == "" {
 			params.SeasonID = profile.SeasonID
 		}
-		params.Seats = append(params.Seats, matches.Seat{Team: seat.Team, Profile: contracts.PlayerProfile{
+		params.Seats = append(params.Seats, matches.Seat{Team: seat.Team, Profile: gameplay.PlayerProfile{
 			UserID: seat.UserID, DisplayName: profile.DisplayName, AvatarURL: profile.AvatarURL,
 			MMR: profile.MMR, RatingRD: profile.RatingRD, RankedGamesPlayed: profile.RankedGamesPlayed,
-			IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin, SelectedBadge: profile.SelectedBadge,
+			IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin, SelectedBadge: matchBadge(profile.SelectedBadge),
 		}})
 	}
 	params.Plan = func(ctx context.Context, tx pgx.Tx) (matches.Plan, error) {
@@ -143,8 +144,8 @@ func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (st
 				return err
 			}
 		}
-		started := contracts.LiveEvent{Type: contracts.LiveMatchStarted, Match: &contracts.ActiveMatchSummary{
-			MatchID: matchID, Kind: req.Kind, Mode: spec.Mode, Status: contracts.MatchViewStarting,
+		started := liveEvent{Type: liveMatchStarted, Match: &activeMatchSummary{
+			MatchID: matchID, Kind: req.Kind, Mode: spec.Mode, Status: matchViewStarting,
 		}}
 		for _, userID := range userIDs {
 			if err := pgnotify.Publish(ctx, tx, pgnotify.LiveTopic(userID), started); err != nil {
@@ -163,6 +164,17 @@ func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (st
 		return "", err
 	}
 	return matchID, nil
+}
+
+// matchBadge is the badge a player shows in a match, as it is when the match starts.
+func matchBadge(b *badges.Badge) *gameplay.Badge {
+	if b == nil {
+		return nil
+	}
+	return &gameplay.Badge{
+		ID: b.ID, Kind: b.Kind, Label: b.Label, Description: b.Description, ImageURL: b.ImageURL, Rarity: b.Rarity,
+		Level: b.Level, MaxLevel: b.MaxLevel, Extra: b.Extra, Owned: b.Owned, Unobtainable: b.Unobtainable,
+	}
 }
 
 // startErrorMessage is what a player is told when a match could not start.

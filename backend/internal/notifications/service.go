@@ -4,20 +4,32 @@ package notifications
 
 import (
 	"context"
+	"encoding/json"
 	"time"
-
-	"geoduels/pkg/contracts"
 )
+
+// Notification is something to tell a person about their account. Payload is the notification's
+// stored JSON, whose shape depends on its type.
+type Notification struct {
+	ID               int64
+	Type             string
+	Category         string
+	Payload          json.RawMessage
+	ReadAt           *time.Time
+	CreatedAt        time.Time
+	ActorUserID      string
+	ActorDisplayName string
+}
 
 // Announcement is a notification together with the person it is for.
 type Announcement struct {
 	UserID       string
-	Notification contracts.UserNotification
+	Notification Notification
 }
 
 type Store interface {
-	ListUserNotifications(ctx context.Context, userID string, limit int) ([]contracts.UserNotification, error)
-	ListNotificationInbox(ctx context.Context, userID string, limit int, beforeID int64) ([]contracts.UserNotification, error)
+	ListUserNotifications(ctx context.Context, userID string, limit int) ([]Notification, error)
+	ListNotificationInbox(ctx context.Context, userID string, limit int, beforeID int64) ([]Notification, error)
 	ListUnseenSince(ctx context.Context, userIDs []string, since time.Time) ([]Announcement, error)
 	MarkUserNotificationRead(ctx context.Context, userID string, id int64) error
 	MarkAllUserNotificationsRead(ctx context.Context, userID string) error
@@ -28,12 +40,12 @@ type Service struct{ store Store }
 func NewService(store Store) *Service { return &Service{store: store} }
 
 // List is what is left to show, oldest first.
-func (s *Service) List(ctx context.Context, user string, limit int) ([]contracts.UserNotification, error) {
+func (s *Service) List(ctx context.Context, user string, limit int) ([]Notification, error) {
 	return s.store.ListUserNotifications(ctx, user, limit)
 }
 
 // Inbox is the notification history that clients before the unseen queue still page through.
-func (s *Service) Inbox(ctx context.Context, user string, limit int, before int64) ([]contracts.UserNotification, error) {
+func (s *Service) Inbox(ctx context.Context, user string, limit int, before int64) ([]Notification, error) {
 	return s.store.ListNotificationInbox(ctx, user, limit, before)
 }
 

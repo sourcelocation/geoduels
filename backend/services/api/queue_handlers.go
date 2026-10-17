@@ -13,7 +13,6 @@ import (
 
 	"geoduels/internal/matches"
 	"geoduels/internal/queue"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchkind"
 	"geoduels/pkg/observability"
@@ -43,6 +42,11 @@ func maintenanceQueueMessage(status maintenance.Status) string {
 	default:
 		return "Queue unavailable"
 	}
+}
+
+type queueStatusEvent struct {
+	Status   string `json:"status"`
+	QueuedAt int64  `json:"queuedAt"`
 }
 
 type socketWriter struct {
@@ -132,7 +136,7 @@ func (a *api) queueSocket(c echo.Context) error {
 			_ = a.queue.Leave(context.Background(), userID)
 		}
 	}()
-	if !w.send("queue_status", contracts.QueueStatusEvent{Status: "queued", QueuedAt: time.Now().UnixMilli()}) {
+	if !w.send("queue_status", queueStatusEvent{Status: "queued", QueuedAt: time.Now().UnixMilli()}) {
 		return nil
 	}
 
@@ -161,8 +165,8 @@ func (a *api) queueSocket(c echo.Context) error {
 				}
 				continue
 			}
-			var event contracts.LiveEvent
-			if json.Unmarshal(message.Data, &event) == nil && event.Type == contracts.LiveMatchStarted && event.Match != nil && event.Match.Kind == matchkind.RankedDuel {
+			var event liveEvent
+			if json.Unmarshal(message.Data, &event) == nil && event.Type == liveMatchStarted && event.Match != nil && event.Match.Kind == matchkind.RankedDuel {
 				matched = true
 				w.send("match_found", event.Match)
 				return nil

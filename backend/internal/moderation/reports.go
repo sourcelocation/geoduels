@@ -5,8 +5,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"geoduels/pkg/contracts"
 )
 
 // ReportEligibility contains the stored facts used to authorize a player report.
@@ -17,19 +15,25 @@ type PlayerReport struct {
 	Score                                                      float64
 }
 
+// ReportResult is what became of a player report: created, or a duplicate of one already open.
+type ReportResult struct {
+	SignalID int64
+	Status   string
+}
+
 // CreateReport records a player-initiated report.
-func (s *Service) CreateReport(ctx context.Context, matchID, reporter, reported, category, reason string) (contracts.ModerationSignalCreated, error) {
+func (s *Service) CreateReport(ctx context.Context, matchID, reporter, reported, category, reason string) (ReportResult, error) {
 	report := PlayerReport{MatchID: strings.TrimSpace(matchID), ReporterID: strings.TrimSpace(reporter), SubjectID: strings.TrimSpace(reported), Category: normalizeReportCategory(category), Reason: strings.TrimSpace(reason)}
 	if report.MatchID == "" || report.ReporterID == "" || report.SubjectID == "" {
-		return contracts.ModerationSignalCreated{}, errors.New("matchID, reporter, and reported user are required")
+		return ReportResult{}, errors.New("matchID, reporter, and reported user are required")
 	}
 	if report.ReporterID == report.SubjectID {
-		return contracts.ModerationSignalCreated{}, errors.New("self reports are not allowed")
+		return ReportResult{}, errors.New("self reports are not allowed")
 	}
 	report.Severity, report.Score = reportSeverity(report.Category), reportScore(report.Category)
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	var out contracts.ModerationSignalCreated
+	var out ReportResult
 	err := s.store.WithinTx(ctx, func(store Store) error {
 		eligibility, err := store.ReportEligibility(ctx, report.MatchID, report.ReporterID, report.SubjectID)
 		if err != nil {
@@ -45,7 +49,7 @@ func (s *Service) CreateReport(ctx context.Context, matchID, reporter, reported,
 		return err
 	})
 	if err != nil {
-		return contracts.ModerationSignalCreated{}, err
+		return ReportResult{}, err
 	}
 	return out, nil
 }

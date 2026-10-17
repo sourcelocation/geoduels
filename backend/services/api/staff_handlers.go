@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,10 +14,11 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"geoduels/internal/audit"
 	"geoduels/internal/curation"
+	"geoduels/internal/maps"
 	"geoduels/internal/moderation"
 	staffctx "geoduels/internal/staff"
-	"geoduels/pkg/contracts"
 	"geoduels/pkg/maintenance"
 	pkgstaff "geoduels/pkg/staff"
 )
@@ -125,6 +127,160 @@ func (a *api) adminBootstrap(c echo.Context) error {
 
 // ---- Players & review ----
 
+// adminPlayerSummary is a player as the staff tools show them.
+type adminPlayerSummary struct {
+	UserID            string              `json:"userId"`
+	Email             string              `json:"email,omitempty"`
+	DisplayName       string              `json:"displayName"`
+	AvatarURL         string              `json:"avatarUrl,omitempty"`
+	MMR               int                 `json:"mmr"`
+	GamesPlayed       int                 `json:"gamesPlayed"`
+	Wins              int                 `json:"wins"`
+	RankedGamesPlayed int                 `json:"rankedGamesPlayed"`
+	TrackedMatches    int                 `json:"trackedMatches"`
+	RankedMatches     int                 `json:"rankedMatches"`
+	DuelMatches       int                 `json:"duelMatches"`
+	SingleplayerRuns  int                 `json:"singleplayerRuns"`
+	Losses            int                 `json:"losses"`
+	IsGuest           bool                `json:"isGuest"`
+	IsAdmin           bool                `json:"isAdmin"`
+	IsModerator       bool                `json:"isModerator"`
+	IsBanned          bool                `json:"isBanned"`
+	BanReason         string              `json:"banReason,omitempty"`
+	BannedAt          time.Time           `json:"bannedAt,omitempty"`
+	BanExpiresAt      time.Time           `json:"banExpiresAt,omitempty"`
+	ChatMuteReason    string              `json:"chatMuteReason,omitempty"`
+	ChatMutedAt       time.Time           `json:"chatMutedAt,omitempty"`
+	ChatMutedUntil    time.Time           `json:"chatMutedUntil,omitempty"`
+	ReportMuteReason  string              `json:"reportMuteReason,omitempty"`
+	ReportMutedAt     time.Time           `json:"reportMutedAt,omitempty"`
+	LastIPAddress     string              `json:"lastIpAddress,omitempty"`
+	ReportMutedUntil  time.Time           `json:"reportMutedUntil,omitempty"`
+	Identities        []adminUserIdentity `json:"identities,omitempty"`
+}
+
+type adminUserIdentity struct {
+	Provider       string    `json:"provider"`
+	ProviderUserID string    `json:"providerUserId"`
+	Email          string    `json:"email,omitempty"`
+	ProviderName   string    `json:"providerName,omitempty"`
+	LastSeenAt     time.Time `json:"lastSeenAt,omitempty"`
+	DeletedAt      time.Time `json:"deletedAt,omitempty"`
+}
+
+func newAdminPlayerSummary(p moderation.PlayerSummary) adminPlayerSummary {
+	out := adminPlayerSummary{
+		UserID: p.UserID, Email: p.Email, DisplayName: p.DisplayName, AvatarURL: p.AvatarURL, MMR: p.MMR,
+		GamesPlayed: p.GamesPlayed, Wins: p.Wins, RankedGamesPlayed: p.RankedGamesPlayed, TrackedMatches: p.TrackedMatches,
+		RankedMatches: p.RankedMatches, DuelMatches: p.DuelMatches, SingleplayerRuns: p.SingleplayerRuns, Losses: p.Losses,
+		IsGuest: p.IsGuest, IsAdmin: p.IsAdmin, IsModerator: p.IsModerator, IsBanned: p.IsBanned, BanReason: p.BanReason,
+		BannedAt: p.BannedAt, BanExpiresAt: p.BanExpiresAt, ChatMuteReason: p.ChatMuteReason, ChatMutedAt: p.ChatMutedAt,
+		ChatMutedUntil: p.ChatMutedUntil, ReportMuteReason: p.ReportMuteReason, ReportMutedAt: p.ReportMutedAt,
+		LastIPAddress: p.LastIPAddress, ReportMutedUntil: p.ReportMutedUntil,
+	}
+	if p.Identities != nil {
+		out.Identities = make([]adminUserIdentity, len(p.Identities))
+		for i, id := range p.Identities {
+			out.Identities[i] = adminUserIdentity{
+				Provider: id.Provider, ProviderUserID: id.ProviderUserID, Email: id.Email, ProviderName: id.ProviderName,
+				LastSeenAt: id.LastSeenAt, DeletedAt: id.DeletedAt,
+			}
+		}
+	}
+	return out
+}
+
+func newAdminPlayerSummaries(list []moderation.PlayerSummary) []adminPlayerSummary {
+	if list == nil {
+		return nil
+	}
+	out := make([]adminPlayerSummary, len(list))
+	for i, p := range list {
+		out[i] = newAdminPlayerSummary(p)
+	}
+	return out
+}
+
+type moderationSignalSummary struct {
+	ID               int64           `json:"id"`
+	SubjectUserID    string          `json:"subjectUserId"`
+	SubjectName      string          `json:"subjectName,omitempty"`
+	SignalType       string          `json:"signalType"`
+	Source           string          `json:"source"`
+	Severity         string          `json:"severity"`
+	EvidenceStrength string          `json:"evidenceStrength"`
+	DetectorKey      string          `json:"detectorKey,omitempty"`
+	DetectorVersion  string          `json:"detectorVersion,omitempty"`
+	ReasonCode       string          `json:"reasonCode"`
+	Score            float64         `json:"score"`
+	RecommendedQueue bool            `json:"recommendedQueue"`
+	ReporterUserID   string          `json:"reporterUserId,omitempty"`
+	ReporterName     string          `json:"reporterName,omitempty"`
+	MatchID          string          `json:"matchId,omitempty"`
+	Payload          json.RawMessage `json:"payload,omitempty"`
+	OccurredAt       time.Time       `json:"occurredAt"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	ReviewedAt       time.Time       `json:"reviewedAt,omitempty"`
+	ReviewedBy       string          `json:"reviewedBy,omitempty"`
+	Outcome          string          `json:"outcome,omitempty"`
+}
+
+func newModerationSignals(list []moderation.Signal) []moderationSignalSummary {
+	if list == nil {
+		return nil
+	}
+	out := make([]moderationSignalSummary, len(list))
+	for i, x := range list {
+		out[i] = moderationSignalSummary{
+			ID: x.ID, SubjectUserID: x.SubjectUserID, SubjectName: x.SubjectName, SignalType: x.SignalType, Source: x.Source,
+			Severity: x.Severity, EvidenceStrength: x.EvidenceStrength, DetectorKey: x.DetectorKey,
+			DetectorVersion: x.DetectorVersion, ReasonCode: x.ReasonCode, Score: x.Score, RecommendedQueue: x.RecommendedQueue,
+			ReporterUserID: x.ReporterUserID, ReporterName: x.ReporterName, MatchID: x.MatchID, Payload: x.Payload,
+			OccurredAt: x.OccurredAt, CreatedAt: x.CreatedAt, ReviewedAt: x.ReviewedAt, ReviewedBy: x.ReviewedBy, Outcome: x.Outcome,
+		}
+	}
+	return out
+}
+
+type moderationAuditLogEntry struct {
+	ID            int64           `json:"id"`
+	SubjectUserID string          `json:"subjectUserId,omitempty"`
+	SubjectName   string          `json:"subjectName,omitempty"`
+	ActorUserID   string          `json:"actorUserId,omitempty"`
+	ActorName     string          `json:"actorName,omitempty"`
+	Action        string          `json:"action"`
+	Reason        string          `json:"reason,omitempty"`
+	ExpiresAt     time.Time       `json:"expiresAt,omitempty"`
+	SignalIDs     []int64         `json:"signalIds,omitempty"`
+	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt     time.Time       `json:"createdAt"`
+}
+
+func newModerationAuditLog(list []audit.LogEntry) []moderationAuditLogEntry {
+	if list == nil {
+		return nil
+	}
+	out := make([]moderationAuditLogEntry, len(list))
+	for i, x := range list {
+		out[i] = moderationAuditLogEntry{
+			ID: x.ID, SubjectUserID: x.SubjectUserID, SubjectName: x.SubjectName, ActorUserID: x.ActorUserID,
+			ActorName: x.ActorName, Action: x.Action, Reason: x.Reason, ExpiresAt: x.ExpiresAt, SignalIDs: x.SignalIDs,
+			Metadata: x.Metadata, CreatedAt: x.CreatedAt,
+		}
+	}
+	return out
+}
+
+type moderationSubjectDetail struct {
+	Player adminPlayerSummary `json:"player"`
+}
+
+type moderationSubjectProfile struct {
+	Player  adminPlayerSummary        `json:"player"`
+	Signals []moderationSignalSummary `json:"signals"`
+	Log     []moderationAuditLogEntry `json:"log"`
+}
+
 func (a *api) adminPlayers(c echo.Context) error {
 	actor, err := a.staffActor(c.Request())
 	if err != nil {
@@ -134,7 +290,7 @@ func (a *api) adminPlayers(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"players": players})
+	return writeJSON(c, map[string]any{"players": newAdminPlayerSummaries(players)})
 }
 
 func (a *api) adminPlayerDetail(c echo.Context) error {
@@ -146,7 +302,7 @@ func (a *api) adminPlayerDetail(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, detail)
+	return writeJSON(c, moderationSubjectDetail{Player: newAdminPlayerSummary(detail.Player)})
 }
 
 func (a *api) moderatorSubject(c echo.Context) error {
@@ -158,7 +314,9 @@ func (a *api) moderatorSubject(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, profile)
+	return writeJSON(c, moderationSubjectProfile{
+		Player: newAdminPlayerSummary(profile.Player), Signals: newModerationSignals(profile.Signals), Log: newModerationAuditLog(profile.Log),
+	})
 }
 
 func (a *api) moderatorSignals(c echo.Context) error {
@@ -170,7 +328,7 @@ func (a *api) moderatorSignals(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"signals": signals})
+	return writeJSON(c, map[string]any{"signals": newModerationSignals(signals)})
 }
 
 func (a *api) moderatorLog(c echo.Context) error {
@@ -182,7 +340,7 @@ func (a *api) moderatorLog(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"log": entries})
+	return writeJSON(c, map[string]any{"log": newModerationAuditLog(entries)})
 }
 
 // ---- Enforcement ----
@@ -312,6 +470,28 @@ func (a *api) adminGrantRoleByParam(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+type userRoleGrant struct {
+	UserID      string    `json:"userId"`
+	DisplayName string    `json:"displayName,omitempty"`
+	Email       string    `json:"email,omitempty"`
+	Role        string    `json:"role"`
+	GrantedBy   string    `json:"grantedBy,omitempty"`
+	GrantedAt   time.Time `json:"grantedAt"`
+	RevokedAt   time.Time `json:"revokedAt,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+}
+
+// adminBadgeDefinition is a badge staff may grant by hand.
+type adminBadgeDefinition struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	ImageURL    string `json:"imageUrl"`
+	Rarity      string `json:"rarity,omitempty"`
+	MaxLevel    int    `json:"maxLevel"`
+}
+
 func (a *api) adminListRoles(c echo.Context) error {
 	actor, err := a.staffActor(c.Request())
 	if err != nil {
@@ -321,7 +501,14 @@ func (a *api) adminListRoles(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"roles": roles})
+	grants := make([]userRoleGrant, len(roles))
+	for i, g := range roles {
+		grants[i] = userRoleGrant{
+			UserID: g.UserID, DisplayName: g.DisplayName, Email: g.Email, Role: g.Role, GrantedBy: g.GrantedBy,
+			GrantedAt: g.GrantedAt, Reason: g.Reason,
+		}
+	}
+	return writeJSON(c, map[string]any{"roles": grants})
 }
 
 func (a *api) adminGrantRole(c echo.Context) error {
@@ -365,11 +552,17 @@ func (a *api) adminBadgeDefinitions(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	badges, err := a.badges.Catalog(actor)
+	catalog, err := a.badges.Catalog(actor)
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, map[string]any{"badges": badges})
+	definitions := make([]adminBadgeDefinition, len(catalog))
+	for i, b := range catalog {
+		definitions[i] = adminBadgeDefinition{
+			ID: b.ID, Kind: b.Kind, Label: b.Label, Description: b.Description, ImageURL: b.ImageURL, Rarity: b.Rarity, MaxLevel: b.MaxLevel,
+		}
+	}
+	return writeJSON(c, map[string]any{"badges": definitions})
 }
 
 func (a *api) adminGrantBadge(c echo.Context) error {
@@ -401,7 +594,7 @@ func (a *api) adminGrantBadge(c echo.Context) error {
 			return staffError(c, err)
 		}
 	}
-	return writeJSON(c, map[string]any{"badge": grant.Badge, "changed": grant.Changed})
+	return writeJSON(c, map[string]any{"badge": newPlayerBadge(grant.Badge), "changed": grant.Changed})
 }
 
 // ---- IP signup blocks ----
@@ -801,7 +994,7 @@ func (a *api) adminSetMapCreatorTier(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, quota)
+	return writeJSON(c, newMapUploadQuota(quota))
 }
 
 func (a *api) adminImportOfficialMap(c echo.Context) error {
@@ -830,12 +1023,12 @@ func (a *api) adminImportOfficialMap(c echo.Context) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, item)
+	return writeJSON(c, newCustomMap(item))
 }
 
 func (a *api) adminUploadMap(c echo.Context) error {
 	mapKey := strings.TrimSpace(c.Param("mapKey"))
-	if mapKey != contracts.MapKeyMoving && mapKey != contracts.MapKeyNMPZ {
+	if mapKey != maps.MapKeyMoving && mapKey != maps.MapKeyNMPZ {
 		return plainTextError(c, http.StatusBadRequest, "unsupported map key")
 	}
 	return a.uploadMap(c, mapKey)
@@ -863,7 +1056,9 @@ func (a *api) uploadMap(c echo.Context, mapKey string) error {
 	if err != nil {
 		return staffError(c, err)
 	}
-	return writeJSON(c, summary)
+	return writeJSON(c, mapImportSummary{
+		MapID: summary.MapID, MapKey: summary.MapKey, LocationCount: summary.LocationCount, DisplayName: summary.DisplayName,
+	})
 }
 
 func readUploadedFile(file multipart.File, _ *multipart.FileHeader) ([]byte, error) {

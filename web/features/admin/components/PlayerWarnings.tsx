@@ -5,13 +5,11 @@ import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
 import { Heading } from "../../../components/ui/typography";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { warningRequest, type ModerationWarning } from "../../notifications/lib/warnings-client";
+import { warningRequest, type ModerationWarning } from "../lib/warnings-client";
 import { AdminPanel } from "./admin-primitives";
 import { formatDate } from "../lib/admin-format";
 
-export function PlayerWarnings({ config, accessToken, userId, onChanged }: {
-  config: RuntimeConfig; accessToken: string; userId: string; onChanged: () => Promise<unknown>;
+export function PlayerWarnings({ accessToken, userId, onChanged }: { accessToken: string; userId: string; onChanged: () => Promise<unknown>;
 }) {
   const [category, setCategory] = useState("chat_abuse");
   const [message, setMessage] = useState("");
@@ -20,16 +18,16 @@ export function PlayerWarnings({ config, accessToken, userId, onChanged }: {
   const path = `staff/players/${encodeURIComponent(userId)}/warnings`;
   const query = useQuery({
     queryKey: ["player-warnings", userId, accessToken],
-    queryFn: () => warningRequest<{ warnings: ModerationWarning[] }>(config, accessToken, path),
+    queryFn: () => warningRequest<{ warnings: ModerationWarning[] }>(accessToken, path),
     refetchInterval: 30_000,
   });
   const refresh = async () => { await query.refetch(); await onChanged(); };
   const issue = useMutation({
-    mutationFn: () => warningRequest(config, accessToken, path, "POST", { category, message, resetNickname, evidenceMessageId }),
+    mutationFn: () => warningRequest(accessToken, path, "POST", { category, message, resetNickname, evidenceMessageId }),
     onSuccess: async () => { setMessage(""); setEvidenceMessageId(""); await refresh(); },
   });
   const withdraw = useMutation({
-    mutationFn: (id: number) => warningRequest(config, accessToken, `${path}/${id}/withdraw`, "POST"),
+    mutationFn: (id: number) => warningRequest(accessToken, `${path}/${id}/withdraw`, "POST"),
     onSuccess: refresh,
   });
   return (

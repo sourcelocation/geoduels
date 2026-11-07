@@ -1,4 +1,5 @@
 import dynamic from 'next/dynamic';
+import { useAppShellOptions } from '../../app-shell/components/AppShell';
 import type { HomeModel } from '../model/types';
 import type { LobbyContentRoute } from '../../lobby/components/LobbyScreen';
 import HomePageChatDock from './HomePageChatDock';
@@ -25,8 +26,10 @@ export default function HomePageView({ model, lobbyRoute = 'play', mapId = '', r
       model.view.game.showMatchEndPage
     );
 
+  useAppShellOptions({ hidden: model.view.lobby.inGame });
+
   return (
-    <main className="relative min-h-screen overflow-hidden text-content-primary">
+    <main className="relative flex min-h-0 flex-1 flex-col text-content-primary">
       <HomePageOverlays auth={model.view.auth} overlays={model.view.overlays} maxHP={model.view.meta.maxHP} actions={model.actions} />
       <HomePageLobby auth={model.view.auth} lobby={model.view.lobby} meta={model.view.meta} actions={model.actions} contentRoute={lobbyRoute} mapId={mapId} routeLoading={routeLoading} />
       <HomePageChatDock chat={model.view.chat} actions={model.actions} />

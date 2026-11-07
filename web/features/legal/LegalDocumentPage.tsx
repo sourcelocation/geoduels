@@ -1,4 +1,4 @@
-import { PageShell } from "../../components/ui/PageShell";
+import { DocumentPage } from "../app-shell/components/DocumentPage";
 
 export type LegalSection = {
   title: string;
@@ -19,14 +19,8 @@ export function LegalDocumentPage({
   sections,
 }: LegalDocumentPageProps) {
   return (
-    <PageShell
-      variant="operational"
-      title={title}
-      description={description}
-      backHref="/"
-      maxWidthClassName="max-w-4xl"
-    >
-      <p className="-mt-7 border-b border-border-default pb-7 text-body-sm text-content-secondary">
+    <DocumentPage title={title} description={description}>
+      <p className="border-b border-border-default py-7 text-body-sm text-content-secondary">
         Last updated: {updatedAt}
       </p>
       <div className="mt-8 space-y-8">
@@ -41,6 +35,6 @@ export function LegalDocumentPage({
           </section>
         ))}
       </div>
-    </PageShell>
+    </DocumentPage>
   );
 }

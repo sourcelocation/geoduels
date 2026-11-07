@@ -1,21 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { Table, TableHead } from "../../../components/ui/Table";
 import { Heading, Text } from "../../../components/ui/typography";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { AdminPanel as Panel } from "../components/admin-primitives";
 import { formatDate } from "../lib/admin-format";
 import { requestModeratorLog } from "../lib/moderator-client";
 import type { ModerationTimelineItem } from "../types";
 
 export function EnforcementRoute(props: {
-  config: ReturnType<typeof useRuntimeConfig>;
   accessToken: string;
   canViewEnforcement: boolean;
 }) {
   const actionsQuery = useQuery({
 	queryKey: ["moderator-log", props.accessToken],
 	enabled: props.canViewEnforcement && !!props.accessToken,
-	queryFn: () => requestModeratorLog(props.config, props.accessToken),
+	queryFn: () => requestModeratorLog(props.accessToken),
   });
   if (!props.canViewEnforcement) {
     return <Panel className="p-5 text-body-sm text-content-secondary">Moderator access is required for the moderation log.</Panel>;

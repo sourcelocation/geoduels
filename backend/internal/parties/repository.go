@@ -39,8 +39,7 @@ type Store interface {
 	SetPartyMemberTeam(ctx context.Context, partyID, userID, teamID string) (int64, error)
 	TouchPartyUpdated(ctx context.Context, partyID string) error
 	TouchOpenParty(ctx context.Context, partyID string) error
-	TouchMemberSeen(ctx context.Context, partyID, userID string) (bool, error)
-	ClearMemberSeen(ctx context.Context, partyID, userID string) (bool, error)
+	NextRevision(ctx context.Context, partyID string) (int64, error)
 	ExpireParty(ctx context.Context, partyID string) error
 	ListOpenPartyIDs(ctx context.Context) ([]string, error)
 	CloseInactiveOpenParties(ctx context.Context, partyIDs []string, inactiveFor time.Duration) (int64, error)

@@ -27,16 +27,6 @@ type moderationWarning struct {
 	WithdrawnAt       *time.Time `json:"withdrawnAt,omitempty"`
 }
 
-// playerWarning is a warning as the warned player sees it.
-type playerWarning struct {
-	ID             int64      `json:"id"`
-	Category       string     `json:"category"`
-	Message        string     `json:"message"`
-	ResetNickname  string     `json:"resetNickname,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
-}
-
 // Warning routes are v1 contracts; existing moderation routes remain compatible.
 func (a *api) staffWarnings(c echo.Context) error {
 	actor, err := a.staffActor(c.Request())
@@ -98,40 +88,6 @@ func (a *api) staffWithdrawWarning(c echo.Context) error {
 		return plainTextError(c, http.StatusBadRequest, "invalid warning id")
 	}
 	if err := a.moderation.WithdrawWarning(c.Request().Context(), actor, a.resolveEntityID("user", c.Param("id")), id); err != nil {
-		return staffError(c, err)
-	}
-	return c.NoContent(http.StatusNoContent)
-}
-
-func (a *api) userWarnings(c echo.Context) error {
-	claims, _, err := a.authenticatedAccount(c.Request())
-	if err != nil {
-		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
-	}
-	warnings, err := a.moderation.PlayerWarnings(c.Request().Context(), claims.Sub)
-	if err != nil {
-		return staffError(c, err)
-	}
-	out := make([]playerWarning, len(warnings))
-	for i, w := range warnings {
-		out[i] = playerWarning{
-			ID: w.ID, Category: w.Category, Message: w.Message, ResetNickname: w.ResetNickname,
-			CreatedAt: w.CreatedAt, AcknowledgedAt: w.AcknowledgedAt,
-		}
-	}
-	return writeJSON(c, map[string]any{"warnings": out})
-}
-
-func (a *api) acknowledgeWarning(c echo.Context) error {
-	claims, _, err := a.authenticatedAccount(c.Request())
-	if err != nil {
-		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
-	}
-	id, err := warningID(c)
-	if err != nil {
-		return plainTextError(c, http.StatusBadRequest, "invalid warning id")
-	}
-	if err := a.moderation.AcknowledgeWarning(c.Request().Context(), claims.Sub, id); err != nil {
 		return staffError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

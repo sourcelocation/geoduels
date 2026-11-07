@@ -1,6 +1,10 @@
 import AdminDashboard from "../features/admin/AdminDashboard";
+import type { NextPageWithLayout } from "./_app";
 
-export default function ModeratorDashboard() {
+const ModeratorPage: NextPageWithLayout = function ModeratorPage() {
   return <AdminDashboard surface="moderator" />;
-}
+};
 
+ModeratorPage.surface = "admin";
+
+export default ModeratorPage;

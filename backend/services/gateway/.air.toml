@@ -1,0 +1,18 @@
+# Air for gateway, on this machine (Procfile), from backend/: it rebuilds and restarts the service when
+# its code changes, against compose.yaml's services (../.env, then dev.env).
+tmp_dir = "bin/air/gateway"
+env_files = ["../.env", "dev.env"]
+
+[build]
+cmd = "go build -o bin/gateway ./services/gateway"
+entrypoint = ["bin/gateway"]
+include_dir = ["services/gateway", "internal/presence", "pkg/live"]
+include_ext = ["go", "sql", "tpl", "tmpl", "html", "yaml", "yml", "json"]
+include_file = ["go.mod", "go.sum"]
+exclude_regex = ["_test\\.go$"]
+delay = 250 # ms
+send_interrupt = true
+kill_delay = "5s"
+
+[misc]
+clean_on_exit = true

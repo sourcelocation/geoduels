@@ -3,24 +3,22 @@ import { InsetList, SettingRow } from "../../../components/ui/patterns";
 import { useAppNotice } from "../../../components/ui/AppNotice";
 import { Switch } from "../../../components/ui/Switch";
 import { CenteredSpinner } from "../../../components/ui/Spinner";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { socialClient } from "../lib/social-client";
 import { useAuthState } from "../../auth/components/AuthProvider";
 
 export function SocialPrivacySettings() {
   const auth = useAuthState();
-  const config = useRuntimeConfig();
   const queryClient = useQueryClient();
   const { show } = useAppNotice();
   const enabled = auth.isRegistered;
   const settings = useQuery({
     queryKey: ["social", "settings"],
     enabled,
-    queryFn: () => socialClient.settings(config, auth.accessToken),
+    queryFn: () => socialClient.settings(auth.accessToken),
   });
   const save = useMutation({
     mutationFn: (value: NonNullable<typeof settings.data>) =>
-      socialClient.updateSettings(config, auth.accessToken, value),
+      socialClient.updateSettings(auth.accessToken, value),
     onMutate: async (value) => {
       await queryClient.cancelQueries({ queryKey: ["social", "settings"] });
       const previous = queryClient.getQueryData(["social", "settings"]);

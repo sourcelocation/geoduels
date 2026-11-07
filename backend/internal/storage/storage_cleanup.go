@@ -47,7 +47,7 @@ func (s *PGStore) CleanupStorage(n int) (StorageCleanupResult, error) {
 		rs := []struct {
 			p *int64
 			f func(context.Context, int32) (pgconn.CommandTag, error)
-		}{{&o.ExpiredReplays, q.DeleteExpiredReplays}, {&o.MatchPlans, q.DeleteMatchPlans}, {&o.MatchSessions, q.DeleteMatchSessions}, {&o.ChatMessages, q.DeleteChatMessages}, {&o.ChatConversations, q.DeleteChatConversations}, {&o.AuthSessions, q.DeleteAuthSessions}, {&o.Parties, q.DeleteParties}, {&o.MapUploadEvents, q.DeleteMapUploadEvents}, {&o.MapDailyUsers, q.DeleteMapDailyUsers}, {&o.UserNotifications, q.DeleteUserNotifications}, {&o.Leases, q.DeleteStaleLeases}, {&o.RateLimitWindows, q.DeleteRateLimitWindows}, {&o.Presence, q.DeletePresence}}
+		}{{&o.ExpiredReplays, q.DeleteExpiredReplays}, {&o.MatchPlans, q.DeleteMatchPlans}, {&o.MatchSessions, q.DeleteMatchSessions}, {&o.ChatMessages, q.DeleteChatMessages}, {&o.ChatConversations, q.DeleteChatConversations}, {&o.AuthSessions, q.DeleteAuthSessions}, {&o.Parties, q.DeleteParties}, {&o.MapUploadEvents, q.DeleteMapUploadEvents}, {&o.MapDailyUsers, q.DeleteMapDailyUsers}, {&o.InboxMessages, q.DeleteInboxMessages}, {&o.Leases, q.DeleteStaleLeases}, {&o.RateLimitWindows, q.DeleteRateLimitWindows}}
 		for _, r := range rs {
 			t, e := r.f(ctx, int32(n))
 			if e != nil {
@@ -55,14 +55,20 @@ func (s *PGStore) CleanupStorage(n int) (StorageCleanupResult, error) {
 			}
 			*r.p = t.RowsAffected()
 		}
-		if o.InterruptedMatches, e = matches.EndInterruptedMatchesTx(ctx, tx); e != nil {
+		if o.InterruptedMatches, e = matches.EndInterruptedMatchesTx(ctx, tx, s.teller); e != nil {
 			return e
 		}
-		if o.ExpiredParties, e = q.ExpireParties(ctx); e != nil {
+		expired, e := q.ExpireParties(ctx)
+		if e != nil {
 			return e
 		}
-		_, e = q.DeleteUserEvents(ctx, int32(n))
-		return e
+		o.ExpiredParties = int64(len(expired))
+		for _, party := range expired {
+			if e := s.teller.EnqueuePartyChanged(ctx, tx, party.String()); e != nil {
+				return e
+			}
+		}
+		return nil
 	})
 	return o, err
 }

@@ -1,3 +1,6 @@
+# Overmind
+.overmind.sock
+
 # Environment files
 .env
 .env.*

@@ -1,7 +1,8 @@
 package main
 
+import "context"
+
 func (a *api) close() {
-	if a.db != nil {
-		a.db.Close()
-	}
+	_ = a.jobs.Stop(context.Background())
+	a.db.Close()
 }

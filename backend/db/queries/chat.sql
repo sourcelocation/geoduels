@@ -1,11 +1,11 @@
 -- name: ActivePartyChatTeam :one
-SELECT ms.match_id AS match_id, coalesce(mp.team_id, '') AS team_id FROM parties p JOIN match_sessions ms ON ms.match_id=p.last_match_id JOIN match_participants mp ON mp.match_id=ms.match_id AND mp.user_id=sqlc.arg(user_id) WHERE p.id=sqlc.arg(party_id) AND ms.kind='team_duel' AND gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at)='live';
+SELECT ms.match_id AS match_id, coalesce(mp.team_id::text, '')::text AS team_id FROM parties p JOIN match_sessions ms ON ms.match_id=p.last_match_id JOIN match_participants mp ON mp.match_id=ms.match_id AND mp.user_id=sqlc.arg(user_id) WHERE p.id=sqlc.arg(party_id) AND ms.kind='team_duel' AND gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at)='live';
 
 -- name: ActiveRestriction :one
-SELECT CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN CASE WHEN ban_expires_at IS NULL THEN 'permanent_ban' ELSE 'temporary_ban' END ELSE 'chat_mute' END AS action_type, CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN 'ban' ELSE 'chat_mute' END AS reason_code, CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN coalesce(ban_reason,'') ELSE coalesce(chat_mute_reason,'') END AS reason_note, coalesce(CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN ban_expires_at ELSE chat_mute_expires_at END, '0001-01-01 00:00:00+00'::timestamptz) AS ends_at FROM users WHERE id=$1 AND ((banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now())) OR (chat_muted_at IS NOT NULL AND (chat_mute_expires_at IS NULL OR chat_mute_expires_at > now())));
+SELECT CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN CASE WHEN ban_expires_at IS NULL THEN 'permanent_ban' ELSE 'temporary_ban' END ELSE 'chat_mute' END AS action_type, CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN 'ban' ELSE 'chat_mute' END AS reason_code, (CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN coalesce(ban_reason,'') ELSE coalesce(chat_mute_reason,'') END)::text AS reason_note, (coalesce(CASE WHEN banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now()) THEN ban_expires_at ELSE chat_mute_expires_at END, '0001-01-01 00:00:00+00'::timestamptz))::timestamptz AS ends_at FROM users WHERE id=$1 AND ((banned_at IS NOT NULL AND (ban_expires_at IS NULL OR ban_expires_at > now())) OR (chat_muted_at IS NOT NULL AND (chat_mute_expires_at IS NULL OR chat_mute_expires_at > now())));
 
 -- name: ChatTeamForMatch :one
-SELECT coalesce(team_id, '') FROM match_participants WHERE match_id=$1 AND user_id=$2;
+SELECT coalesce(team_id::text, '')::text FROM match_participants WHERE match_id=$1 AND user_id=$2;
 
 -- name: EnsureConversation :exec
 INSERT INTO chat_conversations (id, scope_kind, scope_id) VALUES (sqlc.arg(conversation_id), sqlc.arg(scope_kind)::gd_chat_scope, sqlc.arg(scope_id)::uuid) ON CONFLICT (id) DO NOTHING;
@@ -20,3 +20,17 @@ FROM chat_messages m JOIN chat_conversations c ON c.id=m.conversation_id WHERE m
 
 -- name: MatchOver :one
 SELECT EXISTS(SELECT 1 FROM match_sessions WHERE match_id=sqlc.arg(match_id)::uuid AND gd_match_status(ended_at, node_id, node_epoch, created_at) NOT IN ('starting', 'live'));
+
+-- name: MarkConversationRead :exec
+INSERT INTO chat_reads (conversation_id, user_id, read_at) VALUES ($1, $2, now())
+ON CONFLICT (conversation_id, user_id) DO UPDATE SET read_at = now();
+
+-- name: ConversationSummaries :many
+-- How many messages each conversation holds that the viewer hasn't read, and when the last one came.
+SELECT m.conversation_id,
+       count(*) FILTER (WHERE m.sender_user_id <> sqlc.arg(viewer_user_id) AND m.created_at > coalesce(r.read_at, '-infinity'))::int AS unread,
+       max(m.created_at)::timestamptz AS last_message_at
+FROM chat_messages m
+LEFT JOIN chat_reads r ON r.conversation_id = m.conversation_id AND r.user_id = sqlc.arg(viewer_user_id)
+WHERE m.conversation_id = ANY(sqlc.arg(conversation_ids)::uuid[])
+GROUP BY m.conversation_id, r.read_at;

@@ -1,7 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Settings, Shield } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useRouter } from "next/router";
+import { createContext, useCallback, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import AvatarBadge from "../../players/components/AvatarBadge";
 import { MmrDisplay } from "../../players/components/MmrDisplay";
 import PlayerBadge from "../../players/components/PlayerBadge";
@@ -13,76 +14,102 @@ import { cn } from "../../../lib/cn";
 import {
   APP_NAV_ITEMS,
   appNavRouteStorageKey,
+  navRouteOf,
   type AppNavRoute,
 } from "../navigation";
 import { useOptionalHotkeys } from "../../hotkeys/components/HotkeyProvider";
 import { AppBackground } from "./AppBackground";
+import { socialStore } from "../../social/social-store";
 import { AppNavTasks, type AppNavTask } from "./AppNavTasks";
 import { useAuthActions, useAuthState } from "../../auth/components/AuthProvider";
 import { useAppActivities } from "./AppActivityProvider";
 
-type AppShellProps = {
-  activeNavRoute: AppNavRoute | null;
+export type AppShellOptions = {
+  // A match takes the whole screen: nothing of the app shows around it.
+  hidden?: boolean;
   backgroundBlurred?: boolean;
-  children: ReactNode;
-  navigationHidden?: boolean;
-  onlinePlayers?: number;
-  maintenanceBanner?: ReactNode;
-  tasks?: AppNavTask[];
   contentClassName?: string;
+  maintenanceBanner?: ReactNode;
   viewportLocked?: boolean;
 };
 
-export function AppShell({
-  activeNavRoute,
-  backgroundBlurred = false,
-  children,
-  navigationHidden = false,
-  onlinePlayers,
-  maintenanceBanner,
-  tasks,
-  contentClassName,
-  viewportLocked = false,
-}: AppShellProps) {
+type SetLayer = (id: string, options: AppShellOptions | null) => void;
+
+const AppShellOptionsContext = createContext<SetLayer>(() => undefined);
+
+/** Lets a page say how the frame around it should be, for as long as it's showing. */
+export function useAppShellOptions({ hidden, backgroundBlurred, contentClassName, maintenanceBanner, viewportLocked }: AppShellOptions) {
+  const setLayer = useContext(AppShellOptionsContext);
+  const id = useId();
+  useEffect(() => {
+    setLayer(id, { hidden, backgroundBlurred, contentClassName, maintenanceBanner, viewportLocked });
+    return () => setLayer(id, null);
+  }, [hidden, backgroundBlurred, contentClassName, id, maintenanceBanner, setLayer, viewportLocked]);
+}
+
+/** Everything but the admin tools is a GeoDuels page, inside this: the header, navigation and background. */
+export function AppShell({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const auth = useAuthState();
-  const globalTasks = useAppActivities();
-  const resolvedOnlinePlayers = onlinePlayers ?? auth.bootstrap?.global.onlinePlayers;
+  const tasks = useAppActivities();
+  const [layers, setLayers] = useState<ReadonlyMap<string, AppShellOptions>>(new Map());
+  const setLayer = useCallback<SetLayer>((id, options) => {
+    setLayers((current) => {
+      const next = new Map(current);
+      if (options) next.set(id, options);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const { hidden, backgroundBlurred = false, contentClassName, maintenanceBanner, viewportLocked = false } = [...layers.values()].reduce<AppShellOptions>(
+    (all, layer) => ({
+      hidden: all.hidden || layer.hidden,
+      backgroundBlurred: all.backgroundBlurred || layer.backgroundBlurred,
+      contentClassName: all.contentClassName || layer.contentClassName,
+      maintenanceBanner: all.maintenanceBanner || layer.maintenanceBanner,
+      viewportLocked: all.viewportLocked || layer.viewportLocked,
+    }),
+    {},
+  );
   return (
-    <div className={cn("relative flex flex-col overflow-hidden font-body text-content-primary selection:bg-status-success/30", viewportLocked ? "h-screen" : "min-h-screen")}>
-      <AppBackground blurred={backgroundBlurred} />
-      <AppShellHeader
-        auth={auth}
-        maintenanceBanner={maintenanceBanner}
-        navigationHidden={navigationHidden}
-        activeNavRoute={activeNavRoute}
-        onlinePlayers={resolvedOnlinePlayers}
-        tasks={tasks ?? globalTasks}
-      />
-      <div aria-hidden="true" className="h-[68px] shrink-0 sm:h-[82px] lg:h-[90px]" />
-      <div
-        className={cn(
-          "relative z-content flex min-h-0 flex-1 flex-col",
-          viewportLocked && !navigationHidden && "app-shell-mobile-nav-safe-area",
-          contentClassName,
+    <AppShellOptionsContext.Provider value={setLayer}>
+      <div className={cn("relative flex flex-col overflow-hidden font-body text-content-primary selection:bg-status-success/30", viewportLocked ? "h-screen" : "min-h-screen")}>
+        {hidden ? null : (
+          <>
+            <AppBackground blurred={backgroundBlurred} />
+            <AppShellHeader
+              auth={auth}
+              maintenanceBanner={maintenanceBanner}
+              activeNavRoute={navRouteOf(router.pathname)}
+              onlinePlayers={auth.bootstrap?.global.onlinePlayers}
+              tasks={tasks}
+            />
+            <div aria-hidden="true" className="h-[68px] shrink-0 sm:h-[82px] lg:h-[90px]" />
+          </>
         )}
-      >
-        {children}
+        <div
+          className={cn(
+            "relative flex min-h-0 flex-1 flex-col",
+            viewportLocked && "app-shell-mobile-nav-safe-area",
+            contentClassName,
+          )}
+        >
+          {children}
+        </div>
       </div>
-    </div>
+    </AppShellOptionsContext.Provider>
   );
 }
 
 function AppShellHeader({
   auth,
   maintenanceBanner,
-  navigationHidden,
   activeNavRoute,
   onlinePlayers,
   tasks,
 }: {
   auth: ReturnType<typeof useAuthState>;
   maintenanceBanner?: ReactNode;
-  navigationHidden: boolean;
   activeNavRoute: AppNavRoute | null;
   onlinePlayers?: number;
   tasks: AppNavTask[];
@@ -112,13 +139,11 @@ function AppShellHeader({
           ) : null}
         </div>
 
-        {!navigationHidden ? (
-          <AppNavigation
-            activeRoute={activeNavRoute}
-            onlinePlayers={onlinePlayers}
-            tasks={tasks}
-          />
-        ) : null}
+        <AppNavigation
+          activeRoute={activeNavRoute}
+          onlinePlayers={onlinePlayers}
+          tasks={tasks}
+        />
 
         {auth.status === "bootstrapping" ? (
           <div aria-hidden="true" className="h-9 w-20 justify-self-end" />
@@ -278,6 +303,8 @@ function AppNavLink({
   reduceMotion: boolean;
 }) {
   const Icon = item.icon;
+  const social = useSyncExternalStore(socialStore.subscribe, socialStore.getState, socialStore.getState);
+  const waiting = item.route === "friends" ? social.pending.length + social.friends.reduce((sum, friend) => sum + (friend.unread || 0), 0) : 0;
   const content = (
     <>
       {active ? (
@@ -305,6 +332,11 @@ function AppNavLink({
       >
         {item.label}
       </motion.span>
+      {waiting ? (
+        <span aria-label={`${waiting} waiting`} className="absolute right-1 top-1 rounded-full bg-status-danger px-1.5 text-caption font-strong text-content-on-action">
+          {waiting}
+        </span>
+      ) : null}
     </>
   );
   const className = cn(

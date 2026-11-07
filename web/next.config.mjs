@@ -15,12 +15,22 @@ const createNextConfig = (phase) => ({
   distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
   reactStrictMode: true,
   output: "standalone",
-  // Development's front door is this server: /api goes on to the API (compose's, at GEODUELS_API),
-  // its sockets included, as the ingress and compose's front door send it elsewhere.
+  // Pages cached on the server (lib/cached-page.ts) live in memory, up to this, and nowhere else: a
+  // page that falls out is built again on its next request.
+  cacheMaxMemorySize: 32 * 1024 * 1024,
+  experimental: { isrFlushToDisk: false },
+  // Development's front door is this server: sockets go on to the gateway and the rest of /api to the
+  // API, as the ingress and compose's front door route them.
   ...(phase === PHASE_DEVELOPMENT_SERVER && {
     async rewrites() {
-      const api = process.env.GEODUELS_API ?? "http://localhost:24001";
-      return { beforeFiles: [{ source: "/api/:path*", destination: `${api}/api/:path*` }] };
+      const api = (process.env.API_URL ??= "http://localhost:24001");
+      const gateway = process.env.GATEWAY_URL ?? "http://localhost:24002";
+      return {
+        beforeFiles: [
+          { source: "/api/live/:path*", destination: `${gateway}/api/live/:path*` },
+          { source: "/api/:path*", destination: `${api}/api/:path*` },
+        ],
+      };
     }
   }),
   outputFileTracingRoot: appRoot,
@@ -32,17 +42,6 @@ const createNextConfig = (phase) => ({
           {
             key: "Cache-Control",
             value: "public, max-age=31536000, immutable"
-          }
-        ]
-      },
-      {
-        // Avoid storing route documents so clients always fetch the latest
-        // document after a deploy, while keeping static assets cacheable.
-        source: "/((?!_next/static|_next/image|.*\\..*).*)",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "no-store"
           }
         ]
       }

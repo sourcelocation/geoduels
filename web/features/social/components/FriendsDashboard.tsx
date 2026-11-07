@@ -5,10 +5,12 @@ import { AsyncState, InsetList, SectionHeader } from "../../../components/ui/pat
 import { Button } from "../../../components/ui/button";
 import { AppPanel } from "../../../components/ui/compositions";
 import { LobbyInput } from "../../lobby/components/lobby-primitives";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { useFriendsPage } from "../hooks/useFriendsPage";
 import { socialClient } from "../lib/social-client";
-import type { CompactPlayer } from "../types";
+import { ItemActions } from "../../chat/components/ItemActions";
+import { homeRuntime } from "../../home/state/home-runtime";
+import type { Friend, PendingItem } from "../../live/events";
+import type { CompactPlayer, FriendRequest } from "../types";
 import { CompactPlayerRow } from "./CompactPlayerRow";
 import { InviteToPartyButton } from "./InviteToPartyButton";
 import { PlayerListSection } from "./PlayerListSection";
@@ -27,7 +29,6 @@ export function FriendsDashboard({
   memberUserIds?: readonly string[];
   partyCard?: React.ReactNode;
 }) {
-  const config = useRuntimeConfig();
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [copied, setCopied] = useState(false);
@@ -47,18 +48,26 @@ export function FriendsDashboard({
           partyId={partyId}
           userId={player.userId}
           displayName={player.displayName}
-          partyInvite={player.partyInvite || page.data?.friends.find((friend) => friend.userId === player.userId)?.partyInvite}
+          partyInvite={player.partyInvite || page.friends.find((friend) => friend.userId === player.userId)?.partyInvite}
         />
       ) : null}
+    </>
+  );
+  const friendRowActions = (friend: Friend) => (
+    <>
+      <Button type="button" size="sm" variant="secondary" onClick={() => homeRuntime.directChat.open(friend.conversationId)}>
+        Message{friend.unread ? ` (${friend.unread})` : ""}
+      </Button>
+      {friendActions(friend)}
     </>
   );
   const search = useQuery({
     queryKey: ["social", "search", debouncedQuery],
     enabled: enabled && debouncedQuery.length >= 2,
-    queryFn: () => socialClient.search(config, accessToken!, debouncedQuery),
+    queryFn: () => socialClient.search(accessToken!, debouncedQuery),
   });
   const code = useMutation({
-    mutationFn: () => socialClient.createCode(config, accessToken!),
+    mutationFn: () => socialClient.createCode(accessToken!),
     onSuccess: async (value) => {
       const url = `${window.location.origin}/friend/${value.code}`;
       await navigator.clipboard?.writeText(url);
@@ -79,13 +88,9 @@ export function FriendsDashboard({
   }
 
   const searchPlayers = search.data?.players || [];
-  const allFriends = page.data?.friends || [];
+  const allFriends = page.friends;
   const offlineFriends = allFriends.filter((player) => player.presenceStatus !== "online");
   const onlineFriends = allFriends.filter((player) => player.presenceStatus === "online");
-  const pendingRequests = [
-    ...(page.data?.requests.incoming || []).map((request) => ({ ...request, direction: "incoming" as const })),
-    ...(page.data?.requests.outgoing || []).map((request) => ({ ...request, direction: "outgoing" as const })),
-  ];
   return (
     <div className="w-full max-w-[820px] space-y-5">
       {partyCard}
@@ -121,51 +126,47 @@ export function FriendsDashboard({
           />
         ) : null}
 
-        {pendingRequests.length ? <RequestSection requests={pendingRequests} token={accessToken!} /> : null}
+        {page.pending.length ? <PendingSection pending={page.pending} /> : null}
+        {page.outgoing.length ? <SentSection requests={page.outgoing} token={accessToken!} /> : null}
         {page.isLoading ? <AsyncState status="loading" message="Loading friends" className="mt-5" /> : null}
         {!page.isLoading && !allFriends.length ? <AsyncState status="empty" message="No friends (yet!)" className="mt-5" /> : null}
-        {onlineFriends.length ? (
-          <PlayerListSection
-            title="Online"
-            players={onlineFriends}
-            renderActions={friendActions}
-          />
-        ) : null}
-        {offlineFriends.length ? (
-          <PlayerListSection
-            title="Offline"
-            players={offlineFriends}
-            renderActions={friendActions}
-          />
-        ) : null}
-        {(page.data?.recentPlayers.length || 0) > 0 ? (
-          <PlayerListSection
-            title="Recently played"
-            players={(page.data?.recentPlayers || []).slice(0, 3)}
-            renderActions={friendActions}
-          />
+        {onlineFriends.length ? <PlayerListSection title="Online" players={onlineFriends} renderActions={friendRowActions} /> : null}
+        {offlineFriends.length ? <PlayerListSection title="Offline" players={offlineFriends} renderActions={friendRowActions} /> : null}
+        {page.recentPlayers.length ? (
+          <PlayerListSection title="Recently played" players={page.recentPlayers.slice(0, 3)} renderActions={friendActions} />
         ) : null}
       </AppPanel>
     </div>
   );
 }
 
-function RequestSection({
-  requests,
-  token,
-}: {
-  requests: Array<{ id: string; player: CompactPlayer; direction: "incoming" | "outgoing" }>;
-  token: string;
-}) {
+function PendingSection({ pending }: { pending: PendingItem[] }) {
   return (
     <section className="mt-5">
-      <SectionHeader title="Pending requests" className="mb-3" />
+      <SectionHeader title="Waiting for you" className="mb-3" />
+      <InsetList>
+        {pending.map(({ item, player }) => (
+          <CompactPlayerRow
+            key={item.id}
+            player={player}
+            meta={<span className="text-label text-content-secondary">{item.body}</span>}
+            actions={<ItemActions actions={item.actions ?? []} />}
+          />
+        ))}
+      </InsetList>
+    </section>
+  );
+}
+
+function SentSection({ requests, token }: { requests: FriendRequest[]; token: string }) {
+  return (
+    <section className="mt-5">
+      <SectionHeader title="Sent requests" className="mb-3" />
       <InsetList>
         {requests.map((request) => (
           <CompactPlayerRow
             key={request.id}
-            player={{ ...request.player, requestId: request.id }}
-            meta={<span className="text-label text-content-secondary">{request.direction === "incoming" ? "Incoming" : "Sent"}</span>}
+            player={request.player}
             actions={<RelationshipActions accessToken={token} player={{ ...request.player, requestId: request.id }} />}
           />
         ))}

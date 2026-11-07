@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import type { PublicPlayerProfile } from "../../players/types";
 import { socialClient } from "../lib/social-client";
 import { RelationshipActions } from "./RelationshipActions";
@@ -21,11 +20,10 @@ function ConnectedProfileSocialActions({
   profile: PublicPlayerProfile;
 }) {
   const auth = useAuthState();
-  const config = useRuntimeConfig();
   const relationship = useQuery({
     queryKey: ["relationship", profile.userId],
     enabled: auth.isRegistered && auth.userId !== profile.userId,
-    queryFn: () => socialClient.relationship(config, auth.accessToken, profile.displayName),
+    queryFn: () => socialClient.relationship(auth.accessToken, profile.displayName),
   });
   if (!auth.isRegistered || auth.userId === profile.userId || !relationship.data) return null;
   const player = {

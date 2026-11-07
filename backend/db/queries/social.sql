@@ -31,9 +31,6 @@ insert into friend_codes(code,user_id,expires_at) values($1,$2,$3);
 -- name: InsertFriendship :exec
 insert into friendships(user_id_low,user_id_high,created_from_request_id) values(least(sqlc.arg(user_a)::uuid,sqlc.arg(user_b)::uuid),greatest(sqlc.arg(user_a)::uuid,sqlc.arg(user_b)::uuid),sqlc.arg(created_from_request_id)) on conflict do nothing;
 
--- name: InsertUserEvent :exec
-insert into user_events(user_id,sequence,type,payload_json) values(sqlc.arg(user_id),sqlc.arg(event_sequence),sqlc.arg(event_type),convert_from(sqlc.arg(payload_json), 'UTF8')::jsonb);
-
 -- name: ListFriends :many
 with friend_ids as (select case when user_id_low=$1 then user_id_high else user_id_low end user_id,created_at from friendships where user_id_low=$1 or user_id_high=$1)
 select u.id user_id,coalesce(nullif(u.display_name,''),u.id::text)::text display_name,coalesce(u.avatar_url,'') avatar_url,coalesce(r.mmr,1000)::int mmr,(case when u.social_presence_visible then u.last_seen_at end)::timestamptz last_seen_at from friend_ids f join users u on u.id=f.user_id left join ranks r on r.user_id=u.id and r.mode='duel' and r.season_id=sqlc.arg(season_id) where gd_is_registered(u.id) order by f.created_at desc limit sqlc.arg(row_limit);
@@ -57,18 +54,6 @@ select pi.id invitation_id,p.id party_id,p.invite_code,p.mode,count(pm.user_id):
 with recent as (select mp2.user_id,max(h.ended_at) shared_at from match_players mine join match_history h on h.match_id=mine.match_id join match_players mp2 on mp2.match_id=h.match_id and mp2.user_id<>sqlc.arg(self_user_id) where mine.user_id=sqlc.arg(self_user_id) and h.ended_at is not null group by mp2.user_id)
 select u.id user_id,u.display_name,coalesce(u.avatar_url,'') avatar_url,coalesce(r.mmr,1000)::int mmr,u.last_seen_at,recent.shared_at::timestamptz shared_at from recent join users u on u.id=recent.user_id left join ranks r on r.user_id=u.id and r.mode='duel' and r.season_id=sqlc.arg(season_id) where gd_is_registered(u.id) and u.nickname_claimed_at is not null and u.social_discoverable and not exists(select 1 from friendships f where f.user_id_low=least(sqlc.arg(self_user_id)::uuid,u.id) and f.user_id_high=greatest(sqlc.arg(self_user_id)::uuid,u.id)) and not exists(select 1 from friend_requests fr where fr.status='pending' and least(fr.sender_user_id,fr.recipient_user_id)=least(sqlc.arg(self_user_id)::uuid,u.id) and greatest(fr.sender_user_id,fr.recipient_user_id)=greatest(sqlc.arg(self_user_id)::uuid,u.id)) and not exists(select 1 from user_blocks b where (b.blocker_user_id=sqlc.arg(self_user_id) and b.blocked_user_id=u.id) or (b.blocker_user_id=u.id and b.blocked_user_id=sqlc.arg(self_user_id))) order by recent.shared_at desc limit sqlc.arg(row_limit);
 
--- name: ListUserEvents :many
-select sequence,type,payload_json payload,created_at from user_events where user_id=$1 and sequence>$2 order by sequence limit $3;
-
--- name: MarkFriendRequestNotificationRead :exec
-update user_notifications set read_at=coalesce(read_at,now()), payload_json=coalesce(payload_json,'{}'::jsonb)-'requestId' where dedupe_key='friend_request:'||sqlc.arg(request_id);
-
--- name: MarkPartyInvitationNotificationRead :exec
-update user_notifications set read_at=coalesce(read_at,now()) where user_id=$1 and dedupe_key='party_invitation:'||sqlc.arg(invitation_id);
-
--- name: NextUserEventSequence :one
-insert into user_event_sequences(user_id,sequence) values($1,1) on conflict(user_id) do update set sequence=user_event_sequences.sequence+1 returning sequence;
-
 -- name: PartyInvitationEligibility :one
 select p.invite_code,p.mode,count(pm.user_id)::int member_count from parties p join party_members self on self.party_id=p.id and self.user_id=sqlc.arg(inviter_user_id) and self.left_at is null left join party_members pm on pm.party_id=p.id and pm.left_at is null where p.id=sqlc.arg(party_id) and p.state='open' and p.expires_at>now() and exists(select 1 from friendships f where f.user_id_low=least(sqlc.arg(inviter_user_id)::uuid,sqlc.arg(recipient_user_id)::uuid) and f.user_id_high=greatest(sqlc.arg(inviter_user_id)::uuid,sqlc.arg(recipient_user_id)::uuid)) and exists(select 1 from users u where u.id=sqlc.arg(recipient_user_id) and u.social_party_invites_enabled) and not exists(select 1 from user_blocks b where (b.blocker_user_id=sqlc.arg(inviter_user_id) and b.blocked_user_id=sqlc.arg(recipient_user_id)) or (b.blocker_user_id=sqlc.arg(recipient_user_id) and b.blocked_user_id=sqlc.arg(inviter_user_id))) group by p.id;
 
@@ -89,7 +74,7 @@ delete from user_blocks where blocker_user_id=$1 and blocked_user_id=$2;
 select u.id user_id,u.display_name,coalesce(u.avatar_url,'') avatar_url,coalesce(r.mmr,1000)::int mmr,u.last_seen_at from friend_codes fc join users u on u.id=fc.user_id left join ranks r on r.user_id=u.id and r.mode='duel' and r.season_id=sqlc.arg(season_id) where fc.code=sqlc.arg(code) and fc.revoked_at is null and fc.expires_at>now() and u.id<>sqlc.arg(self_user_id) and gd_is_registered(u.id) and u.social_requests_enabled and not exists(select 1 from user_blocks b where (b.blocker_user_id=sqlc.arg(self_user_id) and b.blocked_user_id=u.id) or (b.blocker_user_id=u.id and b.blocked_user_id=sqlc.arg(self_user_id)));
 
 -- name: RespondPartyInvitation :one
-update party_invitations pi set status=$3,responded_at=now() from parties p where pi.id=$1 and pi.recipient_user_id=$2 and pi.status='pending' and pi.expires_at>now() and p.id=pi.party_id and p.state='open' and p.expires_at>now() returning pi.id AS invitation_id,p.id AS party_id,p.invite_code,p.mode,pi.expires_at;
+update party_invitations pi set status=$3,responded_at=now() from parties p where pi.id=$1 and pi.recipient_user_id=$2 and pi.status='pending' and pi.expires_at>now() and p.id=pi.party_id and p.state='open' and p.expires_at>now() returning pi.id AS invitation_id,p.id AS party_id,p.invite_code,p.mode,pi.expires_at,pi.inviter_user_id;
 
 -- name: RevokeFriendCodes :exec
 update friend_codes set revoked_at=now() where user_id=$1 and revoked_at is null;
@@ -102,3 +87,10 @@ insert into friend_requests(id,sender_user_id,recipient_user_id,expires_at) valu
 
 -- name: UpsertPartyInvitation :one
 insert into party_invitations(id,party_id,inviter_user_id,recipient_user_id,expires_at,created_at) values($1,$2,$3,$4,$5,$6) on conflict(party_id,recipient_user_id) where status='pending' do update set inviter_user_id=excluded.inviter_user_id,expires_at=excluded.expires_at,created_at=excluded.created_at returning id,created_at,expires_at;
+
+-- name: SocialDisplayName :one
+select coalesce(nullif(display_name,''),id::text)::text from users where id=$1;
+
+-- name: FriendRequestOther :one
+-- The other person in a friend request, for either of them.
+select (case when sender_user_id=sqlc.arg(user_id) then recipient_user_id else sender_user_id end)::uuid from friend_requests where id=sqlc.arg(request_id) and sqlc.arg(user_id) in (sender_user_id,recipient_user_id);

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"geoduels/internal/jobs"
 	"log"
 	"time"
 
@@ -21,7 +22,11 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
-	maintenance := storage.NewPGStore(store.Pool())
+	producer, err := jobs.NewClient(store.Pool(), "", nil, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	maintenance := storage.NewPGStore(store.Pool(), producer)
 
 	var total storage.StorageCleanupResult
 	for batch := 1; *maxBatches == 0 || batch <= *maxBatches; batch++ {
@@ -53,10 +58,9 @@ func add(a, b storage.StorageCleanupResult) storage.StorageCleanupResult {
 		Parties:           a.Parties + b.Parties,
 		MapUploadEvents:   a.MapUploadEvents + b.MapUploadEvents,
 		MapDailyUsers:     a.MapDailyUsers + b.MapDailyUsers,
-		UserNotifications: a.UserNotifications + b.UserNotifications,
+		InboxMessages:     a.InboxMessages + b.InboxMessages,
 		Leases:            a.Leases + b.Leases,
 		RateLimitWindows:  a.RateLimitWindows + b.RateLimitWindows,
-		Presence:          a.Presence + b.Presence,
 		// The sweep and party expiry finish in the first batch; later batches find nothing.
 		InterruptedMatches: a.InterruptedMatches + b.InterruptedMatches,
 		ExpiredParties:     a.ExpiredParties + b.ExpiredParties,

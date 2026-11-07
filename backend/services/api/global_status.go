@@ -2,125 +2,48 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
+	"geoduels/internal/presence"
 	"geoduels/pkg/maintenance"
 )
 
-type globalStatusSnapshot struct {
-	OnlinePlayers int                `json:"onlinePlayers"`
-	Maintenance   maintenance.Status `json:"maintenance"`
-	ObservedAt    time.Time          `json:"observedAt"`
+const statusRefreshEvery = 10 * time.Second
+
+// statusCache is the online count and maintenance status, read at most this often however many ask.
+type statusCache struct {
+	api   *api
+	value atomic.Pointer[statusEvent]
 }
 
-type globalStatusHub struct {
-	api         *api
-	mu          sync.RWMutex
-	snapshot    globalStatusSnapshot
-	fingerprint string
-	subscribers map[chan globalStatusSnapshot]struct{}
-	startOnce   sync.Once
+func newStatusCache(a *api) *statusCache {
+	cache := &statusCache{api: a}
+	cache.value.Store(&statusEvent{Maintenance: maintenance.DefaultStatus()})
+	return cache
 }
 
-func newGlobalStatusHub(a *api) *globalStatusHub {
-	return &globalStatusHub{
-		api: a,
-		snapshot: globalStatusSnapshot{
-			Maintenance: maintenance.DefaultStatus(),
-			ObservedAt:  time.Now(),
-		},
-		subscribers: make(map[chan globalStatusSnapshot]struct{}),
+func (s *statusCache) current() statusEvent { return *s.value.Load() }
+
+func (s *statusCache) run() {
+	s.refresh()
+	ticker := time.NewTicker(statusRefreshEvery)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.refresh()
 	}
 }
 
-func (h *globalStatusHub) start() {
-	if h == nil {
-		return
-	}
-	h.startOnce.Do(func() {
-		go func() {
-			h.refresh()
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				h.refresh()
-			}
-		}()
-	})
-}
-
-func (h *globalStatusHub) refresh() {
-	if h.api.presence == nil {
-		return
-	}
+func (s *statusCache) refresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	online, err := h.api.presence.CountOnline(ctx)
+	online, err := presence.Count(ctx, s.api.db.Pool())
 	if err != nil {
 		return
 	}
-	status, err := h.api.maintenanceStatus(ctx)
+	status, err := s.api.maintenanceStatus(ctx)
 	if err != nil {
 		return
 	}
-	next := globalStatusSnapshot{
-		OnlinePlayers: online,
-		Maintenance:   status,
-		ObservedAt:    time.Now(),
-	}
-	body, _ := json.Marshal(struct {
-		OnlinePlayers int                `json:"onlinePlayers"`
-		Maintenance   maintenance.Status `json:"maintenance"`
-	}{online, status})
-	fingerprint := string(body)
-
-	h.mu.Lock()
-	changed := fingerprint != h.fingerprint
-	h.snapshot = next
-	h.fingerprint = fingerprint
-	if changed {
-		for subscriber := range h.subscribers {
-			select {
-			case subscriber <- next:
-			default:
-			}
-		}
-	}
-	h.mu.Unlock()
-}
-
-func (h *globalStatusHub) current() globalStatusSnapshot {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.snapshot
-}
-
-func (h *globalStatusHub) subscribe() (<-chan globalStatusSnapshot, func()) {
-	channel := make(chan globalStatusSnapshot, 1)
-	h.mu.Lock()
-	h.subscribers[channel] = struct{}{}
-	channel <- h.snapshot
-	h.mu.Unlock()
-	return channel, func() {
-		h.mu.Lock()
-		delete(h.subscribers, channel)
-		close(channel)
-		h.mu.Unlock()
-	}
-}
-
-func (a *api) statusHub() *globalStatusHub {
-	if a.globalStatus == nil {
-		a.globalStatus = newGlobalStatusHub(a)
-		a.globalStatus.start()
-	}
-	return a.globalStatus
-}
-
-func (a *api) publicGlobalStatus(c echo.Context) error {
-	return writeJSON(c, a.statusHub().current())
+	s.value.Store(&statusEvent{OnlinePlayers: online, Maintenance: status})
 }

@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { setSfxMuted } from "../../../lib/audio/sfx-preferences";
 import { useAuthState } from "../../auth/components/AuthProvider";
 import { bindingKey, DEFAULT_HOTKEY_PREFERENCES } from "../model/defaults";
@@ -43,7 +42,6 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     saveLocalPreferences(next);
   }, []);
   const auth = useAuthState();
-  const config = useRuntimeConfig();
 
   useEffect(() => {
     setSfxMuted(preferences.sfxMuted);
@@ -77,7 +75,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
       const sync = syncRef.current;
       if (!sync) return;
       try {
-        const saved = await patchPreferences(config, sync.token, preferencesRef.current, sync.revision);
+        const saved = await patchPreferences(sync.token, preferencesRef.current, sync.revision);
         sync.revision = saved.revision;
         setSaveStatus("saved");
       } catch {
@@ -85,7 +83,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [config, preferences]);
+  }, [preferences]);
 
   const register = useCallback((registration: HotkeyRegistration) => {
     const id = ++registrationId.current;

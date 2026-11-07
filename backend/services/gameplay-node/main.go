@@ -140,7 +140,7 @@ func main() {
 		internalURL: internalURL,
 		internal:    internalSecret,
 		db:          db,
-		persist:     matches.NewPGStore(db.Pool(), jobsClient.EnqueueMatchAnalyze),
+		persist:     matches.NewPGStore(db.Pool(), jobsClient.EnqueueMatchAnalyze, jobsClient),
 		maps:        mapStore,
 		leases:      leases,
 		plans:       plans,

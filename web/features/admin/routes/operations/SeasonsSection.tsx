@@ -17,7 +17,7 @@ export function SeasonsSection(props: OperationsSectionProps) {
   const seasonQuery = useQuery({
     queryKey: ["admin-ranked-season", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminRankedSeason(props.config, props.accessToken),
+    queryFn: () => requestAdminRankedSeason(props.accessToken),
   });
 
   useEffect(() => {
@@ -26,7 +26,7 @@ export function SeasonsSection(props: OperationsSectionProps) {
   }, [seasonQuery.data?.monthlyResetDay]);
 
   const saveSeasonResetRule = useMutation({
-    mutationFn: () => requestAdminSetRankedSeasonResetRule(props.config, props.accessToken, Number(monthlyResetDay)),
+    mutationFn: () => requestAdminSetRankedSeasonResetRule(props.accessToken, Number(monthlyResetDay)),
     onSuccess: props.refreshAdminData,
   });
 

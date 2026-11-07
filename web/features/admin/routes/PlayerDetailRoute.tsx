@@ -8,7 +8,6 @@ import { Input } from "../../../components/ui/input";
 import { CenteredSpinner } from "../../../components/ui/Spinner";
 import { Table, TableHead } from "../../../components/ui/Table";
 import { Heading, Text } from "../../../components/ui/typography";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { AdminDetailRow as DetailRow, AdminMetric as Metric, AdminPanel as Panel } from "../components/admin-primitives";
 import { formatDate } from "../lib/admin-format";
 import { requestAdminBanPlayer, requestAdminPlayerDetail, requestAdminUnbanPlayer } from "../lib/admin-client";
@@ -16,7 +15,6 @@ import { requestModeratorSubject, requestModeratorSubjectMute, requestModeratorS
 import type { ModerationSubjectProfile, PlayerDetail } from "../types";
 
 export function PlayerDetailRoute(props: {
-  config: ReturnType<typeof useRuntimeConfig>;
   accessToken: string;
   userId: string;
   canManageAdmin: boolean;
@@ -31,25 +29,25 @@ export function PlayerDetailRoute(props: {
     enabled: !!props.accessToken && !!props.userId,
     queryFn: () =>
       moderatorSubject
-        ? requestModeratorSubject(props.config, props.accessToken, props.userId)
-        : requestAdminPlayerDetail(props.config, props.accessToken, props.userId),
+        ? requestModeratorSubject(props.accessToken, props.userId)
+        : requestAdminPlayerDetail(props.accessToken, props.userId),
     refetchOnMount: false,
     staleTime: 30_000,
   });
   const banMutation = useMutation({
-    mutationFn: () => requestAdminBanPlayer(props.config, props.accessToken, props.userId, banReason),
+    mutationFn: () => requestAdminBanPlayer(props.accessToken, props.userId, banReason),
     onSuccess: props.refreshAdminData,
   });
   const unbanMutation = useMutation({
     mutationFn: () =>
       moderatorSubject
-        ? requestModeratorSubjectUnban(props.config, props.accessToken, props.userId, banReason)
-        : requestAdminUnbanPlayer(props.config, props.accessToken, props.userId),
+        ? requestModeratorSubjectUnban(props.accessToken, props.userId, banReason)
+        : requestAdminUnbanPlayer(props.accessToken, props.userId),
     onSuccess: props.refreshAdminData,
   });
   const muteMutation = useMutation({
 	mutationFn: ({ kind, muted }: { kind: "chat" | "report"; muted: boolean }) =>
-	  requestModeratorSubjectMute(props.config, props.accessToken, props.userId, kind, banReason, muted),
+	  requestModeratorSubjectMute(props.accessToken, props.userId, kind, banReason, muted),
 	onSuccess: props.refreshAdminData,
   });
   const detail = detailQuery.data as (PlayerDetail & Partial<ModerationSubjectProfile>) | undefined;
@@ -148,7 +146,7 @@ export function PlayerDetailRoute(props: {
         </Panel>
       </div>
 
-      <PlayerWarnings config={props.config} accessToken={props.accessToken} userId={props.userId}
+      <PlayerWarnings accessToken={props.accessToken} userId={props.userId}
         onChanged={async () => { await detailQuery.refetch(); await props.refreshAdminData(); }} />
 
       {moderatorSubject ? (

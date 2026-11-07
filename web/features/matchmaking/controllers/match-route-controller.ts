@@ -1,5 +1,5 @@
 import type { Snapshot } from '../../game/model/types';
-import { ObservableStore } from '../../../lib/observable-store';
+import { Listeners } from "../../../lib/listeners";
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
 import type { MatchController } from './match-controller';
@@ -9,7 +9,6 @@ import {
   isOpenMatch,
   type MatchView
 } from '../lib/queue-client';
-import type { RuntimeConfig } from '../../../lib/runtime-config';
 
 export type MatchRouteStatus =
   | 'idle'
@@ -36,8 +35,9 @@ const initialState: MatchRouteState = {
   view: null
 };
 
-export class MatchRouteController extends ObservableStore<MatchRouteState> {
-  private readonly config: RuntimeConfig;
+export class MatchRouteController {
+  private readonly listeners = new Listeners();
+  readonly subscribe = this.listeners.subscribe;
   private readonly sessionController: SessionController;
   private readonly matchController: MatchController;
   private state: MatchRouteState = initialState;
@@ -47,9 +47,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
   private destroyed = false;
   private unsubscribeMatch: (() => void) | null = null;
 
-  constructor(params: { config: RuntimeConfig; sessionController: SessionController; matchController: MatchController }) {
-    super();
-    this.config = params.config;
+  constructor(params: { sessionController: SessionController; matchController: MatchController }) {
     this.sessionController = params.sessionController;
     this.matchController = params.matchController;
   }
@@ -99,20 +97,12 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     void this.resolve(nextMatchId);
   };
 
-  // acceptPartyMatch joins the match a party just started, which its member is seated in.
-  acceptPartyMatch = async (matchId: string) => {
-    this.clearPendingWork();
-    const seq = this.resolveSeq;
+  // acceptStartedMatch goes to a match the server just seated this player in, the same way opening
+  // its page would.
+  acceptStartedMatch = (matchId: string) => {
+    if (!this.matchController.matchStarted(matchId)) return;
     this.patchState({ targetMatchId: matchId, status: 'awaiting_first_snapshot', historySnapshot: null, view: null });
-    const current = this.matchController.getState();
-    // A refresh on the live match may already have established its connection.
-    if (current.activeMatchId === matchId && current.connected) {
-      if (current.snapshot?.matchId === matchId) this.patchState({ status: 'idle' });
-      return true;
-    }
-    const ok = await this.matchController.resumeMatch(matchId, undefined, { playMatchFoundSfx: true });
-    if (!ok && seq === this.resolveSeq) this.patchState({ status: 'missing' });
-    return ok;
+    void this.resolve(matchId);
   };
 
   reset = () => {
@@ -123,7 +113,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
   private patchState(patch: Partial<MatchRouteState>) {
     this.state = { ...this.state, ...patch };
     if (!this.destroyed) {
-      this.emit();
+      this.listeners.emit();
     }
   }
 
@@ -150,7 +140,6 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     };
     this.sessionController.applySessionSnapshot(sessionSnapshot, {
       isGuest: typeof auth.user?.isGuest === 'boolean' ? auth.user.isGuest : false,
-      leaderboard: null,
       authLoading: false,
       authError: ''
     });
@@ -189,7 +178,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     try {
       const existingSession = this.sessionController.getSessionSnapshot();
       this.patchState({ status: 'resolving' });
-      const publicView = await fetchMatchView(this.config, matchId, requestController.signal, existingSession?.accessToken);
+      const publicView = await fetchMatchView(matchId, requestController.signal, existingSession?.accessToken);
       if (!publicView.signInRequired) {
         await this.handleView(matchId, publicView, seq);
         return;
@@ -197,7 +186,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
 
       if (!this.sessionController.getSessionSnapshot()) {
         this.patchState({ status: 'bootstrapping_auth' });
-        const bootstrapped = await bootstrapMatchView(this.config, matchId, requestController.signal);
+        const bootstrapped = await bootstrapMatchView(matchId, requestController.signal);
         if (!bootstrapped) {
           if (seq === this.resolveSeq && this.state.targetMatchId === matchId) {
             this.patchState({ status: 'forbidden' });
@@ -218,7 +207,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
       }
 
       this.patchState({ status: 'resolving' });
-      const view = await fetchMatchView(this.config, matchId, requestController.signal, session.accessToken);
+      const view = await fetchMatchView(matchId, requestController.signal, session.accessToken);
       await this.handleView(matchId, view, seq);
     } catch (error: any) {
       if (error?.name === 'AbortError') return;

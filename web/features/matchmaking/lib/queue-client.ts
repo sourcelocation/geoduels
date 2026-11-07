@@ -1,7 +1,6 @@
-import type { RuntimeConfig } from '../../../lib/runtime-config';
-import { apiFetch, apiSocketURL, authHeaders, mergeHeaders } from '../../../lib/http';
+
+import { apiFetch, apiSocketURL, authHeaders, mergeHeaders, readError } from '../../../lib/http';
 import type { MatchKind, Snapshot } from '../../game/model/types';
-import type { AuthSessionSnapshot } from '../../auth/session';
 
 export type GameRuleset = 'moving' | 'no_move' | 'nmpz';
 export type StreetNamesVisibility = 'shown' | 'hidden';
@@ -30,11 +29,6 @@ export type MatchReturnTarget =
   | { kind: 'map'; mapId: string }
   | { kind: 'party'; partyId: string; partyInviteCode?: string };
 
-export type QueueEvent =
-  | { type: 'queue_status'; status: string; queuedAt?: number }
-  | { type: 'match_found'; matchId: string }
-  | { type: 'queue_error'; message: string };
-
 export type MaintenancePhase = 'normal' | 'warning' | 'active';
 
 export type MaintenanceStatus = {
@@ -46,161 +40,17 @@ export type MaintenanceStatus = {
   message: string;
 };
 
-// How the queue's one connection ended: matched ('done'), asked to reconnect by a server that is
-// restarting, or never reached a server at all, as while a restarting server's address moves over.
-type QueueOutcome = 'done' | 'reconnect' | 'unreachable';
-
-// A queue server that restarts asks its clients to reconnect, and another one serves them. Opening a
-// connection that reaches no server is tried a few more times before the queue counts as unavailable.
-const QUEUE_ATTEMPTS = 6;
-const QUEUE_RETRY_MS = 750;
-
-export async function streamQueue(
-  config: RuntimeConfig,
-  session: AuthSessionSnapshot,
-  signal: AbortSignal,
-  queues: QueueVariant[],
-  onEvent: (event: QueueEvent) => void
-) {
-  let unreachable = 0;
-  for (;;) {
-    const outcome = await openQueue(config, session, signal, queues, onEvent);
-    if (outcome === 'done') return;
-    if (outcome === 'reconnect') {
-      unreachable = 0;
-    } else if (++unreachable >= QUEUE_ATTEMPTS) {
-      throw new Error('Queue unavailable');
-    }
-    await waitOrAbort(QUEUE_RETRY_MS, signal);
-  }
+export async function enterQueue(token: string, queues: QueueVariant[]) {
+  const response = await apiFetch('/api/v2/queue', {
+    method: 'POST',
+    headers: mergeHeaders(authHeaders(token), { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ queues: queues.join(',') }),
+  });
+  if (!response.ok) throw new Error(await readError(response, 'Queue unavailable'));
 }
 
-function waitOrAbort(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new DOMException('Aborted', 'AbortError'));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-function openQueue(
-  config: RuntimeConfig,
-  session: AuthSessionSnapshot,
-  signal: AbortSignal,
-  queues: QueueVariant[],
-  onEvent: (event: QueueEvent) => void
-): Promise<QueueOutcome> {
-  const selectedQueues = (queues.length ? queues : ['moving']).join(',');
-  const target = `${apiSocketURL(config, '/api/v2/queue/ws')}?accessToken=${encodeURIComponent(session.accessToken)}&queues=${encodeURIComponent(selectedQueues)}`;
-
-  return new Promise<QueueOutcome>((resolve, reject) => {
-    let settled = false;
-    let found = false;
-    let heard = false;
-    let reconnect = false;
-    const ws = new WebSocket(target);
-
-    const cleanup = () => {
-      signal.removeEventListener('abort', abort);
-    };
-
-    const settleResolve = (outcome: QueueOutcome) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(outcome);
-    };
-
-    const settleReject = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-
-    const abort = () => {
-      ws.close();
-      settleReject(new DOMException('Aborted', 'AbortError'));
-    };
-
-    signal.addEventListener('abort', abort, { once: true });
-
-    ws.onerror = () => {
-      if (!heard) {
-        settleResolve('unreachable');
-        return;
-      }
-      settleReject(new Error('Queue unavailable'));
-    };
-
-    ws.onclose = () => {
-      if (signal.aborted) {
-        settleReject(new DOMException('Aborted', 'AbortError'));
-        return;
-      }
-      if (found) {
-        settleResolve('done');
-        return;
-      }
-      if (reconnect) {
-        settleResolve('reconnect');
-        return;
-      }
-      if (!heard) {
-        settleResolve('unreachable');
-        return;
-      }
-      settleReject(new Error('Search cancelled'));
-    };
-
-    ws.onmessage = (evt) => {
-      heard = true;
-      let msg: any;
-      try {
-        msg = JSON.parse(String(evt.data));
-      } catch {
-        settleReject(new Error('Queue unavailable'));
-        return;
-      }
-
-      const eventName = typeof msg?.type === 'string' ? msg.type : '';
-      const payload = msg?.payload ?? {};
-
-      try {
-        if (eventName === 'queue_status') {
-          const queuedAt = typeof payload?.queuedAt === 'number' && Number.isFinite(payload.queuedAt) ? payload.queuedAt : undefined;
-          onEvent({ type: 'queue_status', status: payload?.status || 'queueing', queuedAt });
-          return;
-        }
-        if (eventName === 'match_found') {
-          const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
-          if (!matchId) return;
-          found = true;
-          onEvent({ type: 'match_found', matchId });
-          return;
-        }
-        if (eventName === 'queue_reconnect') {
-          reconnect = true;
-          return;
-        }
-        if (eventName === 'queue_error') {
-          onEvent({ type: 'queue_error', message: payload?.message || 'Queue failed' });
-        }
-      } catch (error: any) {
-        settleReject(error instanceof Error ? error : new Error(error?.message || 'Queue failed'));
-      }
-    };
-  });
+export async function leaveQueue(token: string) {
+  await apiFetch('/api/v2/queue', { method: 'DELETE', headers: authHeaders(token) });
 }
 
 export type MatchViewStatus = 'starting' | 'live' | 'ended' | 'interrupted' | 'missing' | 'forbidden';
@@ -271,12 +121,11 @@ export function normalizeMatchView(data: any, fallbackMatchId: string): MatchVie
 
 // fetchMatchView reads what the viewer (anonymous without a token) sees of a match.
 export async function fetchMatchView(
-  config: RuntimeConfig,
   matchId: string,
   signal: AbortSignal,
   accessToken?: string
 ): Promise<MatchView> {
-  const resp = await apiFetch(config, `/api/v2/matches/${encodeURIComponent(matchId)}`, {
+  const resp = await apiFetch(`/api/v2/matches/${encodeURIComponent(matchId)}`, {
     headers: authHeaders(accessToken),
     signal
   });
@@ -302,11 +151,10 @@ export type MatchBootstrapResponse = {
 
 // bootstrapMatchView restores the session from the refresh cookie and reads the match as that player.
 export async function bootstrapMatchView(
-  config: RuntimeConfig,
   matchId: string,
   signal: AbortSignal
 ): Promise<MatchBootstrapResponse | null> {
-  const resp = await apiFetch(config, `/api/v2/matches/${encodeURIComponent(matchId)}/bootstrap`, {
+  const resp = await apiFetch(`/api/v2/matches/${encodeURIComponent(matchId)}/bootstrap`, {
     credentials: 'include',
     signal
   });
@@ -333,13 +181,12 @@ export async function bootstrapMatchView(
 
 // startSoloMatch starts a match the player plays alone and returns its view once a node runs it.
 export async function startSoloMatch(
-  config: RuntimeConfig,
   accessToken: string,
   signal: AbortSignal,
   matchConfig?: MatchConfig,
   returnTarget?: MatchReturnTarget,
 ): Promise<MatchView> {
-  const resp = await apiFetch(config, '/api/v2/matches', {
+  const resp = await apiFetch('/api/v2/matches', {
     method: 'POST',
     headers: mergeHeaders(authHeaders(accessToken), { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ kind: 'solo', config: matchConfig || {}, ...(returnTarget ? { returnTarget } : {}) }),
@@ -359,7 +206,7 @@ export async function startSoloMatch(
   return normalizeMatchView(await resp.json(), '');
 }
 
-// matchSocketURL is where a seated player connects to play a match.
-export function matchSocketURL(config: RuntimeConfig, matchId: string, accessToken: string) {
-  return `${apiSocketURL(config, `/api/v2/matches/${encodeURIComponent(matchId)}/ws`)}?accessToken=${encodeURIComponent(accessToken)}`;
+// matchSocketURL is where a seated player connects to play a match. The session cookie says who they are.
+export function matchSocketURL(matchId: string) {
+  return apiSocketURL(`/api/live/matches/${encodeURIComponent(matchId)}`);
 }

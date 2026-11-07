@@ -3,6 +3,7 @@ package staff
 import (
 	"context"
 	"errors"
+	"geoduels/internal/jobs"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,12 +40,13 @@ type RoleGrant struct {
 }
 
 type PGStore struct {
-	pool *pgxpool.Pool
-	tx   pgx.Tx
+	pool   *pgxpool.Pool
+	tx     pgx.Tx
+	teller jobs.Teller
 }
 
-func NewPGStore(pool *pgxpool.Pool) *PGStore {
-	return &PGStore{pool: pool}
+func NewPGStore(pool *pgxpool.Pool, teller jobs.Teller) *PGStore {
+	return &PGStore{pool: pool, teller: teller}
 }
 
 // q selects the transaction when present and the pool otherwise.

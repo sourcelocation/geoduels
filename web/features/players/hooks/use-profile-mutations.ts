@@ -1,28 +1,26 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import {
   requestUpdateNickname,
   requestUpdateSelectedBadge,
 } from "../../auth/lib/auth-client";
-import { getAuthGateway } from "../../auth/auth-gateway";
+import { authGateway } from "../../auth/auth-gateway";
 
 export function useProfileOwnerActions(accessToken: string) {
-  const config = useRuntimeConfig();
   const queryClient = useQueryClient();
   const refresh = () => Promise.all([
-    getAuthGateway(config).bootstrap({ force: true }),
+    authGateway.bootstrap({ force: true }),
     queryClient.invalidateQueries({ queryKey: ["player-profile"] }),
   ]);
 
   return {
     nicknameMutation: useMutation({
       mutationFn: (nickname: string) =>
-        requestUpdateNickname(config, accessToken, nickname),
+        requestUpdateNickname(accessToken, nickname),
       onSuccess: refresh,
     }),
     badgeMutation: useMutation({
       mutationFn: (badgeId: string) =>
-        requestUpdateSelectedBadge(config, accessToken, badgeId),
+        requestUpdateSelectedBadge(accessToken, badgeId),
       onSuccess: refresh,
     }),
   };

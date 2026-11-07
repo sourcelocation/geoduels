@@ -1,12 +1,10 @@
 import { apiFetch, readError } from "../../../lib/http";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import type { PlayerMatchesPage, PublicPlayerProfile } from "../types";
 
 export async function requestPlayerProfile(
-  config: RuntimeConfig,
   nickname: string,
 ): Promise<PublicPlayerProfile> {
-  const resp = await apiFetch(config, `/api/players/${encodeURIComponent(nickname)}`);
+  const resp = await apiFetch(`/api/players/${encodeURIComponent(nickname)}`);
   if (!resp.ok) {
     throw new Error(await readError(resp, "Failed to load player profile"));
   }
@@ -14,7 +12,6 @@ export async function requestPlayerProfile(
 }
 
 export async function requestPlayerMatches(
-  config: RuntimeConfig,
   nickname: string,
   limit = 20,
   cursor = "",
@@ -24,7 +21,6 @@ export async function requestPlayerMatches(
   if (cursor) query.set("cursor", cursor);
   if (filter === "ranked") query.set("filter", "ranked");
   const resp = await apiFetch(
-    config,
     `/api/players/${encodeURIComponent(nickname)}/matches?${query.toString()}`,
   );
   if (!resp.ok) {

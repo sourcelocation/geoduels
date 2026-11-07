@@ -133,34 +133,3 @@ func ActiveSeasonID(ctx context.Context, source any) (string, error) {
 	}
 	return settings.ActiveSeasonID, nil
 }
-
-// UpsertUserNotificationTx writes a user notification inside the caller's
-// transaction and returns its id. Writing the same dedupe key again announces
-// it again. actorUserID is stored on the row and resolved to a display name at
-// read time; a zero expiresAt never expires.
-func UpsertUserNotificationTx(ctx context.Context, tx pgx.Tx, userID, notificationType, dedupeKey string, payload any, actorUserID string, expiresAt time.Time) (int64, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return 0, err
-	}
-	var u pgtype.UUID
-	if err := u.Scan(strings.TrimSpace(userID)); err != nil {
-		return 0, err
-	}
-	actor, err := optionalProfileUUID(actorUserID)
-	if err != nil {
-		return 0, err
-	}
-	return db.New(tx).UpsertUserNotification(ctx, db.UpsertUserNotificationParams{
-		UserID: u, Type: db.GdNotificationType(notificationType), DedupeKey: dedupeKey, PayloadJson: body, ActorUserID: actor,
-		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: !expiresAt.IsZero()},
-	})
-}
-
-func optionalProfileUUID(value string) (pgtype.UUID, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return pgtype.UUID{}, nil
-	}
-	return ProfileUUID(value)
-}

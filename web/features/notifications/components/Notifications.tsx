@@ -1,111 +1,72 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import AppModalShell from "../../../components/ui/AppModalShell";
-import { useAppNotice, useShowAppNoticeWhen } from "../../../components/ui/AppNotice";
+import { useAppNotice } from "../../../components/ui/AppNotice";
 import { Button } from "../../../components/ui/button";
-import { cn } from "../../../lib/cn";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
-import { getAuthGateway } from "../../auth/auth-gateway";
 import { useAuthState } from "../../auth/components/AuthProvider";
-import { markNotificationSeen, requestUnseenNotifications, type UserNotification } from "../../auth/lib/auth-client";
-import { getHomeRuntime } from "../../home/state/home-runtime";
-import { useRequestActions } from "../../social/hooks/useRequestActions";
-import { presentNotification, type NotificationActions, type NotificationModal } from "../lib/kinds";
-import { unseenNotificationsKey } from "../lib/unseen";
+import { emoteGlyph } from "../../chat/lib/emotes";
+import { useItemAction } from "../../chat/hooks/use-item-action";
+import { homeRuntime } from "../../home/state/home-runtime";
+import { inboxStore } from "../../inbox/inbox-store";
+import { liveConnection } from "../../live/live-connection";
 
 /**
- * Shows each notification once, on whichever device sees it first: a toast as it arrives, or a
- * modal, one at a time, that is seen once closed. Mounted once. Nothing covers a match or its
- * results; what arrives meanwhile waits until the player is back.
+ * Tells people what just happened, whatever it was: the server words every message and says what can
+ * be done about it. Nothing covers a match or its results; what arrives meanwhile is in the inbox or
+ * chat, and a message that must be seen waits as a modal until the player is back.
  */
 export function Notifications() {
-  const auth = useAuthState();
-  if (!auth.isRegistered || !auth.accessToken || !auth.userId) return null;
-  return <Presenter accessToken={auth.accessToken} userId={auth.userId} />;
-}
-
-function Presenter({ accessToken, userId }: { accessToken: string; userId: string }) {
-  const config = useRuntimeConfig();
-  const router = useRouter();
-  const queryClient = useQueryClient();
+  const { matchController, directChat } = homeRuntime;
   const { toast } = useAppNotice();
-  const runtime = getHomeRuntime(config);
-  const match = useSyncExternalStore(
-    runtime.matchController.subscribe,
-    runtime.matchController.getState.bind(runtime.matchController),
-    runtime.matchController.getState.bind(runtime.matchController),
-  );
-  const waiting = !!match.snapshot;
-  const unseen = useQuery({
-    queryKey: unseenNotificationsKey(userId),
-    queryFn: () => requestUnseenNotifications(config, accessToken),
-    refetchOnWindowFocus: true,
-  });
-  const answer = useRequestActions(accessToken);
-  useShowAppNoticeWhen(answer.isError, "Could not answer the request. Try again.", answer.failureCount);
+  const runAction = useItemAction();
+  const { accessToken } = useAuthState();
+  const inbox = useSyncExternalStore(inboxStore.subscribe, inboxStore.getState, inboxStore.getState);
+  const match = useSyncExternalStore(matchController.subscribe, matchController.getState.bind(matchController), matchController.getState.bind(matchController));
 
-  // Shown on this device, until the list stops returning them. A notification
-  // written again keeps its id but not its createdAt, and is shown again.
-  const shown = useRef(new Set<string>());
-  const seen = useCallback((notification: UserNotification) => {
-    shown.current.add(showing(notification));
-    queryClient.setQueryData<UserNotification[]>(unseenNotificationsKey(userId), (items) => items?.filter((item) => item.id !== notification.id));
-    void markNotificationSeen(config, accessToken, notification.id).catch(() => undefined);
-  }, [accessToken, config, queryClient, userId]);
-
-  const actions = useMemo<NotificationActions>(() => ({
-    answer: answer.mutate,
-    open: (href) => void router.push(href),
-  }), [answer.mutate, router]);
-
-  const items = unseen.data;
   useEffect(() => {
-    if (waiting || !items) return;
-    for (const notification of items) {
-      if (shown.current.has(showing(notification))) continue;
-      const presentation = presentNotification(notification, actions);
-      if (presentation.as === "modal") continue;
-      if (presentation.as === "toast") toast(presentation.toast);
-      seen(notification);
-    }
-  }, [actions, items, seen, toast, waiting]);
+    const inMatch = () => !!matchController.getState().snapshot;
+    const stopInbox = liveConnection.on("inbox.added", ({ message }) => {
+      if (inMatch() || message.modal) return;
+      toast({
+        title: message.title,
+        body: message.body,
+        icon: message.imageUrl ? <img src={message.imageUrl} alt="" className="h-8 w-8 object-contain" /> : undefined,
+      });
+    });
+    const stopItems = liveConnection.on("conversation.item", ({ item, notify }) => {
+      if (!notify || inMatch() || directChat.getState().conversationId === item.conversationId) return;
+      const action = item.actions?.[0];
+      toast({
+        title: item.senderDisplayName,
+        body: item.body || emoteGlyph(item.emote),
+        action: action
+          ? { label: action.label, onClick: () => void runAction(action) }
+          : { label: "Open", onClick: () => directChat.open(item.conversationId) },
+      });
+    });
+    return () => {
+      stopInbox();
+      stopItems();
+    };
+  }, [directChat, matchController, runAction, toast]);
 
-  const next = waiting ? null : (items ?? [])
-    .filter((notification) => !shown.current.has(showing(notification)))
-    .map((notification) => ({ notification, presentation: presentNotification(notification, actions) }))
-    .find((item) => item.presentation.as === "modal");
-  if (!next || next.presentation.as !== "modal") return null;
-
-  const { notification } = next;
-  const modal = next.presentation.modal;
-  const close = () => {
-    seen(notification);
-    if (modal.refreshesAccount) void getAuthGateway(config).bootstrap({ force: true }).catch(() => undefined);
-  };
-  return <NotificationModalView key={notification.id} modal={modal} onClose={close} />;
-}
-
-function showing(notification: UserNotification) {
-  return `${notification.id}@${notification.createdAt}`;
-}
-
-function NotificationModalView({ modal, onClose }: { modal: NotificationModal; onClose: () => void }) {
+  // Oldest first, one at a time. Closing one reads it, on every device.
+  const modal = match.snapshot ? undefined : inbox.messages.filter((message) => message.modal && !message.readAt).at(-1);
+  if (!modal) return null;
   return (
     <AppModalShell
+      key={modal.id}
       title={modal.title}
       placement="center"
       showHeader={false}
       zIndexClassName="z-modal"
       maxWidthClassName="max-w-sm"
-      onClose={onClose}
+      onClose={() => void inboxStore.markRead(accessToken, modal.id)}
     >
-      <p className={cn("text-label font-strong uppercase", modal.tone === "danger" ? "text-status-danger" : "text-status-success")}>
-        {modal.eyebrow}
-      </p>
-      {modal.content}
-      <Button type="button" variant="primary" size="lg" onClick={onClose} className="mt-5 w-full">
-        {modal.confirm}
+      {modal.imageUrl ? <img src={modal.imageUrl} alt="" className="mx-auto mb-3 h-20 w-20 object-contain" /> : null}
+      <p className="text-heading-sm font-strong text-content-primary">{modal.title}</p>
+      {modal.body ? <p className="mt-2 text-body-sm text-content-secondary">{modal.body}</p> : null}
+      <Button type="button" variant="primary" size="lg" onClick={() => void inboxStore.markRead(accessToken, modal.id)} className="mt-5 w-full">
+        OK
       </Button>
     </AppModalShell>
   );

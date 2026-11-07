@@ -137,19 +137,11 @@ func (s *Service) GetPartyByInviteCode(inviteCode string) (Party, bool, error) {
 	return s.store.GetPartyByInviteCode(ctx, inviteCode)
 }
 
-// TouchMemberSeen records that the member has the party open, reporting whether their presence
-// changed.
-func (s *Service) TouchMemberSeen(partyID, userID string) (bool, error) {
+// NextRevision is taken before reading a party to send it to its members.
+func (s *Service) NextRevision(partyID string) (int64, error) {
 	ctx, cancel := s.op()
 	defer cancel()
-	return s.store.TouchMemberSeen(ctx, partyID, userID)
-}
-
-// ClearMemberSeen marks the member as gone from the party, reporting whether they were there.
-func (s *Service) ClearMemberSeen(partyID, userID string) (bool, error) {
-	ctx, cancel := s.op()
-	defer cancel()
-	return s.store.ClearMemberSeen(ctx, partyID, userID)
+	return s.store.NextRevision(ctx, partyID)
 }
 
 // SetPartyMode owns the party-open check and the team-shuffle decision that

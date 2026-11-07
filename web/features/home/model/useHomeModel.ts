@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { RESULT_ANIMATION_CONFIG } from "../../game/lib/round-result-animation-config";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import type { AuthSessionSnapshot } from "../../auth/session";
 import { selectActiveChatConversationId } from "../../chat/lib/chat-scope";
 import {
@@ -15,14 +14,14 @@ import {
   type PartyTeamId,
   type PartyMode,
 } from "../../lobby/lib/party-client";
-import { getHomeRuntime, startHomeRuntime } from "../state/home-runtime";
+import { homeRuntime, startHomeRuntime } from "../state/home-runtime";
 import { deriveHomeModel } from "./derive-home-model";
 import type { HomeModel } from "./types";
 import type { ChatEmote } from "../../chat/model/types";
 import { useLobbyData } from "./useLobbyData";
 import { type MatchConfig } from "../../matchmaking/lib/queue-client";
 import { useHotkey } from "../../hotkeys/hooks/use-hotkey";
-import { getAuthGateway } from "../../auth/auth-gateway";
+import { authGateway } from "../../auth/auth-gateway";
 
 import {
   buildSessionFromAuthResponse,
@@ -53,9 +52,7 @@ export function useHomeModel(options?: {
   onPartyEntered?: (inviteCode: string) => void;
   onPartyLeft?: () => void;
 }): HomeModel {
-  const config = useRuntimeConfig();
-  const authGateway = getAuthGateway(config);
-  const runtimeRef = useRef(getHomeRuntime(config));
+  const runtimeRef = useRef(homeRuntime);
   const { sessionController, matchController, matchRouteController, gameController, partyController, chatController, sfxController } =
     runtimeRef.current;
   const [guestVerification, setGuestVerification] =
@@ -111,7 +108,6 @@ export function useHomeModel(options?: {
     chatController.getState.bind(chatController),
   );
   const lobbyData = useLobbyData({
-    config,
     sessionController,
     auth,
     enabled: !isMatchRoute && backgroundDataEnabled,
@@ -124,7 +120,7 @@ export function useHomeModel(options?: {
     }: {
       accessToken: string;
       nickname: string;
-    }) => requestUpdateNickname(config, accessToken, nickname),
+    }) => requestUpdateNickname(accessToken, nickname),
   });
   const updateSelectedBadgeMutation = useMutation({
     mutationFn: ({
@@ -133,19 +129,20 @@ export function useHomeModel(options?: {
     }: {
       accessToken: string;
       badgeId: string;
-    }) => requestUpdateSelectedBadge(config, accessToken, badgeId),
+    }) => requestUpdateSelectedBadge(accessToken, badgeId),
   });
   const deleteAccountMutation = useMutation({
     mutationFn: ({ accessToken }: { accessToken: string }) =>
-      requestDeleteAccount(config, accessToken),
+      requestDeleteAccount(accessToken),
   });
   const supportDonationMutation = useMutation({
     mutationFn: ({ accessToken }: { accessToken: string }) =>
-      requestSupportDonation(config, accessToken),
+      requestSupportDonation(accessToken),
   });
 
   const requestGuestVerificationToken = useCallback((): Promise<string> => {
-    if (!config.turnstileSiteKey) {
+    const siteKey = authGateway.getClientKeys().turnstileSiteKey;
+    if (!siteKey) {
       return Promise.resolve("");
     }
     guestVerificationResolverRef.current?.reject(
@@ -155,13 +152,13 @@ export function useHomeModel(options?: {
       guestVerificationResolverRef.current = { resolve, reject };
       setGuestVerification((current) => ({
         open: true,
-        siteKey: config.turnstileSiteKey,
+        siteKey,
         status: "checking",
         error: "",
         resetKey: current.resetKey + 1,
       }));
     });
-  }, [config.turnstileSiteKey]);
+  }, []);
 
   function submitGuestVerificationToken(token: string) {
     const resolver = guestVerificationResolverRef.current;
@@ -218,7 +215,7 @@ export function useHomeModel(options?: {
       return nextSession;
     } catch (error) {
       const message = getErrorMessage(error, "Guest login failed");
-      if (config.turnstileSiteKey) {
+      if (authGateway.getClientKeys().turnstileSiteKey) {
         setGuestVerification((current) => ({
           ...current,
           open: false,
@@ -243,10 +240,10 @@ export function useHomeModel(options?: {
   }, []);
 
   useEffect(() => {
-    const gateway = getAuthGateway(config);
+    const gateway = authGateway;
     gateway.setGuestVerification(requestGuestVerificationToken);
     return () => gateway.setGuestVerification(null);
-  }, [config, requestGuestVerificationToken]);
+  }, [requestGuestVerificationToken]);
 
   useEffect(() => {
     if (isMatchRoute || !partyInviteCode) {
@@ -322,19 +319,11 @@ export function useHomeModel(options?: {
   }) || routeFallbackChatConversationId;
 
   useEffect(() => {
-    chatController.setConversation(
-      auth.nicknameRequired ? "" : activeChatConversationId,
-      auth.accessToken,
-    );
-  }, [
-    activeChatConversationId,
-    auth.accessToken,
-    auth.nicknameRequired,
-    chatController,
-  ]);
+    chatController.open(auth.nicknameRequired ? "" : activeChatConversationId);
+  }, [activeChatConversationId, auth.nicknameRequired, chatController]);
 
   const homeResumeMatchId = !partyInviteCode
-    ? bootstrap?.activity.activeMatch?.matchId || ""
+    ? match.resumeMatchId
     : "";
 
   const baseView = deriveHomeModel({
@@ -347,9 +336,10 @@ export function useHomeModel(options?: {
           : match.onlinePlayers,
     },
     game,
-    config,
+    googleEmbedKey: authGateway.getClientKeys().googleEmbedKey,
     homeResumeMatchId,
     routeMatchId,
+    leaderboard: lobbyData.leaderboard,
     leaderboardLoading: lobbyData.leaderboardLoading,
     maintenance: lobbyData.maintenance,
     changelogEyebrow: lobbyData.changelogEyebrow,
@@ -360,7 +350,6 @@ export function useHomeModel(options?: {
   });
   const partyBusy = [
     "admitting",
-    "reconnecting",
     "leaving",
   ].includes(partyState.status);
   const partyStatus =
@@ -417,8 +406,7 @@ export function useHomeModel(options?: {
     view.game.uiPhase,
     game.resultPhase,
     match.snapshot?.lastRoundResult?.roundId,
-    gameController,
-    config,
+    gameController
   ]);
 
   useHotkey({
@@ -475,7 +463,6 @@ export function useHomeModel(options?: {
       sessionController.applySessionSnapshot(nextSession, {
         nicknameSaving: false,
         nicknameError: "",
-        leaderboard: current.leaderboard,
         displayName: typeof data.user?.display_name === "string" && data.user.display_name ? data.user.display_name : nick,
         userEmail: typeof data.user?.email === "string" ? data.user.email : current.userEmail,
         userAvatar: typeof data.user?.avatar_url === "string" ? data.user.avatar_url : current.userAvatar,
@@ -653,7 +640,6 @@ export function useHomeModel(options?: {
       throw new Error("Report unavailable");
     }
     await requestMatchReport(
-      config,
       session.accessToken,
       snapshot.matchId,
       reportedUserId,

@@ -17,7 +17,6 @@ import (
 	"geoduels/pkg/gameplay"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchkind"
-	"geoduels/pkg/pgnotify"
 )
 
 // Every match starts here, whether the queue paired its players, a party's owner started it, or a
@@ -86,26 +85,47 @@ func (a *api) admit(ctx context.Context, spec matchkind.Spec, userIDs []string) 
 	return nil
 }
 
-// startMatch starts a match in its own transaction.
-func (a *api) startMatch(ctx context.Context, req startRequest) (string, error) {
-	return a.startMatchIn(ctx, nil, req)
+// startedMatch is what its players and party are told once the match is committed.
+type startedMatch struct {
+	summary activeMatchSummary
+	players []string
+	partyID string
 }
 
-// startMatchIn starts a match in tx, or in a transaction of its own when tx is nil.
-func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (string, error) {
+// startMatch starts a match in its own transaction, and tells everyone.
+func (a *api) startMatch(ctx context.Context, req startRequest) (string, error) {
+	match, err := a.startMatchIn(ctx, nil, req)
+	if err != nil {
+		return "", err
+	}
+	a.tellMatchStarted(ctx, match)
+	return match.summary.MatchID, nil
+}
+
+func (a *api) tellMatchStarted(ctx context.Context, match startedMatch) {
+	a.tell(match.players, matchStarted{Match: match.summary})
+	a.tellParty(ctx, match.partyID)
+	for _, userID := range match.players {
+		a.tellPresenceChanged(ctx, userID)
+	}
+}
+
+// startMatchIn starts a match in tx, or in a transaction of its own when tx is nil. The caller tells
+// people, once the transaction has committed.
+func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (startedMatch, error) {
 	spec, ok := matchkind.Lookup(req.Kind)
 	if !ok {
-		return "", fmt.Errorf("unknown match kind %q", req.Kind)
+		return startedMatch{}, fmt.Errorf("unknown match kind %q", req.Kind)
 	}
 	if err := spec.CheckSeats(req.Seats); err != nil {
-		return "", err
+		return startedMatch{}, err
 	}
 	userIDs := make([]string, len(req.Seats))
 	for i, seat := range req.Seats {
 		userIDs[i] = seat.UserID
 	}
 	if err := a.admit(ctx, spec, userIDs); err != nil {
-		return "", err
+		return startedMatch{}, err
 	}
 	matchID := entityid.New()
 	params := matches.StartParams{
@@ -115,7 +135,7 @@ func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (st
 	for _, seat := range req.Seats {
 		profile, err := a.profiles.GetProfile(seat.UserID)
 		if err != nil {
-			return "", fmt.Errorf("profile unavailable: %w", err)
+			return startedMatch{}, fmt.Errorf("profile unavailable: %w", err)
 		}
 		if profile.DisplayName == "" {
 			profile.DisplayName = seat.UserID
@@ -137,20 +157,7 @@ func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (st
 	}
 	params.After = func(ctx context.Context, tx pgx.Tx) error {
 		if req.PartyID != "" {
-			if err := parties.MarkMatchStartedTx(ctx, tx, req.PartyID, matchID); err != nil {
-				return err
-			}
-			if err := pgnotify.Publish(ctx, tx, pgnotify.PartyTopic(req.PartyID), pgnotify.PartyChanged); err != nil {
-				return err
-			}
-		}
-		started := liveEvent{Type: liveMatchStarted, Match: &activeMatchSummary{
-			MatchID: matchID, Kind: req.Kind, Mode: spec.Mode, Status: matchViewStarting,
-		}}
-		for _, userID := range userIDs {
-			if err := pgnotify.Publish(ctx, tx, pgnotify.LiveTopic(userID), started); err != nil {
-				return err
-			}
+			return parties.MarkMatchStartedTx(ctx, tx, req.PartyID, matchID)
 		}
 		return nil
 	}
@@ -161,9 +168,12 @@ func (a *api) startMatchIn(ctx context.Context, tx pgx.Tx, req startRequest) (st
 		err = a.matchStore.StartTx(ctx, tx, params)
 	}
 	if err != nil {
-		return "", err
+		return startedMatch{}, err
 	}
-	return matchID, nil
+	return startedMatch{
+		summary: activeMatchSummary{MatchID: matchID, Kind: req.Kind, Mode: spec.Mode, Status: matchViewStarting},
+		players: userIDs, partyID: req.PartyID,
+	}, nil
 }
 
 // matchBadge is the badge a player shows in a match, as it is when the match starts.

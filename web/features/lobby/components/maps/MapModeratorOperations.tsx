@@ -2,13 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Flame } from "lucide-react";
 import { useAuthState } from "../../../auth/components/AuthProvider";
 import { nominate } from "../../../admin/lib/curation-client";
-import { useRuntimeConfig } from "../../../../lib/runtime-config-context";
 import { SectionCard } from "../../../../components/ui/compositions";
 import { Button, ButtonLink } from "../../../../components/ui/button";
 import type { CustomMap } from "../../../maps/lib/maps-client";
 export function MapModeratorOperations({map}:{map:CustomMap}) {
- const auth=useAuthState(); const config=useRuntimeConfig(); const client=useQueryClient();
- const mutation=useMutation({mutationFn:()=>nominate(config,auth.accessToken,map.id),onSuccess:()=>client.invalidateQueries({queryKey:["motw"]})});
+ const auth=useAuthState(); const client=useQueryClient();
+ const mutation=useMutation({mutationFn:()=>nominate(auth.accessToken,map.id),onSuccess:()=>client.invalidateQueries({queryKey:["motw"]})});
  if(!auth.isModerator)return null;
  const eligible=map.status==="ready"&&map.visibility==="public"&&!!map.ownerUserId;
  return <SectionCard className="rounded-2xl p-5"><h3 className="text-heading-sm font-strong">Moderator Map Operations</h3><div className="mt-3 flex flex-wrap gap-3">

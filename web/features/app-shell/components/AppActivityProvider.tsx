@@ -1,12 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useRouter } from "next/router";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { formatQueueElapsed } from "../../lobby/lib/lobby-ui";
-import { getHomeRuntime, startHomeRuntime } from "../../home/state/home-runtime";
+import { homeRuntime, startHomeRuntime } from "../../home/state/home-runtime";
 import type { AppNavTask } from "./AppNavTasks";
 import type { MatchState } from "../../matchmaking/controllers/match-controller";
 import type { PartyRuntimeState } from "../../lobby/controllers/party-controller";
-import { useAuthState } from "../../auth/components/AuthProvider";
 import { normalizeEntityRouteId, toPublicEntityId } from "../../../lib/entity-id";
 
 const AppActivityContext = createContext<AppNavTask[]>([]);
@@ -41,7 +39,7 @@ export function deriveAppActivities({
   const hasActiveParty =
     !!party.snapshot &&
     !!party.self &&
-    (party.status === "ready" || party.status === "reconnecting");
+    party.status === "ready";
   if (hasActiveParty && pathname !== "/party/[code]") {
     tasks.push({
       kind: "party",
@@ -54,9 +52,7 @@ export function deriveAppActivities({
 
 export function AppActivityProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const config = useRuntimeConfig();
-  const auth = useAuthState();
-  const runtime = useMemo(() => getHomeRuntime(config), [config]);
+  const runtime = homeRuntime;
   const party = useSyncExternalStore(
     runtime.partyController.subscribe,
     runtime.partyController.getState.bind(runtime.partyController),
@@ -67,8 +63,6 @@ export function AppActivityProvider({ children }: { children: ReactNode }) {
     runtime.matchController.getState.bind(runtime.matchController),
     runtime.matchController.getState.bind(runtime.matchController),
   );
-  const restoredParty = useRef("");
-  const previousUserId = useRef(auth.userId);
   const navigatedMatch = useRef("");
   const [navigationAttempt, setNavigationAttempt] = useState(0);
   const [nowMs, setNowMs] = useState(0);
@@ -79,22 +73,7 @@ export function AppActivityProvider({ children }: { children: ReactNode }) {
   }, [runtime]);
 
   useEffect(() => {
-    if (previousUserId.current !== auth.userId) {
-      if (previousUserId.current) runtime.partyController.reset();
-      previousUserId.current = auth.userId;
-      restoredParty.current = "";
-      navigatedMatch.current = "";
-    }
-    const currentParty = auth.bootstrap?.activity.currentParty;
-    if (!auth.userId || auth.bootstrap?.auth?.user?.id !== auth.userId || !currentParty) return;
-    const key = `${auth.userId}:${currentParty.id}`;
-    if (restoredParty.current === key) return;
-    restoredParty.current = key;
-    void runtime.partyController.restoreParty(currentParty);
-  }, [auth.userId, auth.bootstrap, runtime]);
-
-  useEffect(() => {
-    const matchId = party.launchMatchId;
+    const matchId = match.launchMatchId;
     if (!matchId) {
       navigatedMatch.current = "";
       return;
@@ -114,7 +93,7 @@ export function AppActivityProvider({ children }: { children: ReactNode }) {
       // pending when another page navigation interrupts this one.
       retryTimer = window.setTimeout(() => setNavigationAttempt((attempt) => attempt + 1), 300);
     };
-    void router.replace(`/match/${encodeURIComponent(toPublicEntityId(matchId))}`).then((completed) => {
+    void router.push(`/match/${encodeURIComponent(toPublicEntityId(matchId))}`).then((completed) => {
       if (!active) return;
       if (completed) navigatedMatch.current = matchId;
       else retry();
@@ -124,7 +103,7 @@ export function AppActivityProvider({ children }: { children: ReactNode }) {
       active = false;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [auth.userId, party.launchMatchId, router, router.isReady, router.pathname, router.query.id, navigationAttempt]);
+  }, [match.launchMatchId, router, router.isReady, router.pathname, router.query.id, navigationAttempt]);
 
   useEffect(() => {
     if (!isQueueing) return;

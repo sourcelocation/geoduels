@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -13,10 +11,10 @@ import (
 
 	"geoduels/internal/matches"
 	"geoduels/internal/parties"
+	"geoduels/internal/presence"
 	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	"geoduels/pkg/observability"
-	"geoduels/pkg/pgnotify"
 )
 
 const defaultPartyTTL = 2 * time.Hour
@@ -24,7 +22,7 @@ const defaultPartyTTL = 2 * time.Hour
 // requirePlayableUser authenticates a player who may play now: signed in, not banned, with a
 // nickname and an account that needs no migration.
 func (a *api) requirePlayableUser(c echo.Context) (string, error) {
-	claims, err := a.liveClaims(c.Request())
+	claims, err := a.authenticatedClaims(c.Request())
 	if err != nil {
 		return "", plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
@@ -43,9 +41,10 @@ func (a *api) requirePlayableUser(c echo.Context) (string, error) {
 	return claims.Sub, nil
 }
 
-// partySnapshot is a party as its members see it. The party socket sends it first, then patches.
+// partySnapshot is a party as its members see it.
 type partySnapshot struct {
 	ID               string                     `json:"id"`
+	Revision         int64                      `json:"revision"`
 	InviteCode       string                     `json:"inviteCode"`
 	OwnerUserID      string                     `json:"ownerUserId"`
 	State            string                     `json:"state"`
@@ -79,7 +78,7 @@ type partyMember struct {
 
 func newPartySnapshot(p parties.Party) partySnapshot {
 	out := partySnapshot{
-		ID: p.ID, InviteCode: p.InviteCode, OwnerUserID: p.OwnerUserID, State: string(p.State), Mode: p.Mode,
+		ID: p.ID, Revision: p.Revision, InviteCode: p.InviteCode, OwnerUserID: p.OwnerUserID, State: string(p.State), Mode: p.Mode,
 		MapScope: p.MapScope, MapName: p.MapName, MapLocationCount: p.MapLocationCount,
 		Config: gameplay.NewClientMatchConfig(p.Config), ActiveMatchID: p.ActiveMatchID, LastMatchID: p.LastMatchID,
 		CreatedAt: p.CreatedAt, ExpiresAt: p.ExpiresAt,
@@ -95,22 +94,6 @@ func newPartySnapshot(p parties.Party) partySnapshot {
 		}
 	}
 	return out
-}
-
-// partyPatch is what changed since the last snapshot or patch a member received.
-type partyPatch struct {
-	Revision         int64                       `json:"revision"`
-	State            *string                     `json:"state,omitempty"`
-	OwnerUserID      *string                     `json:"ownerUserId,omitempty"`
-	Mode             *matchkind.Mode             `json:"mode,omitempty"`
-	MapScope         *string                     `json:"mapScope,omitempty"`
-	MapName          *string                     `json:"mapName,omitempty"`
-	MapLocationCount *int                        `json:"mapLocationCount,omitempty"`
-	Config           *gameplay.ClientMatchConfig `json:"config,omitempty"`
-	ActiveMatchID    *string                     `json:"activeMatchId,omitempty"`
-	LastMatchID      *string                     `json:"lastMatchId,omitempty"`
-	UpsertMembers    []partyMember               `json:"upsertMembers,omitempty"`
-	RemoveMemberIDs  []string                    `json:"removeMemberIds,omitempty"`
 }
 
 type partyCreateRequest struct {
@@ -158,10 +141,7 @@ func (a *api) createParty(c echo.Context) error {
 			return plainTextError(c, http.StatusInternalServerError, "party unavailable")
 		}
 	}
-	if changed, _ := a.parties.TouchMemberSeen(snap.ID, userID); changed {
-		a.publishPartyChanged(c.Request().Context(), snap.ID)
-	}
-	return writeJSON(c, map[string]string{"id": snap.ID, "inviteCode": snap.InviteCode})
+	return a.writeParty(c, snap.ID)
 }
 
 func (a *api) joinParty(c echo.Context) error {
@@ -180,9 +160,21 @@ func (a *api) joinParty(c echo.Context) error {
 	if err != nil {
 		return plainTextError(c, http.StatusConflict, err.Error())
 	}
-	_, _ = a.parties.TouchMemberSeen(snap.ID, userID)
-	a.publishPartyChanged(c.Request().Context(), snap.ID)
-	return writeJSON(c, map[string]string{"id": snap.ID, "inviteCode": snap.InviteCode})
+	return a.writeParty(c, snap.ID)
+}
+
+// writeParty tells the party's members, and answers with the party as it now is.
+func (a *api) writeParty(c echo.Context, partyID string) error {
+	ctx := c.Request().Context()
+	a.tellParty(ctx, partyID)
+	party, found, err := a.loadParty(ctx, partyID)
+	if err != nil {
+		return plainTextError(c, http.StatusBadGateway, "party unavailable")
+	}
+	if !found {
+		return c.NoContent(http.StatusNoContent)
+	}
+	return writeJSON(c, newPartySnapshot(party))
 }
 
 func (a *api) setPartySettings(ctx context.Context, id, userID string, req partySettingsRequest) error {
@@ -216,173 +208,160 @@ func (a *api) setPartySettings(ctx context.Context, id, userID string, req party
 		observability.Log("error", "update party settings save failed", map[string]any{"userId": userID, "partyId": snap.ID, "mapId": req.Config.MapID, "error": err.Error()})
 		return echo.NewHTTPError(http.StatusBadGateway, "party settings unavailable")
 	}
-	a.publishPartyChanged(ctx, snap.ID)
+	a.tellParty(ctx, snap.ID)
 	return nil
 }
 
-func (a *api) partyWS(c echo.Context) error {
-	r := c.Request()
-	claims, err := a.liveClaims(r)
+// partyMember authenticates a member of the party in the route.
+func (a *api) partyMember(c echo.Context) (partyID, userID string, err error) {
+	userID, err = a.requirePlayableUser(c)
 	if err != nil {
-		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
+		return "", "", err
 	}
-	if banned, err := a.accountBanned(claims.Sub); err != nil || banned {
-		return plainTextError(c, http.StatusForbidden, "forbidden")
-	}
-	userID := claims.Sub
-	partyID := strings.TrimSpace(c.Param("id"))
-	snap, ok, err := a.parties.GetPartyByID(partyID)
+	partyID = strings.TrimSpace(c.Param("id"))
+	snap, found, err := a.parties.GetPartyByID(partyID)
 	if err != nil {
-		return plainTextError(c, http.StatusBadGateway, "party unavailable")
+		return "", "", plainTextError(c, http.StatusBadGateway, "party unavailable")
 	}
-	conn, err := a.live.upgrader.Upgrade(c.Response().Writer, r, nil)
-	if err != nil {
-		return nil
+	if !found || !partyHasMember(snap, userID) {
+		return "", "", plainTextError(c, http.StatusForbidden, "party membership required")
 	}
-	defer conn.Close()
-	w := &socketWriter{conn: conn}
-	if !ok || !partyHasMember(snap, userID) {
-		w.send("party_error", map[string]string{"message": "You left this party"})
-		return nil
-	}
+	return partyID, userID, nil
+}
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	touch := func() {
-		if changed, err := a.parties.TouchMemberSeen(partyID, userID); err == nil && changed {
-			a.publishPartyChanged(context.Background(), partyID)
+// partyCommand is one thing a member can do. It runs, the party's members hear about it, and the
+// caller is told if it failed; every command is the same apart from what it does.
+func (a *api) partyCommand(run func(c echo.Context, partyID, userID string) error) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		partyID, userID, err := a.partyMember(c)
+		if err != nil {
+			return err
 		}
-		a.touchViewerPresence(context.Background(), userID)
-	}
-	conn.SetReadLimit(16 * 1024)
-	_ = conn.SetReadDeadline(time.Now().Add(queueReadTTL))
-	conn.SetPongHandler(func(string) error {
-		touch()
-		return conn.SetReadDeadline(time.Now().Add(queueReadTTL))
-	})
-	commands := make(chan []byte, 16)
-	go func() {
-		defer cancel()
-		for {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				return
+		if err := run(c, partyID, userID); err != nil {
+			var failure *echo.HTTPError
+			if errors.As(err, &failure) {
+				return plainTextError(c, failure.Code, partyFailureMessage(failure))
 			}
-			select {
-			case commands <- data:
-			case <-ctx.Done():
-				return
-			}
+			return plainTextError(c, http.StatusConflict, err.Error())
 		}
-	}()
-	events, unsubscribe := a.events.Subscribe(pgnotify.PartyTopic(partyID))
-	defer unsubscribe()
-	defer func() {
-		if cleared, err := a.parties.ClearMemberSeen(partyID, userID); err == nil && cleared {
-			a.publishPartyChanged(context.Background(), partyID)
-		}
-	}()
-	touch()
-
-	var last partySnapshot
-	lastFingerprint := ""
-	revision := int64(0)
-	lastMatchID := ""
-	refreshParty := func() bool {
-		next, ok, err := a.parties.GetPartyByID(partyID)
-		if err != nil || !ok {
-			w.send("party_error", map[string]string{"message": "Party unavailable"})
-			return false
-		}
-		if !partyHasMember(next, userID) {
-			w.send("party_error", map[string]string{"message": "You left this party"})
-			return false
-		}
-		view := newPartySnapshot(next)
-		if fingerprint := partyFingerprint(view); fingerprint != lastFingerprint {
-			revision++
-			if revision == 1 {
-				w.send("party_snapshot", view)
-			} else {
-				w.send("party_patch", newPartyPatch(last, view, revision))
-			}
-			last, lastFingerprint = view, fingerprint
-		}
-		// A member seated in the party's new match goes to it.
-		if next.ActiveMatchID != "" && next.ActiveMatchID != lastMatchID && partySeated(next, userID) {
-			lastMatchID = next.ActiveMatchID
-			if !w.send("match_found", activeMatchSummary{MatchID: next.ActiveMatchID, Status: matchViewStarting}) {
-				return false
-			}
-		}
-		return next.State == parties.StateOpen || next.State == parties.StateInMatch
-	}
-	if !refreshParty() {
-		return nil
-	}
-
-	presenceTicker := time.NewTicker(10 * time.Second)
-	defer presenceTicker.Stop()
-	pingTicker := time.NewTicker(queuePingEvery)
-	defer pingTicker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case data := <-commands:
-			var command partyCommand
-			if err := json.Unmarshal(data, &command); err != nil || command.RequestID == "" || len(command.RequestID) > 128 {
-				if !w.send("party_command_result", partyCommandResult{RequestID: command.RequestID, Error: "invalid command"}) {
-					return nil
-				}
-				continue
-			}
-			commandCtx, commandCancel := context.WithTimeout(ctx, 20*time.Second)
-			_, authErr := a.liveClaims(r)
-			if authErr != nil {
-				err = errors.New("session expired; reconnect to continue")
-			} else {
-				err = a.executePartyCommand(commandCtx, partyID, userID, command)
-			}
-			commandCancel()
-			result := partyCommandResult{RequestID: command.RequestID, OK: err == nil}
-			if err != nil {
-				result.Error = partyErrorMessage(err)
-			}
-			if !w.send("party_command_result", result) || authErr != nil {
-				return nil
-			}
-			if err == nil {
-				if command.Type == "leave" {
-					return nil
-				}
-				if !refreshParty() {
-					return nil
-				}
-			}
-		case <-events:
-			if !refreshParty() {
-				return nil
-			}
-		case <-presenceTicker.C:
-			touch()
-			if !refreshParty() {
-				return nil
-			}
-		case <-pingTicker.C:
-			if _, err := a.liveClaims(r); err != nil {
-				return nil
-			}
-			if !w.ping() {
-				return nil
-			}
-		}
+		return a.writeParty(c, partyID)
 	}
 }
 
-// startPartyMatch starts the party's match with every member seated, once they all have it open.
+func partyFailureMessage(failure *echo.HTTPError) string {
+	if message, ok := failure.Message.(string); ok {
+		return message
+	}
+	return http.StatusText(failure.Code)
+}
+
+func (a *api) setPartyTeam(c echo.Context, partyID, userID string) error {
+	var req partyTeamRequest
+	if err := decodeJSONBody(c.Request(), &req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	_, err := a.parties.SetPartyMemberTeam(partyID, userID, strings.TrimSpace(req.TeamID))
+	return err
+}
+
+func (a *api) shuffleParty(c echo.Context, partyID, userID string) error {
+	_, err := a.parties.ShufflePartyTeams(partyID, userID)
+	return err
+}
+
+func (a *api) updatePartySettings(c echo.Context, partyID, userID string) error {
+	var req partySettingsRequest
+	if err := decodeJSONBody(c.Request(), &req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	return a.setPartySettings(c.Request().Context(), partyID, userID, req)
+}
+
+func (a *api) kickFromParty(c echo.Context, partyID, userID string) error {
+	var req partyMemberRequest
+	if err := decodeJSONBody(c.Request(), &req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	target := strings.TrimSpace(req.UserID)
+	if _, err := a.parties.KickPartyMember(partyID, userID, target); err != nil {
+		return err
+	}
+	a.tell([]string{target}, partyLeft{PartyID: partyID, Reason: "You were removed from this party"})
+	return nil
+}
+
+func (a *api) transferParty(c echo.Context, partyID, userID string) error {
+	var req partyMemberRequest
+	if err := decodeJSONBody(c.Request(), &req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+	}
+	_, err := a.parties.TransferPartyOwner(partyID, userID, strings.TrimSpace(req.UserID))
+	return err
+}
+
+func (a *api) leaveParty(c echo.Context, partyID, userID string) error {
+	if _, err := a.parties.LeaveParty(partyID, userID); err != nil {
+		return err
+	}
+	a.tell([]string{userID}, partyLeft{PartyID: partyID, Reason: "You left this party"})
+	return nil
+}
+
+func (a *api) startParty(c echo.Context, partyID, userID string) error {
+	return a.startPartyMatch(c.Request().Context(), partyID, userID)
+}
+
+// loadParty is a party with who is connected filled in.
+func (a *api) loadParty(ctx context.Context, partyID string) (parties.Party, bool, error) {
+	party, found, err := a.parties.GetPartyByID(partyID)
+	if err != nil || !found {
+		return parties.Party{}, found, err
+	}
+	online, err := presence.Online(ctx, a.db.Pool(), partyMemberIDs(party))
+	if err != nil {
+		return parties.Party{}, false, err
+	}
+	for i := range party.Members {
+		party.Members[i].Connected = online[party.Members[i].UserID]
+		party.Members[i].PresenceStatus = parties.PresenceOffline
+		if party.Members[i].Connected {
+			party.Members[i].PresenceStatus = parties.PresenceOnline
+		}
+	}
+	return party, true, nil
+}
+
+// tellParty sends the party to its members as it now is. The revision comes first, so a higher one
+// never carries older state, however many API replicas are sending.
+func (a *api) tellParty(ctx context.Context, partyID string) {
+	if partyID == "" {
+		return
+	}
+	revision, err := a.parties.NextRevision(partyID)
+	if err != nil {
+		observability.Log("warn", "party revision failed", map[string]any{"partyId": partyID, "error": err.Error()})
+		return
+	}
+	party, found, err := a.loadParty(ctx, partyID)
+	if err != nil || !found {
+		return
+	}
+	view := newPartySnapshot(party)
+	view.Revision = revision
+	a.tell(partyMemberIDs(party), partyUpdated{Party: view})
+}
+
+func partyMemberIDs(party parties.Party) []string {
+	out := make([]string, len(party.Members))
+	for i, member := range party.Members {
+		out[i] = member.UserID
+	}
+	return out
+}
+
+// startPartyMatch starts the party's match with every member seated, once they are all connected.
 func (a *api) startPartyMatch(ctx context.Context, partyID, userID string) error {
-	snap, ok, err := a.parties.GetPartyByID(partyID)
+	snap, ok, err := a.loadParty(ctx, partyID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "party unavailable")
 	}
@@ -436,18 +415,9 @@ func requirePartyPresence(snap parties.Party) error {
 		}
 	}
 	if len(missing) > 0 {
-		return errors.New("all players must be in the party to start: " + strings.Join(missing, ", "))
+		return errors.New("all players must be connected to start: " + strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-func partySeated(snap parties.Party, userID string) bool {
-	for _, member := range snap.Members {
-		if member.UserID == userID {
-			return member.InActiveMatch
-		}
-	}
-	return false
 }
 
 func partyHasMember(snap parties.Party, userID string) bool {
@@ -459,73 +429,6 @@ func partyHasMember(snap parties.Party, userID string) bool {
 	return false
 }
 
-func partyFingerprint(snap partySnapshot) string {
-	b, _ := json.Marshal(snap)
-	return string(b)
-}
-
-func newPartyPatch(prev, next partySnapshot, revision int64) partyPatch {
-	patch := partyPatch{Revision: revision}
-	if prev.State != next.State {
-		v := next.State
-		patch.State = &v
-	}
-	if prev.OwnerUserID != next.OwnerUserID {
-		v := next.OwnerUserID
-		patch.OwnerUserID = &v
-	}
-	if prev.Mode != next.Mode {
-		v := next.Mode
-		patch.Mode = &v
-	}
-	if prev.MapScope != next.MapScope {
-		v := next.MapScope
-		patch.MapScope = &v
-	}
-	if prev.MapName != next.MapName {
-		v := next.MapName
-		patch.MapName = &v
-	}
-	if prev.MapLocationCount != next.MapLocationCount {
-		v := next.MapLocationCount
-		patch.MapLocationCount = &v
-	}
-	if prev.Config != next.Config {
-		v := next.Config
-		patch.Config = &v
-	}
-	if prev.ActiveMatchID != next.ActiveMatchID {
-		v := next.ActiveMatchID
-		patch.ActiveMatchID = &v
-	}
-	if prev.LastMatchID != next.LastMatchID {
-		v := next.LastMatchID
-		patch.LastMatchID = &v
-	}
-	prevMembers := map[string]partyMember{}
-	nextMembers := map[string]partyMember{}
-	for _, member := range prev.Members {
-		prevMembers[member.UserID] = member
-	}
-	for _, member := range next.Members {
-		nextMembers[member.UserID] = member
-		if partyMemberFingerprint(prevMembers[member.UserID]) != partyMemberFingerprint(member) {
-			patch.UpsertMembers = append(patch.UpsertMembers, member)
-		}
-	}
-	for id := range prevMembers {
-		if _, ok := nextMembers[id]; !ok {
-			patch.RemoveMemberIDs = append(patch.RemoveMemberIDs, id)
-		}
-	}
-	return patch
-}
-
-func partyMemberFingerprint(member partyMember) string {
-	b, _ := json.Marshal(member)
-	return string(b)
-}
-
 func normalizePartyTeam(teamID string) string {
 	if strings.ToLower(strings.TrimSpace(teamID)) == "b" {
 		return "b"
@@ -533,88 +436,7 @@ func normalizePartyTeam(teamID string) string {
 	return "a"
 }
 
-// The party socket carries commands as well as authoritative state events. Commands are processed
-// serially per connection and are never replayed on reconnect.
-type partyCommand struct {
-	RequestID string          `json:"requestId"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
-}
-
-type partyCommandResult struct {
-	RequestID string `json:"requestId"`
-	OK        bool   `json:"ok"`
-	Error     string `json:"error,omitempty"`
-}
-
 type partySettingsRequest struct {
 	Mode   matchkind.Mode             `json:"mode"`
 	Config gameplay.ClientMatchConfig `json:"config"`
-}
-
-func partyErrorMessage(err error) string {
-	var httpErr *echo.HTTPError
-	if errors.As(err, &httpErr) {
-		return fmt.Sprint(httpErr.Message)
-	}
-	return err.Error()
-}
-
-func (a *api) executePartyCommand(ctx context.Context, partyID, userID string, command partyCommand) error {
-	// Membership, ownership and account eligibility can change after the handshake.
-	identity, err := a.accounts.GetIdentity(userID)
-	if err != nil {
-		return errors.New("identity not found")
-	}
-	switch {
-	case identity.IsBanned:
-		return errors.New("user is banned")
-	case identity.NicknameRequired:
-		return errors.New("nickname required")
-	case identity.AuthMigrationRequired:
-		return errors.New("connect discord to continue")
-	}
-	snap, found, err := a.parties.GetPartyByID(partyID)
-	if err != nil {
-		return errors.New("party unavailable")
-	}
-	if !found || !partyHasMember(snap, userID) {
-		return errors.New("party membership required")
-	}
-	switch command.Type {
-	case "team":
-		var req partyTeamRequest
-		if json.Unmarshal(command.Payload, &req) != nil {
-			return errors.New("invalid payload")
-		}
-		_, err = a.parties.SetPartyMemberTeam(partyID, userID, strings.TrimSpace(req.TeamID))
-	case "shuffle_teams":
-		_, err = a.parties.ShufflePartyTeams(partyID, userID)
-	case "settings":
-		var req partySettingsRequest
-		if json.Unmarshal(command.Payload, &req) != nil {
-			return errors.New("invalid payload")
-		}
-		return a.setPartySettings(ctx, partyID, userID, req)
-	case "kick", "transfer_owner":
-		var req partyMemberRequest
-		if json.Unmarshal(command.Payload, &req) != nil {
-			return errors.New("invalid payload")
-		}
-		if command.Type == "kick" {
-			_, err = a.parties.KickPartyMember(partyID, userID, strings.TrimSpace(req.UserID))
-		} else {
-			_, err = a.parties.TransferPartyOwner(partyID, userID, strings.TrimSpace(req.UserID))
-		}
-	case "leave":
-		_, err = a.parties.LeaveParty(partyID, userID)
-	case "start":
-		return a.startPartyMatch(ctx, partyID, userID)
-	default:
-		return errors.New("unknown party command")
-	}
-	if err == nil {
-		a.publishPartyChanged(ctx, partyID)
-	}
-	return err
 }

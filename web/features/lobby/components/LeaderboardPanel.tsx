@@ -1,4 +1,4 @@
-import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
+import type { LeaderboardSummary } from "../lib/leaderboard";
 import PlayerProfileLink from "../../players/components/PlayerProfileLink";
 import { useSeasonResetCountdown } from "../lib/season-countdown";
 import { AppPanel } from "../../../components/ui/compositions";

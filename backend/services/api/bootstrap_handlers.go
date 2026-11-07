@@ -14,12 +14,19 @@ import (
 
 // bootstrapResponse is everything a client needs on load. Auth and viewer are null when signed out.
 type bootstrapResponse struct {
-	Version     int                   `json:"version"`
 	Auth        *authSessionPayload   `json:"auth"`
 	Viewer      *bootstrapViewer      `json:"viewer"`
 	Preferences *bootstrapPreferences `json:"preferences"`
-	Activity    bootstrapActivity     `json:"activity"`
+	Client      bootstrapClient       `json:"client"`
 	Global      bootstrapGlobal       `json:"global"`
+}
+
+// bootstrapClient is what the browser needs to start third-party flows. All of it is public.
+type bootstrapClient struct {
+	GoogleClientID   string `json:"googleClientId"`
+	DiscordClientID  string `json:"discordClientId"`
+	TurnstileSiteKey string `json:"turnstileSiteKey"`
+	GoogleEmbedKey   string `json:"googleEmbedKey"`
 }
 
 type bootstrapViewer struct {
@@ -49,40 +56,19 @@ type bootstrapPreferences struct {
 	Value    json.RawMessage `json:"value"`
 }
 
-type bootstrapActivity struct {
-	// Included only in bootstrap v2; v1 retains its original JSON shape.
-	CurrentParty  *currentParty       `json:"currentParty,omitempty"`
-	ActiveMatch   *activeMatchSummary `json:"activeMatch"`
-	Notifications []userNotification  `json:"notifications"`
-}
-
-type currentParty struct {
-	ID         string `json:"id"`
-	InviteCode string `json:"inviteCode"`
-}
-
 type bootstrapGlobal struct {
 	OnlinePlayers int                `json:"onlinePlayers"`
 	Maintenance   maintenance.Status `json:"maintenance"`
 }
 
 func (a *api) bootstrap(c echo.Context) error {
-	switch c.QueryParam("version") {
-	case "", "1":
-		return a.bootstrapVersion(c, 1)
-	case "2":
-		return a.bootstrapVersion(c, 2)
-	default:
-		return plainTextError(c, http.StatusBadRequest, "unsupported bootstrap version")
-	}
-}
-
-func (a *api) bootstrapVersion(c echo.Context, version int) error {
 	r := c.Request()
-	global := a.statusHub().current()
+	global := a.status.current()
 	response := bootstrapResponse{
-		Version:  version,
-		Activity: bootstrapActivity{Notifications: []userNotification{}},
+		Client: bootstrapClient{
+			GoogleClientID: a.googleClientID, DiscordClientID: a.discordClientID,
+			TurnstileSiteKey: a.turnstileSiteKey, GoogleEmbedKey: a.googleEmbedKey,
+		},
 		Global: bootstrapGlobal{
 			OnlinePlayers: global.OnlinePlayers,
 			Maintenance:   global.Maintenance,
@@ -124,24 +110,6 @@ func (a *api) bootstrapVersion(c echo.Context, version int) error {
 	if a.preferences != nil {
 		if preferences, err := a.preferences.Get(r.Context(), record.UserID); err == nil {
 			response.Preferences = &bootstrapPreferences{Revision: preferences.Revision, Value: preferences.Preferences}
-		}
-	}
-	if version >= 2 && a.parties != nil {
-		party, err := a.parties.GetCurrentParty(record.UserID)
-		if err != nil {
-			return plainTextError(c, http.StatusInternalServerError, "party restoration unavailable")
-		}
-		if party != nil {
-			response.Activity.CurrentParty = &currentParty{ID: party.ID, InviteCode: party.InviteCode}
-		}
-	}
-	response.Activity.ActiveMatch = a.activeMatch(r.Context(), record.UserID)
-	if !profile.IsGuest {
-		a.touchViewerPresence(r.Context(), record.UserID)
-	}
-	if a.notificationService != nil && !profile.IsGuest {
-		if unseen, err := a.notificationService.List(r.Context(), record.UserID, 10); err == nil {
-			response.Activity.Notifications = newUserNotifications(unseen)
 		}
 	}
 	return writeJSON(c, response)

@@ -24,16 +24,11 @@ export function LobbyApplicationLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [routeLoading, setRouteLoading] = useState(false);
   const lobbyRoute = resolveLobbyRoute(router.pathname);
-  const rawPartyCode =
-    router.isReady && typeof router.query.code === "string"
-      ? router.query.code
-      : "";
+  const rawPartyCode = typeof router.query.code === "string" ? router.query.code : "";
   const partyInviteCode = rawPartyCode.trim().toUpperCase();
   const routedPartyCode = lobbyRoute === "party" ? partyInviteCode : "";
   const mapId =
-    lobbyRoute === "map-details" &&
-    router.isReady &&
-    typeof router.query.id === "string"
+    lobbyRoute === "map-details" && typeof router.query.id === "string"
       ? normalizeEntityRouteId(router.query.id)
       : "";
   const prevMatchIdRef = useRef("");
@@ -89,7 +84,7 @@ export function LobbyApplicationLayout({ children }: { children: ReactNode }) {
   }, [router.events]);
 
   useEffect(() => {
-    if (!router.isReady || lobbyRoute !== "party" || !rawPartyCode) return;
+    if (lobbyRoute !== "party" || !rawPartyCode) return;
     if (rawPartyCode !== partyInviteCode) {
       void router.replace(
         `/party/${encodeURIComponent(partyInviteCode)}`,

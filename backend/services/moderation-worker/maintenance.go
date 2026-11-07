@@ -74,14 +74,14 @@ func (w *storageCleanupWorker) Work(ctx context.Context, _ *river.Job[jobs.Stora
 	}
 	if result != (storage.StorageCleanupResult{}) {
 		observability.Log("info", "storage cleanup completed", map[string]any{
-			"expired_replays":    result.ExpiredReplays,
-			"match_sessions":     result.MatchSessions,
-			"chat_messages":      result.ChatMessages,
-			"auth_sessions":      result.AuthSessions,
-			"parties":            result.Parties,
-			"map_upload_events":  result.MapUploadEvents,
-			"map_daily_users":    result.MapDailyUsers,
-			"user_notifications": result.UserNotifications,
+			"expired_replays":   result.ExpiredReplays,
+			"match_sessions":    result.MatchSessions,
+			"chat_messages":     result.ChatMessages,
+			"auth_sessions":     result.AuthSessions,
+			"parties":           result.Parties,
+			"map_upload_events": result.MapUploadEvents,
+			"map_daily_users":   result.MapDailyUsers,
+			"inbox_messages":    result.InboxMessages,
 		})
 	}
 	return nil

@@ -1,11 +1,11 @@
-import type { GetServerSideProps } from "next";
 import Head from "next/head";
 import MarkdownContent from "../../components/ui/MarkdownContent";
-import { PageShell } from "../../components/ui/PageShell";
+import Link from "next/link";
+import { DocumentPage } from "../../features/app-shell/components/DocumentPage";
 import { requestChangelogPost } from "../../features/changelog/changelog-client";
 import type { ChangelogPost } from "../../features/changelog/types";
-import { readServerConfig } from "../../lib/runtime-config.server";
 import { useSiteURL } from "../../lib/site";
+import { cachedPage, onDemandPaths, routeParam } from "../../lib/cached-page";
 
 type ChangelogPostPageProps = {
   post: ChangelogPost;
@@ -22,18 +22,12 @@ function formatDate(value: string) {
   }).format(date);
 }
 
-export const getServerSideProps: GetServerSideProps<ChangelogPostPageProps> = async (ctx) => {
-  const slug = typeof ctx.params?.slug === "string" ? ctx.params.slug : "";
-  if (!slug) return { notFound: true };
-  try {
-    const post = await requestChangelogPost(readServerConfig(), slug);
-    if (!post) return { notFound: true };
-    ctx.res.setHeader("Last-Modified", new Date(post.updatedAt).toUTCString());
-    return { props: { post } };
-  } catch {
-    return { notFound: true };
-  }
-};
+export const getStaticPaths = onDemandPaths;
+
+export const getStaticProps = cachedPage<ChangelogPostPageProps>(async (context) => {
+  const post = await requestChangelogPost(routeParam(context, "slug"));
+  return post && { post };
+});
 
 export default function ChangelogPostPage({ post }: ChangelogPostPageProps) {
   const siteURL = useSiteURL();
@@ -53,9 +47,10 @@ export default function ChangelogPostPage({ post }: ChangelogPostPageProps) {
         <meta property="og:url" content={canonicalURL} />
         <meta property="article:modified_time" content={post.updatedAt} />
       </Head>
-      <PageShell variant="operational" backHref="/changelog" backLabel="Changelog" maxWidthClassName="max-w-3xl">
+      <DocumentPage>
+        <Link href="/changelog" className="text-body-sm font-strong text-content-secondary transition hover:text-content-primary">Changelog</Link>
         <article>
-          <header className="border-b border-border-default pb-8">
+          <header className="mt-6 border-b border-border-default pb-8">
             <time dateTime={post.updatedAt} className="text-label font-strong text-status-success">
               Updated {formatDate(post.updatedAt)}
             </time>
@@ -65,7 +60,7 @@ export default function ChangelogPostPage({ post }: ChangelogPostPageProps) {
           </header>
           <MarkdownContent markdown={post.markdown} className="mt-8" />
         </article>
-      </PageShell>
+      </DocumentPage>
     </>
   );
 }

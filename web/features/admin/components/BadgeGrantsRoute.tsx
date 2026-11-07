@@ -4,7 +4,6 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
 import { Heading, Text } from "../../../components/ui/typography";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import {
   requestAdminBadgeDefinitions,
   requestAdminGrantBadge,
@@ -13,7 +12,6 @@ import {
 import { AdminPanel as Panel } from "./admin-primitives";
 
 export function BadgeGrantsRoute(props: {
-  config: RuntimeConfig;
   accessToken: string;
   canManageAdmin: boolean;
 }) {
@@ -23,11 +21,11 @@ export function BadgeGrantsRoute(props: {
   const badgesQuery = useQuery({
     queryKey: ["admin-badge-definitions", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminBadgeDefinitions(props.config, props.accessToken),
+    queryFn: () => requestAdminBadgeDefinitions(props.accessToken),
     staleTime: 5 * 60_000,
   });
   const grantMutation = useMutation({
-    mutationFn: () => requestAdminGrantBadge(props.config, props.accessToken, { nickname, badgeId }),
+    mutationFn: () => requestAdminGrantBadge(props.accessToken, { nickname, badgeId }),
     onSuccess: (result) => {
       setSuccess(result.changed
         ? `${result.badge.label} granted to ${nickname.trim()}.`

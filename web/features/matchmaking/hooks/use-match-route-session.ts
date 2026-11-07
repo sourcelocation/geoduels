@@ -1,9 +1,8 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { getHomeRuntime } from '../../home/state/home-runtime';
-import { useRuntimeConfig } from '../../../lib/runtime-config-context';
+import { homeRuntime } from '../../home/state/home-runtime';
 
 export function useMatchRouteSession(matchId: string | null) {
-  const runtime = getHomeRuntime(useRuntimeConfig());
+  const runtime = homeRuntime;
   const controller = runtime.matchRouteController;
   const state = useSyncExternalStore(
     controller.subscribe,

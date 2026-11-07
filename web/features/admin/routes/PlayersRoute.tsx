@@ -6,13 +6,11 @@ import { Input } from "../../../components/ui/input";
 import { Table, TableHead } from "../../../components/ui/Table";
 import { Heading, Text } from "../../../components/ui/typography";
 import { toPublicEntityId } from "../../../lib/entity-id";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { AdminPanel as Panel } from "../components/admin-primitives";
 import { requestAdminPlayers } from "../lib/admin-client";
 import type { Player } from "../types";
 
 export function PlayersRoute(props: {
-  config: ReturnType<typeof useRuntimeConfig>;
   accessToken: string;
   canManageAdmin: boolean;
   basePath?: string;
@@ -24,7 +22,7 @@ export function PlayersRoute(props: {
   const playersQuery = useQuery({
     queryKey: ["admin-players", query, props.accessToken],
     enabled: !!props.accessToken,
-    queryFn: () => requestAdminPlayers(props.config, props.accessToken, query),
+    queryFn: () => requestAdminPlayers(props.accessToken, query),
     staleTime: 5_000,
   });
   const players = (playersQuery.data?.players || []) as Player[];

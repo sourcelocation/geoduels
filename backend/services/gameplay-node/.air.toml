@@ -1,10 +1,11 @@
-# Air for gameplay-node, inside compose.dev.yaml's container only (it runs from backend/): it rebuilds and
-# restarts the service when its code, the shared packages or the migrations change.
-tmp_dir = "/tmp/air" # in the container, out of the bind-mounted backend/
+# Air for gameplay-node, on this machine (Procfile), from backend/: it rebuilds and restarts the service when
+# its code changes, against compose.yaml's services (../.env, then dev.env).
+tmp_dir = "bin/air/gameplay-node"
+env_files = ["../.env", "dev.env"]
 
 [build]
-cmd = "go build -o /usr/local/bin/gameplay-node ./services/gameplay-node"
-entrypoint = ["/usr/local/bin/gameplay-node"]
+cmd = "go run ./cmd/migrate && go build -o bin/gameplay-node ./services/gameplay-node"
+entrypoint = ["bin/gameplay-node"]
 include_dir = ["services/gameplay-node", "internal", "pkg", "db"]
 include_ext = ["go", "sql", "tpl", "tmpl", "html", "yaml", "yml", "json"]
 include_file = ["go.mod", "go.sum"]

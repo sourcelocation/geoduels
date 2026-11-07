@@ -87,13 +87,6 @@ export function useLobbyScreenState({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [dismissedMaintenanceAlertKey, setDismissedMaintenanceAlertKey] =
     useState("");
-  const currentNavRoute =
-    contentRoute === "map-details" || contentRoute === "map-upload"
-      ? "maps"
-      : contentRoute === "party"
-        ? "friends"
-        : contentRoute;
-
   useEffect(() => {
     if (contentRoute === "top") onBrowseLeaderboard();
   }, [contentRoute, onBrowseLeaderboard]);
@@ -114,7 +107,7 @@ export function useLobbyScreenState({
   const hasActiveParty =
     !!party.snapshot &&
     !!partyPanelState.currentMember &&
-    (party.status === "ready" || party.status === "reconnecting");
+    party.status === "ready";
   const isQueueing = status === "queueing";
   const isSingleplayerLoading = status === "matched_connecting";
   const canUseRankedQueue = !!userId && !isGuest;
@@ -202,7 +195,6 @@ export function useLobbyScreenState({
     setInviteCodeInput,
     mapPickerOpen,
     setMapPickerOpen,
-    currentNavRoute,
     partyPanelState,
     hasActiveParty,
     isQueueing,

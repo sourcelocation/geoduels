@@ -1,14 +1,13 @@
-import type { GetServerSideProps } from "next";
 import Head from "next/head";
 import Link from "next/link";
 import { EmptyState } from "../../components/ui/EmptyState";
 import MarkdownContent from "../../components/ui/MarkdownContent";
-import { PageShell } from "../../components/ui/PageShell";
+import { DocumentPage } from "../../features/app-shell/components/DocumentPage";
 import { DocumentPanel } from "../../components/ui/compositions";
 import { requestChangelogPosts } from "../../features/changelog/changelog-client";
 import type { ChangelogPost } from "../../features/changelog/types";
-import { readServerConfig } from "../../lib/runtime-config.server";
 import { useSiteURL } from "../../lib/site";
+import { cachedPage } from "../../lib/cached-page";
 
 type ChangelogIndexProps = {
   posts: ChangelogPost[];
@@ -25,14 +24,10 @@ function formatDate(value: string) {
   }).format(date);
 }
 
-export const getServerSideProps: GetServerSideProps<ChangelogIndexProps> = async () => {
-  try {
-    const data = await requestChangelogPosts(readServerConfig());
-    return { props: { posts: data.posts || [] } };
-  } catch {
-    return { props: { posts: [] } };
-  }
-};
+export const getStaticProps = cachedPage<ChangelogIndexProps>(
+  async () => ({ posts: (await requestChangelogPosts()).posts || [] }),
+  { posts: [] },
+);
 
 export default function ChangelogIndexPage({ posts }: ChangelogIndexProps) {
   const siteURL = useSiteURL();
@@ -52,12 +47,7 @@ export default function ChangelogIndexPage({ posts }: ChangelogIndexProps) {
         <meta property="og:description" content={description} />
         <meta property="og:url" content={`${siteURL}/changelog`} />
       </Head>
-      <PageShell
-        variant="operational"
-        eyebrow="Updates"
-        title="GeoDuels Changelog"
-        backHref="/"
-      >
+      <DocumentPage eyebrow="Updates" title="GeoDuels Changelog">
           <div className="mt-10 space-y-4">
             {posts.map((post) => (
               <DocumentPanel key={post.id} as="article" className="p-5 sm:p-6">
@@ -78,7 +68,7 @@ export default function ChangelogIndexPage({ posts }: ChangelogIndexProps) {
               <EmptyState message="No changelog posts have been published yet." />
             ) : null}
           </div>
-      </PageShell>
+      </DocumentPage>
     </>
   );
 }

@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/riverqueue/river"
 
 	"geoduels/internal/accounts"
 	"geoduels/internal/authsession"
@@ -23,7 +23,6 @@ import (
 	"geoduels/internal/maps"
 	"geoduels/internal/matches"
 	"geoduels/internal/moderation"
-	"geoduels/internal/notifications"
 	"geoduels/internal/parties"
 	preferencesdomain "geoduels/internal/preferences"
 	"geoduels/internal/profiles"
@@ -32,9 +31,9 @@ import (
 	socialdomain "geoduels/internal/social"
 	staffctx "geoduels/internal/staff"
 	"geoduels/pkg/auth"
+	"geoduels/pkg/live"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
-	"geoduels/pkg/pgnotify"
 )
 
 type api struct {
@@ -56,14 +55,15 @@ type api struct {
 	mapsStore              *maps.PGStore
 	preferences            *preferencesdomain.Service
 	leaderboardService     *leaderboard.Service
-	notificationService    *notifications.Service
 	authSessionService     *authsession.Service
-	presence               *profiles.PGStore
 	queue                  *queue.PGStore
 	chat                   chat.Store
-	events                 *pgnotify.Hub
+	bus                    live.Publisher
+	jobs                   *jobs.Client
 	httpClient             *http.Client
 	googleVerifier         *auth.GoogleVerifier
+	turnstileSiteKey       string
+	googleEmbedKey         string
 	googleClientID         string
 	googleSecret           string
 	discordClientID        string
@@ -93,12 +93,7 @@ type api struct {
 	trustedProxyCIDRs      []*net.IPNet
 	adminBootstrapEmails   map[string]struct{}
 	metrics                *observability.APIMetrics
-	globalStatus           *globalStatusHub
-	live                   *liveHub
-	presenceWrites         presenceThrottle
-	chatLimits             chatRateLimiter
-	proxied                proxiedSockets
-	draining               atomic.Bool
+	status                 *statusCache
 }
 
 func newAPI() (*api, error) {
@@ -106,7 +101,7 @@ func newAPI() (*api, error) {
 	if err != nil {
 		return nil, err
 	}
-	listenURL, err := persistence.ListenURL()
+	bus, err := live.Connect(os.Getenv("NATS_URL"), func() {})
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -153,25 +148,26 @@ func newAPI() (*api, error) {
 	}
 	pool := store.Pool()
 	mapsStore := maps.NewPGStore(pool)
-	matchStore := matches.NewPGStore(pool, nil)
-	partyStore := parties.NewPGStore(pool, mapsStore)
-	partyService := parties.NewService(partyStore)
-	socialStore := socialdomain.NewPGStore(pool)
-	jobsClient, err := jobs.NewClient(pool, "", nil, nil)
+	workers := river.NewWorkers()
+	jobsClient, err := jobs.NewClient(pool, jobs.QueueLive, workers, nil)
 	if err != nil {
 		store.Close()
 		return nil, err
 	}
+	matchStore := matches.NewPGStore(pool, nil, jobsClient)
+	partyStore := parties.NewPGStore(pool, mapsStore)
+	partyService := parties.NewService(partyStore)
+	socialStore := socialdomain.NewPGStore(pool, jobsClient)
 	contentStore := content.NewPGStore(pool, jobsClient)
-	seasonStore := seasons.NewPGStore(pool)
+	seasonStore := seasons.NewPGStore(pool, jobsClient)
 	badgeStore := badges.NewPGStore(pool, jobsClient)
 	accountsStore := accounts.NewPGStore(pool, jobsClient)
 	accountsService := accounts.NewService(accountsStore)
 	mapsService := maps.NewService(mapsStore)
 	instance := &api{
-		staff:                  staffctx.NewService(staffctx.NewPGStore(pool)),
+		staff:                  staffctx.NewService(staffctx.NewPGStore(pool, jobsClient)),
 		moderation:             moderation.NewService(moderation.NewPGStore(pool, jobsClient), moderation.NewRiskEngineFromEnv()),
-		curation:               curation.NewService(curation.NewPGStore(pool)),
+		curation:               curation.NewService(curation.NewPGStore(pool, jobsClient)),
 		db:                     store,
 		accounts:               accountsService,
 		sessions:               authsession.NewPGStore(pool),
@@ -187,15 +183,16 @@ func newAPI() (*api, error) {
 		mapsStore:              mapsStore,
 		preferences:            preferencesdomain.NewService(preferencesdomain.NewPGStore(pool)),
 		leaderboardService:     leaderboard.NewService(leaderboard.NewPGStore(pool)),
-		notificationService:    notifications.NewService(notifications.NewPGStore(pool)),
 		authSessionService:     authsession.NewService(authsession.NewPGStore(pool)),
-		presence:               profiles.NewPGStore(pool),
 		queue:                  queue.NewPGStore(pool),
 		chat:                   chat.NewPGStore(pool),
-		events:                 pgnotify.NewHub(listenURL),
+		bus:                    bus,
+		jobs:                   jobsClient,
 		httpClient:             &http.Client{Timeout: 3 * time.Second},
 		googleVerifier:         googleVerifier,
 		googleClientID:         googleClientID,
+		turnstileSiteKey:       strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
+		googleEmbedKey:         strings.TrimSpace(os.Getenv("GOOGLE_EMBED_KEY")),
 		googleSecret:           googleSecret,
 		discordClientID:        discordClientID,
 		discordSecret:          discordSecret,
@@ -225,12 +222,17 @@ func newAPI() (*api, error) {
 		adminBootstrapEmails:   parseEmailAllowlist(os.Getenv("ADMIN_BOOTSTRAP_EMAILS")),
 		metrics:                observability.NewAPIMetrics(),
 	}
-	go instance.events.Run(context.Background())
-	instance.globalStatus = newGlobalStatusHub(instance)
-	instance.globalStatus.start()
-	instance.live = newLiveHub(instance)
-	instance.live.start()
+	instance.status = newStatusCache(instance)
+	go instance.status.run()
+	river.AddWorker(workers, &inboxChangedWorker{api: instance})
+	river.AddWorker(workers, &partyChangedWorker{api: instance})
+	river.AddWorker(workers, &presenceChangedWorker{api: instance})
+	if err := jobsClient.Start(context.Background()); err != nil {
+		store.Close()
+		return nil, err
+	}
 	go instance.runMatchmaker()
+	go instance.runPresenceSweep()
 	return instance, nil
 }
 
@@ -270,27 +272,23 @@ func routes(a *api) *echo.Echo {
 	e.POST("/api/auth/refresh", a.refresh)
 	e.POST("/api/auth/logout", a.logout)
 	e.POST("/api/auth/logout-all", a.logoutAll)
-	e.GET("/api/status", a.publicGlobalStatus)
+	e.GET("/api/status", func(c echo.Context) error { return writeJSON(c, a.status.current()) })
 	e.PATCH("/api/me/badge", a.updateSelectedBadge, a.active)
 	e.GET("/api/v1/staff/players/:id/warnings", a.staffWarnings)
 	e.POST("/api/v1/staff/players/:id/warnings", a.staffWarn, a.active)
 	e.POST("/api/v1/staff/players/:id/warnings/:warningId/withdraw", a.staffWithdrawWarning, a.active)
-	e.GET("/api/v1/me/warnings", a.userWarnings)
-	e.POST("/api/v1/me/warnings/:warningId/acknowledge", a.acknowledgeWarning)
 	e.PUT("/api/me/nickname", a.updateNickname, a.active)
 	e.PATCH("/api/me/nickname", a.updateNickname, a.active)
 	e.PATCH("/api/me/preferences", a.updateUserPreferences, a.active)
 	e.DELETE("/api/me", a.deleteAccount)
 	e.DELETE("/api/me/auth-providers/:provider", a.unlinkAuthProvider)
-	e.GET("/api/me/live", a.userLive)
-	e.GET("/api/me/notifications", a.userNotifications)
-	e.POST("/api/me/notifications/read-all", a.markAllUserNotificationsRead)
-	e.POST("/api/me/notifications/:id/read", a.markUserNotificationRead)
+	e.GET("/api/me/inbox", a.inboxPage)
+	e.POST("/api/me/inbox/read-all", a.markAllInboxRead)
+	e.POST("/api/me/inbox/:id/read", a.markInboxRead)
 	e.GET("/api/me/social-settings", a.socialSettings)
 	e.PATCH("/api/me/social-settings", a.socialSettings, a.active)
 	e.GET("/api/me/friends-page", a.friendsPage)
 	e.POST("/api/me/friend-code", a.createFriendCode, a.active)
-	e.GET("/api/me/party-invitations", a.partyInvitations)
 	e.POST("/api/friend-requests", a.sendFriendRequest, a.active)
 	e.POST("/api/friend-requests/:id/:action", a.respondFriendRequest, a.active)
 	e.DELETE("/api/friends/:userId", a.removeFriend, a.active)
@@ -317,13 +315,21 @@ func routes(a *api) *echo.Echo {
 	e.POST("/api/v2/matches", a.createMatch, a.active)
 	e.GET("/api/v2/matches/:id", a.getMatchView)
 	e.GET("/api/v2/matches/:id/bootstrap", a.matchBootstrap)
-	e.GET("/api/v2/matches/:id/ws", a.matchSocket)
 	e.GET("/api/v2/me/match", a.myMatch)
-	e.GET("/api/v2/queue/ws", a.queueSocket)
+	e.POST("/api/v2/queue", a.joinQueue)
+	e.DELETE("/api/v2/queue", a.leaveQueue)
 	e.POST("/api/v2/parties", a.createParty)
 	e.POST("/api/v2/parties/:code/join", a.joinParty)
-	e.GET("/api/v2/parties/:id/ws", a.partyWS)
-	e.GET("/api/v2/chat/ws", a.chatWS)
+	e.PUT("/api/v2/parties/:id/team", a.partyCommand(a.setPartyTeam))
+	e.POST("/api/v2/parties/:id/shuffle", a.partyCommand(a.shuffleParty))
+	e.PUT("/api/v2/parties/:id/settings", a.partyCommand(a.updatePartySettings))
+	e.POST("/api/v2/parties/:id/kick", a.partyCommand(a.kickFromParty))
+	e.POST("/api/v2/parties/:id/transfer", a.partyCommand(a.transferParty))
+	e.POST("/api/v2/parties/:id/leave", a.partyCommand(a.leaveParty))
+	e.POST("/api/v2/parties/:id/start", a.partyCommand(a.startParty))
+	e.GET("/api/conversations/:id", a.getConversation)
+	e.POST("/api/conversations/:id/messages", a.sendMessage)
+	e.POST("/api/conversations/:id/read", a.markConversationRead)
 	e.GET("/api/maps", a.listMaps)
 	e.POST("/api/maps", a.createMap, a.active)
 	e.GET("/api/maps/quota", a.mapUploadQuota)
@@ -385,6 +391,13 @@ func routes(a *api) *echo.Echo {
 	staff.POST("/motw/maps/:id", a.nominateMOTW)
 	staff.PUT("/motw/nominations/:id/like", a.likeMOTW)
 	staff.PUT("/motw/schedule", a.rescheduleMOTW)
+	internal := e.Group("/internal/live", a.internalOnly)
+	internal.GET("/identify", a.identifyConnection)
+	internal.POST("/connect", a.connectLive)
+	internal.POST("/disconnect", a.disconnectLive)
+	internal.POST("/heartbeat", a.heartbeatLive)
+	internal.GET("/status", a.statusLive)
+	internal.GET("/match-route/:id", a.matchRoute)
 	if a.metrics != nil {
 		e.GET("/metrics", echo.WrapHandler(observability.Handler(a.metrics.Registry)))
 	}

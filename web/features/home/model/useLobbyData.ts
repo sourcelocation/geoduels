@@ -1,34 +1,31 @@
+import { leaderboardKey, normalizeLeaderboardSummary, requestLeaderboard } from "../../lobby/lib/leaderboard";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import type {
   SessionController,
   SessionState,
 } from "../../auth/controllers/session-controller";
 import {
-  requestLeaderboard,
   requestLobbyChangelog,
 } from "../../auth/lib/auth-client";
-import { getAuthGateway } from "../../auth/auth-gateway";
+import { authGateway } from "../../auth/auth-gateway";
 
 type Params = {
-  config: RuntimeConfig;
   sessionController: SessionController;
   auth: SessionState;
   enabled: boolean;
 };
 
 export function useLobbyData({
-  config,
   sessionController,
   auth,
   enabled,
 }: Params) {
   const [leaderboardEnabled, setLeaderboardEnabled] = useState(false);
-  const globalState = getAuthGateway(config).getBootstrapPayload()?.global;
+  const globalState = authGateway.getBootstrapPayload()?.global;
 
   const leaderboardQuery = useQuery({
-    queryKey: ["leaderboard", auth.userId, auth.accessToken],
+    queryKey: leaderboardKey(auth.userId),
     enabled: enabled && leaderboardEnabled,
     queryFn: async () => {
       let accessToken: string | undefined;
@@ -38,7 +35,7 @@ export function useLobbyData({
           accessToken = session.accessToken;
         }
       }
-      return requestLeaderboard(config, accessToken);
+      return requestLeaderboard(accessToken);
     },
     refetchOnMount: false,
     staleTime: 60_000,
@@ -46,16 +43,11 @@ export function useLobbyData({
 
   const changelogQuery = useQuery({
     queryKey: ["lobby-changelog"],
-    queryFn: async () => requestLobbyChangelog(config),
+    queryFn: async () => requestLobbyChangelog(),
     enabled,
     refetchOnMount: false,
     staleTime: 5 * 60_000,
   });
-
-  useEffect(() => {
-    if (!leaderboardQuery.data) return;
-    sessionController.applyLeaderboardSummary(leaderboardQuery.data);
-  }, [leaderboardQuery.data, sessionController]);
 
   return {
     onlinePlayers:
@@ -70,6 +62,7 @@ export function useLobbyData({
       playPaused: !!globalState.maintenance.playPaused,
       message: globalState.maintenance.message || "",
     } : null,
+    leaderboard: normalizeLeaderboardSummary(leaderboardQuery.data),
     leaderboardLoading:
       leaderboardQuery.isLoading || leaderboardQuery.isFetching,
     changelogEyebrow:

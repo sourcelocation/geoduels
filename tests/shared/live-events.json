@@ -1,0 +1,300 @@
+[
+  {
+    "type": "session",
+    "data": {
+      "userId": "u1",
+      "social": {
+        "friends": [
+          {
+            "userId": "u2",
+            "displayName": "Friend",
+            "relationship": "friends",
+            "presenceStatus": "online",
+            "conversationId": "direct:u1:u2",
+            "unread": 2,
+            "lastMessageAt": "2026-01-02T03:04:05Z"
+          }
+        ],
+        "outgoing": [
+          {
+            "id": "r2",
+            "direction": "outgoing",
+            "player": {
+              "userId": "u2",
+              "displayName": "Friend",
+              "relationship": "friends",
+              "presenceStatus": "online"
+            },
+            "createdAt": "2026-01-02T03:04:05Z",
+            "expiresAt": "2026-01-02T03:04:05Z"
+          }
+        ],
+        "pending": [
+          {
+            "item": {
+              "id": "request:r1",
+              "conversationId": "direct:u1:u2",
+              "kind": "request",
+              "senderUserId": "u2",
+              "senderDisplayName": "Friend",
+              "audience": "all",
+              "body": "Friend invited you to a party",
+              "createdAt": "2026-01-02T03:04:05Z",
+              "actions": [
+                {
+                  "label": "Join",
+                  "post": "/api/party-invitations/i1/accept",
+                  "open": "/party/ABC"
+                },
+                {
+                  "label": "Decline",
+                  "post": "/api/party-invitations/i1/decline"
+                }
+              ]
+            },
+            "player": {
+              "userId": "u2",
+              "displayName": "Friend",
+              "relationship": "friends",
+              "presenceStatus": "online"
+            }
+          }
+        ]
+      },
+      "inbox": {
+        "unread": 1,
+        "messages": [
+          {
+            "id": 7,
+            "kind": "badge",
+            "title": "New badge",
+            "body": "You earned it",
+            "imageUrl": "/badge.png",
+            "modal": true,
+            "createdAt": "2026-01-02T03:04:05Z"
+          }
+        ]
+      },
+      "party": {
+        "id": "p1",
+        "revision": 3,
+        "inviteCode": "ABC",
+        "ownerUserId": "u1",
+        "state": "open",
+        "mode": "duel",
+        "mapScope": "world",
+        "config": {},
+        "createdAt": "2026-01-02T03:04:05Z",
+        "expiresAt": "2026-01-02T03:04:05Z",
+        "members": [
+          {
+            "userId": "u1",
+            "displayName": "Me",
+            "role": "owner",
+            "ready": false,
+            "joinedAt": "2026-01-02T03:04:05Z"
+          }
+        ]
+      },
+      "queue": {
+        "queued": true,
+        "queuedAt": 1767323045000
+      },
+      "activeMatch": {
+        "matchId": "m1",
+        "kind": "ranked_duel",
+        "mode": "duel",
+        "status": "live"
+      },
+      "status": {
+        "onlinePlayers": 12,
+        "maintenance": {
+          "phase": "normal"
+        }
+      }
+    }
+  },
+  {
+    "type": "status",
+    "data": {
+      "onlinePlayers": 12,
+      "maintenance": {
+        "phase": "normal"
+      }
+    }
+  },
+  {
+    "type": "social.updated",
+    "data": {
+      "friends": [
+        {
+          "userId": "u2",
+          "displayName": "Friend",
+          "relationship": "friends",
+          "presenceStatus": "online",
+          "conversationId": "direct:u1:u2",
+          "unread": 2,
+          "lastMessageAt": "2026-01-02T03:04:05Z"
+        }
+      ],
+      "outgoing": [
+        {
+          "id": "r2",
+          "direction": "outgoing",
+          "player": {
+            "userId": "u2",
+            "displayName": "Friend",
+            "relationship": "friends",
+            "presenceStatus": "online"
+          },
+          "createdAt": "2026-01-02T03:04:05Z",
+          "expiresAt": "2026-01-02T03:04:05Z"
+        }
+      ],
+      "pending": [
+        {
+          "item": {
+            "id": "request:r1",
+            "conversationId": "direct:u1:u2",
+            "kind": "request",
+            "senderUserId": "u2",
+            "senderDisplayName": "Friend",
+            "audience": "all",
+            "body": "Friend invited you to a party",
+            "createdAt": "2026-01-02T03:04:05Z",
+            "actions": [
+              {
+                "label": "Join",
+                "post": "/api/party-invitations/i1/accept",
+                "open": "/party/ABC"
+              },
+              {
+                "label": "Decline",
+                "post": "/api/party-invitations/i1/decline"
+              }
+            ]
+          },
+          "player": {
+            "userId": "u2",
+            "displayName": "Friend",
+            "relationship": "friends",
+            "presenceStatus": "online"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "friend.presence",
+    "data": {
+      "userId": "u2",
+      "presenceStatus": "online",
+      "activity": "in_match"
+    }
+  },
+  {
+    "type": "inbox.added",
+    "data": {
+      "message": {
+        "id": 7,
+        "kind": "badge",
+        "title": "New badge",
+        "body": "You earned it",
+        "imageUrl": "/badge.png",
+        "modal": true,
+        "createdAt": "2026-01-02T03:04:05Z"
+      }
+    }
+  },
+  {
+    "type": "inbox.read",
+    "data": {
+      "id": 7
+    }
+  },
+  {
+    "type": "conversation.item",
+    "data": {
+      "item": {
+        "id": "request:r1",
+        "conversationId": "direct:u1:u2",
+        "kind": "request",
+        "senderUserId": "u2",
+        "senderDisplayName": "Friend",
+        "audience": "all",
+        "body": "Friend invited you to a party",
+        "createdAt": "2026-01-02T03:04:05Z",
+        "actions": [
+          {
+            "label": "Join",
+            "post": "/api/party-invitations/i1/accept",
+            "open": "/party/ABC"
+          },
+          {
+            "label": "Decline",
+            "post": "/api/party-invitations/i1/decline"
+          }
+        ]
+      },
+      "notify": true
+    }
+  },
+  {
+    "type": "conversation.item_removed",
+    "data": {
+      "conversationId": "direct:u1:u2",
+      "itemId": "request:r1"
+    }
+  },
+  {
+    "type": "party.updated",
+    "data": {
+      "party": {
+        "id": "p1",
+        "revision": 3,
+        "inviteCode": "ABC",
+        "ownerUserId": "u1",
+        "state": "open",
+        "mode": "duel",
+        "mapScope": "world",
+        "config": {},
+        "createdAt": "2026-01-02T03:04:05Z",
+        "expiresAt": "2026-01-02T03:04:05Z",
+        "members": [
+          {
+            "userId": "u1",
+            "displayName": "Me",
+            "role": "owner",
+            "ready": false,
+            "joinedAt": "2026-01-02T03:04:05Z"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "party.left",
+    "data": {
+      "partyId": "p1",
+      "reason": "You left this party"
+    }
+  },
+  {
+    "type": "queue.updated",
+    "data": {
+      "queued": true,
+      "queuedAt": 1767323045000
+    }
+  },
+  {
+    "type": "match.started",
+    "data": {
+      "match": {
+        "matchId": "m1",
+        "kind": "ranked_duel",
+        "mode": "duel",
+        "status": "live"
+      }
+    }
+  }
+]

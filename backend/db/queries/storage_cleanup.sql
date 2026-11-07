@@ -22,11 +22,12 @@ WHERE c.id IN (
 );
 
 -- name: DeleteChatMessages :execresult
+-- Friends' conversations are kept longer than a party's or a match's.
 DELETE FROM chat_messages
 WHERE id IN (
-    SELECT id FROM chat_messages
-    WHERE created_at < now() - interval '7 days'
-    ORDER BY created_at
+    SELECT m.id FROM chat_messages m JOIN chat_conversations c ON c.id = m.conversation_id
+    WHERE m.created_at < now() - CASE WHEN c.scope_kind = 'direct' THEN interval '90 days' ELSE interval '7 days' END
+    ORDER BY m.created_at
     LIMIT $1
 );
 
@@ -89,19 +90,10 @@ WHERE id IN (
     LIMIT $1
 );
 
--- name: DeleteUserEvents :execresult
-DELETE FROM user_events
-WHERE (user_id, sequence) IN (
-    SELECT user_id, sequence FROM user_events
-    WHERE created_at < now() - interval '7 days'
-    ORDER BY created_at
-    LIMIT $1
-);
-
--- name: DeleteUserNotifications :execresult
-DELETE FROM user_notifications
+-- name: DeleteInboxMessages :execresult
+DELETE FROM inbox_messages
 WHERE id IN (
-    SELECT id FROM user_notifications
+    SELECT id FROM inbox_messages
     WHERE (read_at IS NOT NULL AND read_at < now() - interval '30 days')
        OR (read_at IS NULL AND created_at < now() - interval '90 days')
     ORDER BY created_at
@@ -146,17 +138,9 @@ WHERE key IN (
     LIMIT $1
 );
 
--- name: DeletePresence :execresult
--- Players not seen for a day; anyone online refreshes their row every half minute.
-DELETE FROM presence
-WHERE user_id IN (
-    SELECT user_id FROM presence
-    WHERE seen_at < now() - interval '1 day'
-    LIMIT $1
-);
-
--- name: ExpireParties :execrows
+-- name: ExpireParties :many
 -- Parties past their lifetime close, unless their match is still going.
 UPDATE parties SET state = 'expired', updated_at = now()
 WHERE state = 'open' AND expires_at < now()
-  AND NOT EXISTS (SELECT 1 FROM match_sessions ms WHERE ms.match_id = parties.last_match_id AND ms.ended_at IS NULL);
+  AND NOT EXISTS (SELECT 1 FROM match_sessions ms WHERE ms.match_id = parties.last_match_id AND ms.ended_at IS NULL)
+RETURNING id;

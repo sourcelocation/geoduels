@@ -42,7 +42,7 @@ export function ChangelogSection(props: OperationsSectionProps) {
   const changelogQuery = useQuery({
     queryKey: ["admin-changelog", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminGetChangelog(props.config, props.accessToken),
+    queryFn: () => requestAdminGetChangelog(props.accessToken),
   });
 
   useEffect(() => {
@@ -85,9 +85,9 @@ export function ChangelogSection(props: OperationsSectionProps) {
         slug: changelogDraft.slug || slugify(changelogDraft.title),
       };
       if (selectedChangelogId === "new") {
-        return requestAdminCreateChangelogPost(props.config, props.accessToken, content);
+        return requestAdminCreateChangelogPost(props.accessToken, content);
       }
-      return requestAdminUpdateChangelogPost(props.config, props.accessToken, selectedChangelogId, content);
+      return requestAdminUpdateChangelogPost(props.accessToken, selectedChangelogId, content);
     },
     onSuccess: async (post) => {
       setSelectedChangelogId(post.id);

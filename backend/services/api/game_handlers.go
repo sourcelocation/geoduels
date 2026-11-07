@@ -5,12 +5,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"geoduels/internal/badges"
-	"geoduels/internal/notifications"
+	"geoduels/internal/inbox"
 	"geoduels/pkg/auth"
 	"geoduels/pkg/gameplay"
 	"geoduels/pkg/maintenance"
@@ -81,92 +80,47 @@ func (a *api) updateSelectedBadge(c echo.Context) error {
 	})
 }
 
-// userNotification is a notification as clients show it; payload is its stored JSON.
-type userNotification struct {
-	ID               int64           `json:"id"`
-	Type             string          `json:"type"`
-	Category         string          `json:"category,omitempty"`
-	Payload          json.RawMessage `json:"payload"`
-	ReadAt           *time.Time      `json:"readAt,omitempty"`
-	CreatedAt        time.Time       `json:"createdAt"`
-	ActorUserID      string          `json:"actorUserId,omitempty"`
-	ActorDisplayName string          `json:"actorDisplayName,omitempty"`
-}
-
-func newUserNotification(n notifications.Notification) userNotification {
-	return userNotification{
-		ID: n.ID, Type: n.Type, Category: n.Category, Payload: n.Payload, ReadAt: n.ReadAt, CreatedAt: n.CreatedAt,
-		ActorUserID: n.ActorUserID, ActorDisplayName: n.ActorDisplayName,
-	}
-}
-
-func newUserNotifications(list []notifications.Notification) []userNotification {
-	if list == nil {
-		return nil
-	}
-	out := make([]userNotification, len(list))
-	for i, n := range list {
-		out[i] = newUserNotification(n)
-	}
-	return out
-}
-
-func (a *api) userNotifications(c echo.Context) error {
+func (a *api) inboxPage(c echo.Context) error {
 	r := c.Request()
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
-	if strings.EqualFold(r.URL.Query().Get("filter"), "all") {
-		if a.notificationService != nil {
-			limit := queryLimit(r, 30)
-			beforeID, _ := strconv.ParseInt(r.URL.Query().Get("beforeId"), 10, 64)
-			inbox, err := a.notificationService.Inbox(r.Context(), claims.Sub, limit, beforeID)
-			if err != nil {
-				return plainTextError(c, http.StatusInternalServerError, "notifications unavailable")
-			}
-			return writeJSON(c, map[string]any{"notifications": newUserNotifications(inbox)})
-		}
-	}
-	unseen, err := a.notificationService.List(r.Context(), claims.Sub, 20)
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	messages, err := inbox.Page(r.Context(), a.db.Pool(), claims.Sub, queryLimit(r, inboxStartSize), before)
 	if err != nil {
-		return plainTextError(c, http.StatusInternalServerError, "notifications unavailable")
+		return plainTextError(c, http.StatusInternalServerError, "inbox unavailable")
 	}
-	return writeJSON(c, map[string]any{"notifications": newUserNotifications(unseen)})
+	return writeJSON(c, map[string]any{"messages": newInboxMessages(messages)})
 }
 
-func (a *api) markAllUserNotificationsRead(c echo.Context) error {
-	claims, err := a.authenticatedClaims(c.Request())
+func (a *api) markInboxRead(c echo.Context) error {
+	r := c.Request()
+	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
-	if a.notificationService == nil {
-		return plainTextError(c, http.StatusNotImplemented, "notifications unavailable")
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil {
+		return plainTextError(c, http.StatusBadRequest, "invalid message id")
 	}
-	if err := a.notificationService.MarkAllRead(c.Request().Context(), claims.Sub); err != nil {
-		return plainTextError(c, http.StatusInternalServerError, "failed to mark notifications")
+	if err := inbox.MarkRead(r.Context(), a.db.Pool(), claims.Sub, id); err != nil {
+		return plainTextError(c, http.StatusInternalServerError, "inbox unavailable")
 	}
-	if a.live != nil {
-		a.live.publish(claims.Sub, liveEvent{Type: liveNotificationReadAll})
-	}
+	a.tell([]string{claims.Sub}, inboxRead{ID: id})
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) markUserNotificationRead(c echo.Context) error {
-	claims, err := a.authenticatedClaims(c.Request())
+func (a *api) markAllInboxRead(c echo.Context) error {
+	r := c.Request()
+	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
-	notificationID, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
-	if err != nil {
-		return plainTextError(c, http.StatusBadRequest, "invalid notification id")
+	if err := inbox.MarkAllRead(r.Context(), a.db.Pool(), claims.Sub); err != nil {
+		return plainTextError(c, http.StatusInternalServerError, "inbox unavailable")
 	}
-	if err := a.notificationService.MarkRead(c.Request().Context(), claims.Sub, notificationID); err != nil {
-		return plainTextError(c, http.StatusInternalServerError, "failed to mark notification")
-	}
-	if a.live != nil {
-		a.live.publish(claims.Sub, liveEvent{Type: liveNotificationRead, NotificationID: notificationID})
-	}
+	a.tell([]string{claims.Sub}, inboxRead{})
 	return c.NoContent(http.StatusNoContent)
 }
 

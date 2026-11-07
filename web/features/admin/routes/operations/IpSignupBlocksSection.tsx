@@ -19,15 +19,15 @@ export function IpSignupBlocksSection(props: OperationsSectionProps) {
   const ipBansQuery = useQuery({
     queryKey: ["admin-ip-signup-bans", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminIPSignupBans(props.config, props.accessToken),
+    queryFn: () => requestAdminIPSignupBans(props.accessToken),
   });
 
   const addIPBan = useMutation({
-    mutationFn: () => requestAdminAddIPSignupBan(props.config, props.accessToken, ipAddress, ipReason),
+    mutationFn: () => requestAdminAddIPSignupBan(props.accessToken, ipAddress, ipReason),
     onSuccess: props.refreshAdminData,
   });
   const removeIPBan = useMutation({
-    mutationFn: (ip: string) => requestAdminRemoveIPSignupBan(props.config, props.accessToken, ip),
+    mutationFn: (ip: string) => requestAdminRemoveIPSignupBan(props.accessToken, ip),
     onSuccess: props.refreshAdminData,
   });
 

@@ -3,16 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Table, TableHead } from "../../../components/ui/Table";
 import { Heading, Text } from "../../../components/ui/typography";
 import { toPublicEntityId } from "../../../lib/entity-id";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { requestModeratorSignals } from "../lib/moderator-client";
 import type { ModerationSignal } from "../types";
 import { AdminPanel as Panel } from "./admin-primitives";
 
-export function SignalsRoute(props: { config: RuntimeConfig; accessToken: string }) {
+export function SignalsRoute(props: { accessToken: string }) {
   const signalsQuery = useQuery({
     queryKey: ["moderator-signals", props.accessToken],
     enabled: !!props.accessToken,
-    queryFn: () => requestModeratorSignals(props.config, props.accessToken),
+    queryFn: () => requestModeratorSignals(props.accessToken),
     staleTime: 5_000,
   });
   const signals = (signalsQuery.data?.signals || []) as ModerationSignal[];

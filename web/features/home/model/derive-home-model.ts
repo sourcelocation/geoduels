@@ -1,9 +1,9 @@
+import type { LeaderboardSummary } from "../../lobby/lib/leaderboard";
 import {
   isRatedKind,
   type RoundResultOverlayProps,
   type Snapshot,
 } from "../../game/model/types";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { getMatchReturnDestination } from "../../matchmaking/lib/match-return";
 import { getTeamPresentation } from "../../../lib/team-presentation";
 import { deriveUIPhase } from "../../../lib/uiPhase";
@@ -17,14 +17,16 @@ import { deriveDuelRatingDeltas } from "../../game/model/match-rating";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 import type { MatchState } from "../../matchmaking/controllers/match-controller";
 import type { HomeViewModel } from "./types";
+import { APP_VERSION, MAX_HP, ROUND_DURATION_MS } from "../../../lib/constants";
 
 type Params = {
   auth: SessionState;
   match: MatchState;
   game: GameState;
-  config: RuntimeConfig;
+  googleEmbedKey: string;
   homeResumeMatchId?: string;
   routeMatchId?: string | null;
+  leaderboard?: LeaderboardSummary | null;
   leaderboardLoading?: boolean;
   maintenance?: MaintenanceStatus | null;
   changelogEyebrow?: string;
@@ -88,9 +90,10 @@ export function deriveHomeModel({
   auth,
   match,
   game,
-  config,
+  googleEmbedKey,
   homeResumeMatchId = "",
   routeMatchId,
+  leaderboard = null,
   leaderboardLoading = false,
   maintenance = null,
   changelogEyebrow = "Latest News",
@@ -99,8 +102,7 @@ export function deriveHomeModel({
   changelogSlug = "",
   changelogUpdatedAt = "",
 }: Params): HomeViewModel {
-  const activeMatchId =
-    homeResumeMatchId || match.activeMatchId || match.snapshot?.matchId || "";
+  const activeMatchId = homeResumeMatchId;
   const snapshot =
     routeMatchId && match.snapshot?.matchId === routeMatchId
       ? match.snapshot
@@ -229,8 +231,8 @@ export function deriveHomeModel({
       : matchConfig.roundTimerMode === "fixed" &&
           typeof matchConfig.roundTimeLimitMs === "number"
         ? matchConfig.roundTimeLimitMs
-        : config.roundDurationMs;
-  const streetViewSrc = buildStreetViewSrc(snapshot, config.googleEmbedKey);
+        : ROUND_DURATION_MS;
+  const streetViewSrc = buildStreetViewSrc(snapshot, googleEmbedKey);
   const selfQueueName = getSelfQueueName({
     displayName: auth.displayName,
     nicknameInput: auth.nicknameInput,
@@ -368,7 +370,7 @@ export function deriveHomeModel({
           hp: game.resultShownHP.opp,
         },
       },
-      hpPct: (hp) => formatHpPct(config.maxHP, hp),
+      hpPct: (hp) => formatHpPct(MAX_HP, hp),
     };
   }
 
@@ -401,7 +403,7 @@ export function deriveHomeModel({
       mmr: auth.mmr,
       gamesPlayed: auth.gamesPlayed,
       winsPct,
-      leaderboard: auth.leaderboard,
+      leaderboard,
       leaderboardLoading,
       status: match.matchmaking.status,
       queueStartedAt: match.matchmaking.queueStartedAt,
@@ -531,8 +533,8 @@ export function deriveHomeModel({
       activeMatchId,
       sourcePartyInviteCode: match.sourcePartyInviteCode,
       returnTarget: match.returnTarget,
-      appVersion: config.appVersion,
-      maxHP: config.maxHP,
+      appVersion: APP_VERSION,
+      maxHP: MAX_HP,
     },
   };
 }

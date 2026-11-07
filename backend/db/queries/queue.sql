@@ -29,3 +29,10 @@ WHERE seen_at < now() - (sqlc.arg(fresh_seconds)::double precision * interval '1
 -- name: TryMatchmakerLock :one
 -- Held by one transaction at a time, until it ends.
 SELECT pg_try_advisory_xact_lock(hashtextextended('geoduels:matchmaker', 0)) AS acquired;
+
+-- name: TouchQueueTicketsOf :exec
+-- Keeps connected players' tickets fresh; a ticket whose player is gone goes stale.
+UPDATE queue_tickets SET seen_at = now() WHERE user_id = ANY(sqlc.arg(user_ids)::uuid[]);
+
+-- name: QueueTicketJoinedAt :one
+SELECT min(joined_at)::timestamptz FROM queue_tickets WHERE user_id = $1;

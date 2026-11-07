@@ -319,52 +319,13 @@ func MarkMatchStartedTx(ctx context.Context, tx pgx.Tx, partyID, matchID string)
 	return nil
 }
 
-// TouchMemberSeen records that the member has the party open. It reports whether that changed
-// their presence, so the party should hear about it.
-func (s *PGStore) TouchMemberSeen(ctx context.Context, partyID, userID string) (bool, error) {
-	partyUUID, userUUID, err := profileUUID2(partyID, userID)
+// NextRevision is taken before reading a party to send it, so a higher revision never carries older state.
+func (s *PGStore) NextRevision(ctx context.Context, partyID string) (int64, error) {
+	id, err := profileUUID(partyID)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	previous, err := s.q().TouchPartyMemberSeen(ctx, db.TouchPartyMemberSeenParams{PartyID: partyUUID, UserID: userUUID})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return memberPresence(time.Now(), previous) != PresenceOnline, nil
-}
-
-// ClearMemberSeen marks the member as gone from the party. It reports whether they were there.
-func (s *PGStore) ClearMemberSeen(ctx context.Context, partyID, userID string) (bool, error) {
-	partyUUID, userUUID, err := profileUUID2(partyID, userID)
-	if err != nil {
-		return false, err
-	}
-	cleared, err := s.q().ClearPartyMemberSeen(ctx, db.ClearPartyMemberSeenParams{PartyID: partyUUID, UserID: userUUID})
-	return cleared > 0, err
-}
-
-const (
-	partyPresenceOnlineFor = 15 * time.Second
-	partyPresenceAwayFor   = 60 * time.Second
-)
-
-// memberPresence is online while the member had the party open within the last 15 seconds, away
-// within the last minute, and offline after.
-func memberPresence(now time.Time, seenAt pgtype.Timestamptz) Presence {
-	if !seenAt.Valid {
-		return PresenceOffline
-	}
-	switch age := now.Sub(seenAt.Time); {
-	case age <= partyPresenceOnlineFor:
-		return PresenceOnline
-	case age <= partyPresenceAwayFor:
-		return PresenceAway
-	default:
-		return PresenceOffline
-	}
+	return s.q().NextPartyRevision(ctx, id)
 }
 
 func (s *PGStore) ExpireParty(ctx context.Context, partyID string) error {
@@ -409,6 +370,7 @@ type partySnapshotRow struct {
 	CreatedAt, ExpiresAt              pgtype.Timestamptz
 	MapName                           string
 	MapLocationCount                  int32
+	Revision                          int64
 }
 
 func (s *PGStore) getParty(ctx context.Context, fetch func(ctx context.Context) (partySnapshotRow, error)) (Party, bool, error) {
@@ -429,6 +391,7 @@ func (s *PGStore) getParty(ctx context.Context, fetch func(ctx context.Context) 
 		snap.ActiveMatchID = row.LastMatchID
 	}
 	snap.CreatedAt, snap.ExpiresAt = row.CreatedAt.Time, row.ExpiresAt.Time
+	snap.Revision = row.Revision
 	snap.MapName, snap.MapLocationCount = row.MapName, int(row.MapLocationCount)
 	_ = json.Unmarshal([]byte(row.ConfigJSON), &snap.Config)
 	snap.Config = gameplay.NormalizeMatchConfig(snap.Config)
@@ -457,7 +420,7 @@ func toPartySnapshotRow(row db.GetPartySnapshotByIDRow) partySnapshotRow {
 		LastMatchID: anyText(row.LastMatchID), LastMatchStatus: row.LastMatchStatus,
 		CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 		ConfigJSON: string(row.ConfigJson), MapID: anyText(row.MapID),
-		MapName: row.DisplayName, MapLocationCount: row.LocationCount,
+		MapName: row.DisplayName, MapLocationCount: row.LocationCount, Revision: row.Revision,
 	}
 }
 
@@ -472,7 +435,6 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]Membe
 	}
 	out := []Member{}
 	selected := map[string]string{}
-	now := time.Now()
 	for _, row := range rows {
 		var member Member
 		member.UserID = row.UserID.String()
@@ -485,8 +447,6 @@ func (s *PGStore) listPartyMembers(ctx context.Context, partyID string) ([]Membe
 		member.Ready = row.Ready
 		member.JoinedAt = row.JoinedAt.Time
 		member.InActiveMatch = row.InActiveMatch
-		member.PresenceStatus = memberPresence(now, row.SeenAt)
-		member.Connected = member.PresenceStatus == PresenceOnline
 		selected[member.UserID] = badges.IDFromCode(row.SelectedBadgeCode)
 		out = append(out, member)
 	}

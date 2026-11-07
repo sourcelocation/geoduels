@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,10 +10,14 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"geoduels/internal/chat"
+	"geoduels/internal/presence"
 	"geoduels/internal/social"
 	"geoduels/pkg/matchkind"
+	"geoduels/pkg/observability"
 )
 
+// friendsPage is what only the friends page needs: recent players, and who was invited to a party.
 func (a *api) friendsPage(c echo.Context) error {
 	r := c.Request()
 	userID, service, ok := a.socialActor(r)
@@ -23,16 +28,11 @@ func (a *api) friendsPage(c echo.Context) error {
 	if err != nil {
 		return writeSocialError(c, http.StatusInternalServerError, "friends_page_unavailable")
 	}
-	friends, incoming, outgoing, recent := result.Friends, result.Incoming, result.Outgoing, result.Recent
+	friends, recent := result.Friends, result.Recent
 	attachPartyInvites(friends, result.PartyInvites)
-	a.touchViewerPresence(r.Context(), userID)
 	a.applySocialPresence(r.Context(), friends)
 	a.applySocialPresence(r.Context(), recent)
-	return writeJSON(c, map[string]any{
-		"friends":       friends,
-		"requests":      map[string]any{"incoming": incoming, "outgoing": outgoing},
-		"recentPlayers": recent,
-	})
+	return writeJSON(c, map[string]any{"friends": friends, "recentPlayers": recent})
 }
 
 func attachPartyInvites(players []social.CompactPlayer, statuses map[string]social.CompactPartyInvite) {
@@ -47,23 +47,15 @@ func attachPartyInvites(players []social.CompactPlayer, statuses map[string]soci
 	}
 }
 
-func (a *api) socialService() (*social.Service, bool) {
-	return a.social, a.social != nil
-}
-
 func (a *api) socialActor(r *http.Request) (string, *social.Service, bool) {
 	claims, err := a.authenticatedClaims(r)
 	if err != nil {
 		return "", nil, false
 	}
-	service, ok := a.socialService()
-	if !ok {
+	if err := a.social.Authorize(r.Context(), claims.Sub); err != nil {
 		return "", nil, false
 	}
-	if err := service.Authorize(r.Context(), claims.Sub); err != nil {
-		return "", nil, false
-	}
-	return claims.Sub, service, true
+	return claims.Sub, a.social, true
 }
 
 func (a *api) socialSettings(c echo.Context) error {
@@ -110,7 +102,7 @@ func (a *api) sendFriendRequest(c echo.Context) error {
 		return writeSocialStoreError(c, err)
 	}
 	targetID := strings.TrimSpace(body.UserID)
-	a.liveInvalidate(userID, targetID)
+	a.tellFriendRequest(r.Context(), userID, targetID)
 	return writeJSONStatus(c, http.StatusCreated, item)
 }
 
@@ -125,10 +117,15 @@ func (a *api) respondFriendRequest(c echo.Context) error {
 		return writeSocialError(c, http.StatusBadRequest, "invalid_action")
 	}
 	requestID := c.Param("id")
+	other, err := service.FriendRequestOther(r.Context(), userID, requestID)
+	if err != nil {
+		return writeSocialStoreError(c, err)
+	}
 	if err := service.RespondFriendRequest(r.Context(), userID, requestID, action); err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID)
+	a.tell([]string{userID, other}, itemRemoved{ConversationID: chat.DirectID(userID, other), ItemID: requestItemID(requestID)})
+	a.tellSocial(r.Context(), userID, other)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -142,7 +139,7 @@ func (a *api) removeFriend(c echo.Context) error {
 	if err := service.RemoveFriend(r.Context(), userID, targetID); err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID, targetID)
+	a.tellSocial(r.Context(), userID, targetID)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -156,7 +153,7 @@ func (a *api) userBlock(c echo.Context) error {
 	if err := service.SetUserBlock(r.Context(), userID, targetID, r.Method == http.MethodPost); err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID, targetID)
+	a.tellSocial(r.Context(), userID, targetID)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -236,7 +233,7 @@ func (a *api) sendFriendCodeRequest(c echo.Context) error {
 	if err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID, player.UserID)
+	a.tellFriendRequest(r.Context(), userID, player.UserID)
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -245,13 +242,6 @@ func (a *api) partyInvitations(c echo.Context) error {
 	userID, service, ok := a.socialActor(r)
 	if !ok {
 		return writeSocialError(c, http.StatusUnauthorized, "registration_required")
-	}
-	if r.Method == http.MethodGet {
-		items, err := service.ListPartyInvitations(r.Context(), userID, queryLimit(r, 10))
-		if err != nil {
-			return writeSocialStoreError(c, err)
-		}
-		return writeJSON(c, map[string]any{"invitations": items})
 	}
 	if allowed, retry, err := a.allowSocialAction(r, userID, "party_invite"); err != nil || !allowed {
 		return writeSocialRateLimited(c, retry)
@@ -266,7 +256,7 @@ func (a *api) partyInvitations(c echo.Context) error {
 	if err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID, body.UserID)
+	a.tellInvitation(r.Context(), userID, body.UserID)
 	return writeJSONStatus(c, http.StatusCreated, item)
 }
 
@@ -294,7 +284,8 @@ func (a *api) createPartyAndInvite(c echo.Context) error {
 		_, _ = a.parties.LeaveParty(party.ID, userID)
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID, body.UserID)
+	a.tellParty(r.Context(), party.ID)
+	a.tellInvitation(r.Context(), userID, body.UserID)
 	return writeJSONStatus(c, http.StatusCreated, map[string]any{
 		"invitation": invitation,
 		"party":      newPartySnapshot(party),
@@ -315,15 +306,141 @@ func (a *api) respondPartyInvitation(c echo.Context) error {
 	if err != nil {
 		return writeSocialStoreError(c, err)
 	}
-	a.liveInvalidate(userID)
+	if item.Inviter.UserID != "" {
+		a.tell([]string{userID}, itemRemoved{ConversationID: chat.DirectID(userID, item.Inviter.UserID), ItemID: invitationItemID(item.ID)})
+	}
+	a.tellSocial(r.Context(), userID)
 	return writeJSON(c, item)
 }
 
-func (a *api) liveInvalidate(userIDs ...string) {
-	if a.live == nil {
+func emptySocialState() socialState {
+	return socialState{
+		Friends: []friendView{}, Outgoing: []social.FriendRequest{}, Pending: []pendingItem{},
+	}
+}
+
+// socialStateFor is everything about a person's friends. A guest has none, and needs no special case.
+func (a *api) socialStateFor(ctx context.Context, userID string) (socialState, error) {
+	if err := a.social.Authorize(ctx, userID); err != nil {
+		return emptySocialState(), nil
+	}
+	page, err := a.social.FriendsPage(ctx, userID, "")
+	if err != nil {
+		return socialState{}, err
+	}
+	invitations, err := a.social.ListPartyInvitations(ctx, userID, 20)
+	if err != nil {
+		return socialState{}, err
+	}
+	a.applySocialPresence(ctx, page.Friends)
+	ids := make([]string, len(page.Friends))
+	for i, friend := range page.Friends {
+		ids[i] = chat.DirectID(userID, friend.UserID)
+	}
+	summaries, err := chat.Summaries(ctx, a.db.Pool(), userID, ids)
+	if err != nil {
+		return socialState{}, err
+	}
+	state := socialState{
+		Friends: make([]friendView, len(page.Friends)), Outgoing: page.Outgoing, Pending: make([]pendingItem, 0, len(page.Incoming)+len(invitations)),
+		incoming: page.Incoming, invitations: invitations,
+	}
+	for _, request := range page.Incoming {
+		state.Pending = append(state.Pending, pendingItem{Item: incomingRequestItem(userID, request), Player: request.Player})
+	}
+	for _, invitation := range invitations {
+		state.Pending = append(state.Pending, pendingItem{Item: invitationItem(userID, invitation), Player: invitation.Inviter})
+	}
+	for i, friend := range page.Friends {
+		state.Friends[i] = friendView{CompactPlayer: friend, ConversationID: ids[i]}
+		if summary, ok := summaries[ids[i]]; ok {
+			state.Friends[i].Unread = summary.Unread
+			state.Friends[i].LastMessageAt = &summary.LastMessageAt
+		}
+	}
+	return state, nil
+}
+
+// tellSocial sends each person their friends as they now are.
+func (a *api) tellSocial(ctx context.Context, userIDs ...string) {
+	for _, userID := range userIDs {
+		if userID == "" {
+			continue
+		}
+		state, err := a.socialStateFor(ctx, userID)
+		if err != nil {
+			observability.Log("warn", "social state failed", map[string]any{"userId": userID, "error": err.Error()})
+			continue
+		}
+		a.tell([]string{userID}, state)
+	}
+}
+
+// tellFriendRequest puts a new request in the conversation between them, with a toast for whoever it's for.
+func (a *api) tellFriendRequest(ctx context.Context, senderID, recipientID string) {
+	a.tellSocial(ctx, senderID, recipientID)
+	if state, err := a.socialStateFor(ctx, recipientID); err == nil {
+		for _, request := range state.incoming {
+			if request.Player.UserID == senderID {
+				a.tell([]string{recipientID}, itemAdded{Item: incomingRequestItem(recipientID, request), Notify: true})
+			}
+		}
+	}
+	if state, err := a.socialStateFor(ctx, senderID); err == nil {
+		for _, request := range state.Outgoing {
+			if request.Player.UserID == recipientID {
+				a.tell([]string{senderID}, itemAdded{Item: outgoingRequestItem(senderID, request)})
+			}
+		}
+	}
+}
+
+// tellInvitation puts a new party invitation in the conversation between them, with a toast.
+func (a *api) tellInvitation(ctx context.Context, inviterID, recipientID string) {
+	a.tellSocial(ctx, recipientID)
+	state, err := a.socialStateFor(ctx, recipientID)
+	if err != nil {
 		return
 	}
-	a.live.publishInvalidate(userIDs...)
+	for _, invitation := range state.invitations {
+		if invitation.Inviter.UserID == inviterID {
+			a.tell([]string{recipientID}, itemAdded{Item: invitationItem(recipientID, invitation), Notify: true})
+		}
+	}
+}
+
+// applySocialPresence fills in who is connected and who is playing.
+func (a *api) applySocialPresence(ctx context.Context, players []social.CompactPlayer) {
+	ids := make([]string, 0, len(players))
+	for _, player := range players {
+		if player.LastSeenAt != nil {
+			ids = append(ids, player.UserID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	online, err := presence.Online(ctx, a.db.Pool(), ids)
+	if err != nil {
+		return
+	}
+	playing, err := a.matchStore.UsersInLiveMatches(ctx, ids)
+	if err != nil {
+		playing = map[string]bool{}
+	}
+	for i := range players {
+		if players[i].LastSeenAt == nil {
+			continue
+		}
+		if !online[players[i].UserID] {
+			players[i].PresenceStatus = "offline"
+			continue
+		}
+		players[i].PresenceStatus = "online"
+		if playing[players[i].UserID] {
+			players[i].Activity = "in_match"
+		}
+	}
 }
 
 func writeSocialStoreError(c echo.Context, err error) error {

@@ -90,11 +90,11 @@ func newWorker() (*worker, error) {
 	}
 	contentStore := content.NewPGStore(pool, producer)
 	moderationService := moderation.NewService(moderation.NewPGStore(pool, producer), moderation.NewRiskEngineFromEnv())
-	curationService := curation.NewService(curation.NewPGStore(pool))
+	curationService := curation.NewService(curation.NewPGStore(pool, producer))
 	accountsStore := accounts.NewPGStore(pool, producer)
 	accountsService := accounts.NewService(accountsStore)
-	storageStore := storage.NewPGStore(pool)
-	seasonsStore := seasons.NewPGStore(pool)
+	storageStore := storage.NewPGStore(pool, producer)
+	seasonsStore := seasons.NewPGStore(pool, producer)
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &matchAnalyzeWorker{moderation: moderationService})

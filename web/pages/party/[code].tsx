@@ -3,13 +3,15 @@ import { useRouter } from "next/router";
 import { getLobbyLayout } from "../../features/home/page/LobbyApplicationLayout";
 import { useSiteURL } from "../../lib/site";
 import type { NextPageWithLayout } from "../_app";
+import { cachedPage, onDemandPaths } from "../../lib/cached-page";
+
+export const getStaticPaths = onDemandPaths;
+
+export const getStaticProps = cachedPage();
 
 const PartyInviteRoute: NextPageWithLayout = function PartyInviteRoute() {
   const router = useRouter();
-  const rawCode =
-    router.isReady && typeof router.query.code === "string"
-      ? router.query.code
-      : "";
+  const rawCode = typeof router.query.code === "string" ? router.query.code : "";
   const partyInviteCode = rawCode.trim().toUpperCase();
   const siteURL = useSiteURL();
   const canonicalURL = partyInviteCode

@@ -1,5 +1,10 @@
-import { useRuntimeConfig } from './runtime-config-context';
+import { createContext, useContext } from "react";
+
+const SiteURLContext = createContext("");
+
+/** Set from cached pages' props (lib/cached-page.ts). */
+export const SiteURLProvider = SiteURLContext.Provider;
 
 export function useSiteURL() {
-  return useRuntimeConfig().siteURL;
+  return useContext(SiteURLContext);
 }

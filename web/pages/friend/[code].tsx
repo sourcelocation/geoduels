@@ -2,13 +2,11 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Head from "next/head";
 import { useRouter } from "next/router";
 import { AppContentRail } from "../../features/app-shell/components/AppContentRail";
-import { AppShell } from "../../features/app-shell/components/AppShell";
 import { Button } from "../../components/ui/button";
 import { AppPanel } from "../../components/ui/compositions";
 import { PlayerRow } from "../../features/social/components/CompactPlayerRow";
 import { useAuthState } from "../../features/auth/components/AuthProvider";
 import { socialClient } from "../../features/social/lib/social-client";
-import { useRuntimeConfig } from "../../lib/runtime-config-context";
 import { AsyncState, PageHeader } from "../../components/ui/patterns";
 import { useShowAppNoticeWhen } from "../../components/ui/AppNotice";
 
@@ -16,18 +14,17 @@ export default function FriendCodePage() {
   const router = useRouter();
   const code = String(router.query.code || "").trim().toUpperCase();
   const auth = useAuthState();
-  const config = useRuntimeConfig();
   const player = useQuery({
     queryKey: ["social", "friend-code", code],
     enabled: !!code && auth.isRegistered,
-    queryFn: () => socialClient.resolveCode(config, auth.accessToken, code),
+    queryFn: () => socialClient.resolveCode(auth.accessToken, code),
   });
   const request = useMutation({
-    mutationFn: () => socialClient.requestByCode(config, auth.accessToken, code),
+    mutationFn: () => socialClient.requestByCode(auth.accessToken, code),
   });
   useShowAppNoticeWhen(request.isError, "Could not send the friend request. Try again.", request.failureCount);
   return (
-    <AppShell activeNavRoute="friends">
+    <>
       <Head><title>Add a friend | GeoDuels</title><meta name="robots" content="noindex" /></Head>
       <AppContentRail as="main" size="compact" className="relative z-content py-10">
         <AppPanel className="rounded-2xl p-6">
@@ -46,6 +43,6 @@ export default function FriendCodePage() {
           ) : <AsyncState className="mt-5" status="loading" message="Loading player" />}
         </AppPanel>
       </AppContentRail>
-    </AppShell>
+    </>
   );
 }

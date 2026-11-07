@@ -1,5 +1,5 @@
-import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { apiFetch } from "../../../lib/http";
+
+import { apiFetch, authHeaders, mergeHeaders, readError } from "../../../lib/http";
 import type { MatchConfig } from "../../matchmaking/lib/queue-client";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 
@@ -24,6 +24,8 @@ export type PartyMember = {
 export type PartySnapshot = {
   id: string;
   inviteCode: string;
+  // Clients keep the highest they have seen, so a late update never undoes a newer one.
+  revision: number;
   ownerUserId: string;
   state: "open" | "in_match" | "closed" | "expired";
   mode: PartyMode;
@@ -36,72 +38,33 @@ export type PartySnapshot = {
   members: PartyMember[];
 };
 
-export type PartyPatch = {
-  revision: number;
-  state?: PartySnapshot["state"];
-  ownerUserId?: string;
-  mode?: PartyMode;
-  mapScope?: string;
-  mapName?: string;
-  mapLocationCount?: number;
-  config?: MatchConfig;
-  activeMatchId?: string;
-  lastMatchId?: string;
-  upsertMembers?: PartyMember[];
-  removeMemberIds?: string[];
-};
-
-export type PartyEvent =
-  | { type: "party_snapshot"; party: PartySnapshot }
-  | { type: "party_patch"; patch: PartyPatch }
-  | { type: "match_found"; matchId: string }
-  | { type: "party_error"; message: string };
-
-function authHeaders(accessToken: string) {
-  return { Authorization: `Bearer ${accessToken}` };
-}
-
-export async function createParty(config: RuntimeConfig, accessToken: string, mode: PartyMode = "duel", matchConfig?: MatchConfig): Promise<Pick<PartySnapshot, "id" | "inviteCode">> {
-  const resp = await apiFetch(config, "/api/v2/parties", {
-    method: "POST",
-    headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ mode, config: matchConfig }),
+async function partyRequest(token: string, path: string, init: RequestInit, failure: string): Promise<PartySnapshot | null> {
+  const response = await apiFetch(path, {
+    ...init,
+    headers: mergeHeaders(authHeaders(token), init.body ? { "Content-Type": "application/json" } : undefined),
   });
-  if (!resp.ok) throw new Error((await resp.text()) || "Party unavailable");
-  return resp.json();
+  if (!response.ok) throw new Error(await readError(response, failure));
+  return response.status === 204 ? null : response.json();
 }
 
-export function applyPartyPatch(party: PartySnapshot | null, patch: PartyPatch): PartySnapshot | null {
-  if (!party) return party;
-  const next: PartySnapshot = {
-    ...party,
-    state: patch.state ?? party.state,
-    ownerUserId: patch.ownerUserId ?? party.ownerUserId,
-    mode: patch.mode ?? party.mode,
-    config: patch.config ?? party.config,
-    mapScope: patch.mapScope ?? party.mapScope,
-    mapName: patch.mapName ?? party.mapName,
-    mapLocationCount: patch.mapLocationCount ?? party.mapLocationCount,
-    activeMatchId: patch.activeMatchId ?? party.activeMatchId,
-    lastMatchId: patch.lastMatchId ?? party.lastMatchId,
-    members: party.members,
-  };
-  if (patch.upsertMembers?.length || patch.removeMemberIds?.length) {
-    const removed = new Set(patch.removeMemberIds || []);
-    const members = new Map(next.members.filter((member) => !removed.has(member.userId)).map((member) => [member.userId, member]));
-    for (const member of patch.upsertMembers || []) {
-      members.set(member.userId, member);
-    }
-    next.members = Array.from(members.values());
-  }
-  return next;
+export async function createParty(token: string, mode: PartyMode = "duel", config?: MatchConfig) {
+  const party = await partyRequest(token, "/api/v2/parties", { method: "POST", body: JSON.stringify({ mode, config }) }, "Party unavailable");
+  if (!party) throw new Error("Party unavailable");
+  return party;
 }
 
-export async function joinParty(config: RuntimeConfig, code: string, accessToken: string): Promise<Pick<PartySnapshot, "id" | "inviteCode">> {
-  const resp = await apiFetch(config, `/api/v2/parties/${encodeURIComponent(code)}/join`, {
-    method: "POST",
-    headers: authHeaders(accessToken),
-  });
-  if (!resp.ok) throw new Error((await resp.text()) || "Could not join party");
-  return resp.json();
+export async function joinParty(code: string, token: string) {
+  const party = await partyRequest(token, `/api/v2/parties/${encodeURIComponent(code)}/join`, { method: "POST" }, "Could not join party");
+  if (!party) throw new Error("Could not join party");
+  return party;
+}
+
+/** Something a member does to their party. The answer is the party as it now is, if it still exists. */
+export function partyCommand(token: string, partyId: string, action: string, init: { method: "POST" | "PUT"; body?: unknown }, failure: string) {
+  return partyRequest(
+    token,
+    `/api/v2/parties/${encodeURIComponent(partyId)}/${action}`,
+    { method: init.method, body: init.body === undefined ? undefined : JSON.stringify(init.body) },
+    failure,
+  );
 }

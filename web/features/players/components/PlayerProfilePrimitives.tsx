@@ -132,6 +132,7 @@ export function MatchHistoryRow({ match }: { match: PlayerMatchSummary }) {
   return (
     <Link
       href={`/match/${encodeURIComponent(toPublicEntityId(match.matchId))}`}
+      prefetch={false}
       className="group grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-3 rounded-lg border border-border-default bg-surface-grouped px-3.5 py-3 transition hover:border-border-strong hover:bg-surface-fill sm:grid-cols-[minmax(180px,0.85fr)_minmax(160px,1fr)_120px_24px] sm:items-center"
     >
       <div className="flex min-w-0 items-center gap-3">

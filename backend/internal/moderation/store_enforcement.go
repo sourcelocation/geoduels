@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"geoduels/internal/inbox"
 	"strings"
 	"time"
 
@@ -321,11 +322,8 @@ func (a *PGStore) SaveRefund(ctx context.Context, award RefundAward) (bool, erro
 	if tag == 0 {
 		return false, nil
 	}
-	payload := map[string]any{
-		"refundDelta": award.Delta, "matchId": award.MatchID, "cheaterUserId": award.CheaterID,
-		"reason": award.Reason, "mmrBefore": award.Before, "mmrAfter": award.After,
-	}
-	notificationID, err := storekit.UpsertUserNotificationTx(ctx, a.tx, award.UserID, "mmr_refund", fmt.Sprintf("mmr_refund:%s:%s:%s", award.UserID, award.MatchID, award.CheaterID), payload, "", time.Time{})
+	notificationID, err := inbox.SendTx(ctx, a.tx, a.jobs, award.UserID,
+		inbox.RatingRefunded(fmt.Sprintf("mmr_refund:%s:%s:%s", award.UserID, award.MatchID, award.CheaterID), award.Delta))
 	if err != nil {
 		return false, err
 	}
@@ -339,13 +337,11 @@ func (a *PGStore) SaveRefund(ctx context.Context, award RefundAward) (bool, erro
 }
 
 func (a *PGStore) notifyAccountEnforcement(ctx context.Context, userID, action, reason string, moderationLogID int64) error {
-	notificationType := "account_banned"
+	message := inbox.AccountBanned(moderationLogID, strings.TrimSpace(reason))
 	if action == "unban" {
-		notificationType = "account_unbanned"
+		message = inbox.AccountUnbanned(moderationLogID)
 	}
-	_, err := storekit.UpsertUserNotificationTx(ctx, a.tx, userID, notificationType, fmt.Sprintf("%s:%d", notificationType, moderationLogID), map[string]any{
-		"reason": strings.TrimSpace(reason), "action": action, "moderationLogId": moderationLogID, "endsAt": nil,
-	}, "", time.Time{})
+	_, err := inbox.SendTx(ctx, a.tx, a.jobs, userID, message)
 	return err
 }
 
@@ -356,9 +352,7 @@ func (a *PGStore) notifyReportersOfBan(ctx context.Context, subjectUserID, actio
 	}
 	for _, row := range rows {
 		reporterID := storekit.UUIDVal(row)
-		if _, err := storekit.UpsertUserNotificationTx(ctx, a.tx, reporterID, "reported_player_banned", fmt.Sprintf("reported_player_banned:%d:%s", logID, reporterID), map[string]any{
-			"action": action, "moderationLogId": logID,
-		}, "", time.Time{}); err != nil {
+		if _, err := inbox.SendTx(ctx, a.tx, a.jobs, reporterID, inbox.ReportedPlayerBanned(logID, reporterID)); err != nil {
 			return err
 		}
 	}

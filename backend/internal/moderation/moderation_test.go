@@ -127,9 +127,9 @@ func (f *fakeStore) InsertWarning(_ context.Context, w Warning) error {
 func (f *fakeStore) ListWarnings(context.Context, string) ([]Warning, error) {
 	return slices.Clone(f.warnings), nil
 }
-func (f *fakeStore) NotifyWarning(_ context.Context, _ string, _ int64, payload map[string]any) error {
-	f.notifications = append(f.notifications, payload)
-	return nil
+func (f *fakeStore) SendWarning(_ context.Context, _ string, _ int64, _, nicknameReset string) (int64, error) {
+	f.notifications = append(f.notifications, map[string]any{"nicknameReset": nicknameReset})
+	return 7, nil
 }
 
 type fakeRisk struct {
@@ -290,22 +290,5 @@ func TestWarnWithNicknameResetRecordsBothNames(t *testing.T) {
 	}
 	if f.notifications[0]["nicknameReset"] != "Player00000001" {
 		t.Fatalf("notification must name the new nickname: %v", f.notifications[0])
-	}
-}
-
-func TestPlayerWarningsOmitWithdrawnAndStaffDetails(t *testing.T) {
-	withdrawn := time.Now()
-	f := newFakeStore(nil)
-	f.warnings = []Warning{
-		{ID: 2, Category: "other", Message: "active", ActorName: "judge", EvidenceMessageID: "msg", PreviousNickname: "Old", ResetNickname: "New"},
-		{ID: 1, Category: "other", Message: "withdrawn", WithdrawnAt: &withdrawn},
-	}
-	warnings, err := NewService(f, nil).PlayerWarnings(context.Background(), "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []PlayerWarning{{ID: 2, Category: "other", Message: "active", ResetNickname: "New"}}
-	if !slices.Equal(warnings, want) {
-		t.Fatalf("got %+v", warnings)
 	}
 }

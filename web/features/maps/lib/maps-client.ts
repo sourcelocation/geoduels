@@ -1,4 +1,4 @@
-import type { RuntimeConfig } from "../../../lib/runtime-config";
+
 import { apiFetch, authHeaders, expectJSON, mergeHeaders } from "../../../lib/http";
 
 export type CustomMap = {
@@ -91,23 +91,23 @@ function headers(accessToken: string): HeadersInit {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-export async function listMaps(config: RuntimeConfig, accessToken: string | undefined, input: { scope: MapScope; sort?: MapSort; search?: string }): Promise<CustomMap[]> {
+export async function listMaps(accessToken: string | undefined, input: { scope: MapScope; sort?: MapSort; search?: string }): Promise<CustomMap[]> {
   const params = new URLSearchParams({ scope: input.scope });
   if (input.sort) params.set("sort", input.sort);
   const search = input.search?.trim();
   if (search) params.set("search", search);
-  return expectJSON(await apiFetch(config, `/api/maps?${params}`, { headers: authHeaders(accessToken) }), "Map request failed");
+  return expectJSON(await apiFetch(`/api/maps?${params}`, { headers: authHeaders(accessToken) }), "Map request failed");
 }
 
-export async function getMap(config: RuntimeConfig, accessToken: string | undefined, mapId: string): Promise<MapDetails> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}`, { headers: authHeaders(accessToken) }), "Map request failed");
+export async function getMap(accessToken: string | undefined, mapId: string): Promise<MapDetails> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}`, { headers: authHeaders(accessToken) }), "Map request failed");
 }
 
-export async function getMapUploadQuota(config: RuntimeConfig, accessToken: string): Promise<MapUploadQuota> {
-  return expectJSON(await apiFetch(config, "/api/maps/quota", { headers: headers(accessToken) }), "Map quota request failed");
+export async function getMapUploadQuota(accessToken: string): Promise<MapUploadQuota> {
+  return expectJSON(await apiFetch("/api/maps/quota", { headers: headers(accessToken) }), "Map quota request failed");
 }
 
-export async function createMap(config: RuntimeConfig, accessToken: string, input: { file: File; displayName: string; description: string; visibility: MapVisibility; difficulty: "easy" | "normal" | "hard"; thumbnailKey: string; thumbnailVariant?: number }): Promise<CustomMap> {
+export async function createMap(accessToken: string, input: { file: File; displayName: string; description: string; visibility: MapVisibility; difficulty: "easy" | "normal" | "hard"; thumbnailKey: string; thumbnailVariant?: number }): Promise<CustomMap> {
   const body = new FormData();
   body.set("file", input.file);
   body.set("displayName", input.displayName);
@@ -116,11 +116,11 @@ export async function createMap(config: RuntimeConfig, accessToken: string, inpu
   body.set("difficulty", input.difficulty);
   body.set("thumbnailKey", input.thumbnailKey);
   body.set("thumbnailVariant", String(input.thumbnailVariant || 1));
-  return expectJSON(await apiFetch(config, "/api/maps", { method: "POST", headers: headers(accessToken), body }), "Map request failed");
+  return expectJSON(await apiFetch("/api/maps", { method: "POST", headers: headers(accessToken), body }), "Map request failed");
 }
 
-export async function updateMap(config: RuntimeConfig, accessToken: string, mapId: string, input: MapUpdateInput): Promise<CustomMap> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}`, {
+export async function updateMap(accessToken: string, mapId: string, input: MapUpdateInput): Promise<CustomMap> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}`, {
     method: "PATCH",
     headers: mergeHeaders(headers(accessToken), { "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -134,50 +134,50 @@ export async function updateMap(config: RuntimeConfig, accessToken: string, mapI
   }), "Map request failed");
 }
 
-export async function replaceMapLocations(config: RuntimeConfig, accessToken: string, mapId: string, file: File): Promise<CustomMap> {
+export async function replaceMapLocations(accessToken: string, mapId: string, file: File): Promise<CustomMap> {
   const body = new FormData();
   body.set("file", file);
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/locations`, { method: "PUT", headers: headers(accessToken), body }), "Map request failed");
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/locations`, { method: "PUT", headers: headers(accessToken), body }), "Map request failed");
 }
 
-export async function archiveMap(config: RuntimeConfig, accessToken: string, mapId: string): Promise<void> {
-  const response = await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}`, { method: "DELETE", headers: headers(accessToken) });
+export async function archiveMap(accessToken: string, mapId: string): Promise<void> {
+  const response = await apiFetch(`/api/maps/${encodeURIComponent(mapId)}`, { method: "DELETE", headers: headers(accessToken) });
   if (!response.ok) throw new Error((await response.text()) || "Could not delete map");
 }
 
-export async function publishMap(config: RuntimeConfig, accessToken: string, mapId: string): Promise<CustomMap> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/publish`, { method: "POST", headers: headers(accessToken) }), "Map request failed");
+export async function publishMap(accessToken: string, mapId: string): Promise<CustomMap> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/publish`, { method: "POST", headers: headers(accessToken) }), "Map request failed");
 }
 
-export async function setMapOfficial(config: RuntimeConfig, accessToken: string, mapId: string, official: boolean): Promise<CustomMap> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/official`, { method: official ? "POST" : "DELETE", headers: headers(accessToken) }), "Map request failed");
+export async function setMapOfficial(accessToken: string, mapId: string, official: boolean): Promise<CustomMap> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/official`, { method: official ? "POST" : "DELETE", headers: headers(accessToken) }), "Map request failed");
 }
 
 export type GameplayMapRole = "moving" | "no_move" | "nmpz";
 
-export async function setGameplayMapRole(config: RuntimeConfig, accessToken: string, mapId: string, role: GameplayMapRole): Promise<CustomMap> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/roles/${encodeURIComponent(role)}`, { method: "POST", headers: headers(accessToken) }), "Map request failed");
+export async function setGameplayMapRole(accessToken: string, mapId: string, role: GameplayMapRole): Promise<CustomMap> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/roles/${encodeURIComponent(role)}`, { method: "POST", headers: headers(accessToken) }), "Map request failed");
 }
 
-export async function setMapFavorite(config: RuntimeConfig, accessToken: string, mapId: string, favorite: boolean): Promise<CustomMap> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/favorite`, { method: favorite ? "POST" : "DELETE", headers: headers(accessToken) }), "Map request failed");
+export async function setMapFavorite(accessToken: string, mapId: string, favorite: boolean): Promise<CustomMap> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/favorite`, { method: favorite ? "POST" : "DELETE", headers: headers(accessToken) }), "Map request failed");
 }
 
-export async function createMapComment(config: RuntimeConfig, accessToken: string, mapId: string, input: { body: string; parentId?: string }): Promise<MapComment> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/comments`, {
+export async function createMapComment(accessToken: string, mapId: string, input: { body: string; parentId?: string }): Promise<MapComment> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/comments`, {
     method: "POST",
     headers: mergeHeaders(headers(accessToken), { "Content-Type": "application/json" }),
     body: JSON.stringify(input),
   }), "Map request failed");
 }
 
-export async function deleteMapComment(config: RuntimeConfig, accessToken: string, mapId: string, commentId: string): Promise<void> {
-  const response = await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/comments/${encodeURIComponent(commentId)}`, { method: "DELETE", headers: headers(accessToken) });
+export async function deleteMapComment(accessToken: string, mapId: string, commentId: string): Promise<void> {
+  const response = await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/comments/${encodeURIComponent(commentId)}`, { method: "DELETE", headers: headers(accessToken) });
   if (!response.ok) throw new Error((await response.text()) || "Could not delete comment");
 }
 
-export async function setMapCommentLike(config: RuntimeConfig, accessToken: string, mapId: string, commentId: string, liked: boolean): Promise<MapComment> {
-  return expectJSON(await apiFetch(config, `/api/maps/${encodeURIComponent(mapId)}/comments/${encodeURIComponent(commentId)}/like`, {
+export async function setMapCommentLike(accessToken: string, mapId: string, commentId: string, liked: boolean): Promise<MapComment> {
+  return expectJSON(await apiFetch(`/api/maps/${encodeURIComponent(mapId)}/comments/${encodeURIComponent(commentId)}/like`, {
     method: liked ? "POST" : "DELETE",
     headers: headers(accessToken),
   }), "Could not update comment like");

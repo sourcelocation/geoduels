@@ -17,10 +17,10 @@ export function CommunityPardonSection(props: OperationsSectionProps) {
   const pardonQuery = useQuery({
     queryKey: ["admin-community-pardon", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminCommunityPardonPreview(props.config, props.accessToken),
+    queryFn: () => requestAdminCommunityPardonPreview(props.accessToken),
   });
   const pardonMutation = useMutation({
-    mutationFn: () => requestAdminCommunityPardon(props.config, props.accessToken),
+    mutationFn: () => requestAdminCommunityPardon(props.accessToken),
     onSuccess: async (result) => {
       setPardonDialogOpen(false);
       setPardonResult(result);

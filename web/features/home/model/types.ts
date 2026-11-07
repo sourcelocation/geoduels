@@ -1,4 +1,4 @@
-import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
+import type { LeaderboardSummary } from "../../lobby/lib/leaderboard";
 import type { PartyRuntimeStatus } from "../../lobby/controllers/party-controller";
 import type { PartySnapshot, PartyTeamId, PartyMode } from "../../lobby/lib/party-client";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
@@ -14,7 +14,7 @@ import type {
   RoundResultOverlayProps,
   UIPhase,
 } from "../../game/model/types";
-import type { ChatEmote, ChatMessage } from "../../chat/model/types";
+import type { ChatEmote, ConversationItem } from "../../chat/model/types";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
 import type {
   MatchSidesView,
@@ -160,7 +160,7 @@ export type HomeOverlaysView = {
 
 export type HomeChatView = {
   conversationId: string;
-  messages: ChatMessage[];
+  messages: ConversationItem[];
   selfUserId: string;
   error: string;
   teamId?: string;

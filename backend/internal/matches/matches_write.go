@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"geoduels/internal/jobs"
 	"strings"
 	"time"
 
@@ -16,7 +17,6 @@ import (
 	"geoduels/pkg/gameplay"
 	"geoduels/pkg/matchkind"
 	db "geoduels/pkg/persistence/sqlc/db"
-	"geoduels/pkg/pgnotify"
 )
 
 func (s *PGStore) FinalizeMatch(snap gameplay.MatchSnapshot) (gameplay.MatchSnapshot, error) {
@@ -92,18 +92,25 @@ func (s *PGStore) FinalizeMatch(snap gameplay.MatchSnapshot) (gameplay.MatchSnap
 		if err != nil {
 			return snap, err
 		}
-		if err := finalizeDuelResultTx(ctx, tx, q, &snap, &result, spec.Rated); err != nil {
+		if err := finalizeDuelResultTx(ctx, tx, s.teller, q, &snap, &result, spec.Rated); err != nil {
 			return snap, err
 		}
 	}
 	if err := q.CompleteMatchSession(ctx, matchUUID); err != nil {
 		return snap, err
 	}
-	// The party is out of its match once the match is recorded.
+	// The party is out of its match once the match is recorded, and its players are free.
 	if session.SourcePartyID.Valid {
-		if err := pgnotify.Publish(ctx, tx, pgnotify.PartyTopic(storekit.UUIDVal(session.SourcePartyID)), pgnotify.PartyChanged); err != nil {
+		if err := s.teller.EnqueuePartyChanged(ctx, tx, storekit.UUIDVal(session.SourcePartyID)); err != nil {
 			return snap, err
 		}
+	}
+	players := make([]string, 0, len(snap.Players))
+	for userID := range snap.Players {
+		players = append(players, userID)
+	}
+	if err := s.teller.EnqueuePresenceChanged(ctx, tx, players); err != nil {
+		return snap, err
 	}
 	// Integrity evaluation is durable: a River job is enqueued in this
 	// transaction and runs after commit.
@@ -121,7 +128,7 @@ func (s *PGStore) FinalizeMatch(snap gameplay.MatchSnapshot) (gameplay.MatchSnap
 // finalizeDuelResultTx counts a duel toward its players' games and wins, and when it is rated,
 // toward their rating, ranked stats and badges. Guests never queue for rated duels, but a guest
 // account is still never rated.
-func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *gameplay.MatchSnapshot, result *duelResult, rated bool) error {
+func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller, q *db.Queries, snap *gameplay.MatchSnapshot, result *duelResult, rated bool) error {
 	if snap == nil || result == nil {
 		return errors.New("duel result is required")
 	}
@@ -198,24 +205,24 @@ func finalizeDuelResultTx(ctx context.Context, tx pgx.Tx, q *db.Queries, snap *g
 		}
 	}
 	if ratedMatch && !p1.guest {
-		if err := badges.AwardEloBadgesTx(ctx, tx, p1.userIDText, p1.update.MMR); err != nil {
+		if err := badges.AwardEloBadgesTx(ctx, tx, teller, p1.userIDText, p1.update.MMR); err != nil {
 			return err
 		}
 	}
 	if ratedMatch && !p2.guest {
-		if err := badges.AwardEloBadgesTx(ctx, tx, p2.userIDText, p2.update.MMR); err != nil {
+		if err := badges.AwardEloBadgesTx(ctx, tx, teller, p2.userIDText, p2.update.MMR); err != nil {
 			return err
 		}
 	}
 	if ratedMatch {
 		fast5000 := rankedSpeedrunnerUsers(*snap)
 		if fast5000[p1.userIDText] && !p1.guest {
-			if _, err := badges.AwardBadgeTx(ctx, tx, p1.userIDText, "speedrunner"); err != nil {
+			if _, err := badges.AwardBadgeTx(ctx, tx, teller, p1.userIDText, "speedrunner"); err != nil {
 				return err
 			}
 		}
 		if fast5000[p2.userIDText] && !p2.guest {
-			if _, err := badges.AwardBadgeTx(ctx, tx, p2.userIDText, "speedrunner"); err != nil {
+			if _, err := badges.AwardBadgeTx(ctx, tx, teller, p2.userIDText, "speedrunner"); err != nil {
 				return err
 			}
 		}

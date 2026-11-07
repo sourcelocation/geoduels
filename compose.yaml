@@ -1,12 +1,13 @@
-# GeoDuels as it runs in production, for self-hosting and for trying a build locally. Copy
-# .env.example to .env (its values run GeoDuels on this machine), then:
-#   docker compose up -d            the released images (GEODUELS_VERSION), or this checkout's if unset
-#   docker compose up --build       this checkout, built
-#   docker compose -f compose.yaml -f compose.dev.yaml up --build   development (compose.dev.yaml)
-# Either way GeoDuels is at NEXT_PUBLIC_SITE_URL, http://localhost:24000 unless you change it.
+# What GeoDuels needs to run. Copy .env.example to .env (its values run GeoDuels on this machine), then:
+#   docker compose up -d                       the infrastructure, for development (Procfile runs the rest)
+#   COMPOSE_PROFILES=app docker compose up -d  all of it, from the released images (GEODUELS_VERSION), or
+#                                              this checkout's if unset (add --build to build them)
+# With the app profile GeoDuels is at NEXT_PUBLIC_SITE_URL, http://localhost:24000 unless you change it.
 #
-# GeoDuels' ports are 24000-24003, so it runs beside other projects' stacks, on loopback only:
-#   24000 the front door (`front`, or Next's dev server in development)   24001 the API   24003 Postgres
+# GeoDuels' ports start at 24000, so it runs beside other projects' stacks, on loopback only:
+#   24000 the front door (`front`, or Next's dev server in development)   24001 the API
+#   24002 the gateway (development only)   24003 Postgres   24004 NATS
+#   24005-24007 the gameplay node and workers (development only)
 # Inside the network every service keeps its usual port.
 name: geoduels
 
@@ -17,8 +18,12 @@ x-service: &service
   env_file: .env
   logging: { driver: json-file, options: { max-size: "10m", max-file: "2" } }
 
-x-backend: &backend
+x-app: &app
   <<: *service
+  profiles: [app]
+
+x-backend: &backend
+  <<: *app
   depends_on: { db-migrate: { condition: service_completed_successfully } }
 
 x-database: &database "postgres://geoduels:${POSTGRES_PASSWORD:?set it in .env}@postgres:5432/geoduels?sslmode=disable"
@@ -37,7 +42,7 @@ services:
   # Brings the schema to this release (goose, then River) before anything that uses the database
   # starts. A blank database gets the v2 baseline (version 2000) and every later migration.
   db-migrate:
-    <<: *service
+    <<: *app
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-api:${GEODUELS_VERSION:-dev}
     pull_policy: never # `api` pulls or builds the image
     restart: "no"
@@ -64,37 +69,58 @@ services:
     environment:
       POSTGRES_URL: *database
       API_ADDR: ":8080"
-      # The browser's origin, for its websockets.
+      NATS_URL: nats://nats:4222
       CORS_ALLOWED_ORIGINS: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
     ports: ["127.0.0.1:24001:8080"]
+    depends_on:
+      db-migrate: { condition: service_completed_successfully }
+      nats: { condition: service_started }
+
+  # Carries events from the API to whichever gateway holds each person's connection. It keeps nothing:
+  # every connection starts from a full session.
+  nats:
+    <<: *service
+    image: nats:2.11-alpine
+    env_file: []
+    ports: ["127.0.0.1:24004:4222"]
+
+  # Holds every browser's websocket and nothing else; it asks the API for everything else.
+  gateway:
+    <<: *app
+    image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-gateway:${GEODUELS_VERSION:-dev}
+    build: { context: backend, dockerfile: services/gateway/Dockerfile }
+    stop_grace_period: 15s
+    environment:
+      GATEWAY_ADDR: ":8095"
+      API_URL: http://api:8080
+      NATS_URL: nats://nats:4222
+      # The browser's origin, for its websockets.
+      CORS_ALLOWED_ORIGINS: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
+    depends_on: [api, nats]
 
   web:
-    <<: *service
+    <<: *app
     image: ${REGISTRY:-ghcr.io/sourcelocation}/geoduels-web:${GEODUELS_VERSION:-dev}
     build: { context: web, args: { NEXT_PUBLIC_APP_VERSION: "${GEODUELS_VERSION:-dev}" } }
-    # The browser gets all of these too (web/config/public-runtime-config.mjs), and nothing else from .env.
+    # Nothing else from .env: this only renders public pages.
     env_file: []
     environment:
       PORT: "3000"
-      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
-      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: ${NEXT_PUBLIC_SITE_URL}
-      NEXT_PUBLIC_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
-      NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
-      NEXT_PUBLIC_GOOGLE_EMBED_KEY: ${NEXT_PUBLIC_GOOGLE_EMBED_KEY:-}
-      NEXT_PUBLIC_APP_VERSION: ${GEODUELS_VERSION:-dev}
+      SITE_URL: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
+      API_URL: http://api:8080
     depends_on: [api]
 
-  # The front door: /api to the API, the rest to the web app, as the ingress routes production.
+  # The front door: websockets to the gateway, /api to the API, the rest to the web app, as the
+  # ingress routes production.
   front:
-    <<: *service
+    <<: *app
     image: caddy:2.11.7-alpine
     env_file: []
     configs: [{ source: front, target: /etc/caddy/Caddyfile }]
     ports: ["127.0.0.1:24000:8080"]
-    depends_on: [api, web]
+    depends_on: [api, gateway, web]
 
-  # COMPOSE_PROFILES=workers: moderation (with RISK_ENGINE_*) and the Discord bot (DISCORD_BOT_TOKEN).
+  # COMPOSE_PROFILES=app,workers: moderation (with RISK_ENGINE_*) and the Discord bot (DISCORD_BOT_TOKEN).
   moderation-worker:
     <<: *backend
     profiles: [workers]
@@ -109,7 +135,7 @@ services:
     build: { context: backend, dockerfile: services/discord-worker/Dockerfile }
     environment: { POSTGRES_URL: *database, DISCORD_WORKER_ADDR: ":8094" }
 
-  # COMPOSE_PROFILES=tls: Caddy takes a certificate for NEXT_PUBLIC_SITE_URL's hostname (its DNS must
+  # COMPOSE_PROFILES=app,tls: Caddy takes a certificate for NEXT_PUBLIC_SITE_URL's hostname (its DNS must
   # point here) and serves GeoDuels on ports 80 and 443. Behind a proxy of your own, send it to 24000.
   edge:
     <<: *service
@@ -136,6 +162,10 @@ configs:
       	}
       }
       :8080 {
+      	@sockets path /api/live /api/live/*
+      	handle @sockets {
+      		reverse_proxy gateway:8095
+      	}
       	encode zstd gzip
       	@api path /api /api/*
       	handle @api {

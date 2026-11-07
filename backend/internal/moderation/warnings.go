@@ -31,6 +31,7 @@ type Warning struct {
 	PreviousNickname  string
 	ResetNickname     string
 	EvidenceMessageID string
+	InboxMessageID    int64
 	ActorUserID       string
 	ActorName         string
 	CreatedAt         time.Time
@@ -92,14 +93,11 @@ func (s *Service) Warn(ctx context.Context, actor pkgstaff.Actor, userID string,
 				return err
 			}
 		}
-		if err := store.InsertWarning(ctx, warning); err != nil {
+		warning.InboxMessageID, err = store.SendWarning(ctx, userID, id, in.Message, warning.ResetNickname)
+		if err != nil {
 			return err
 		}
-		payload := map[string]any{"warningId": id, "category": in.Category, "reason": in.Message}
-		if warning.ResetNickname != "" {
-			payload["nicknameReset"] = warning.ResetNickname
-		}
-		return store.NotifyWarning(ctx, userID, id, payload)
+		return store.InsertWarning(ctx, warning)
 	})
 }
 
@@ -111,40 +109,6 @@ func (s *Service) Warnings(ctx context.Context, actor pkgstaff.Actor, userID str
 	return s.store.ListWarnings(ctx, userID)
 }
 
-// PlayerWarning is a player's view of their own warning. Reading it does not acknowledge it.
-type PlayerWarning struct {
-	ID             int64
-	Category       string
-	Message        string
-	ResetNickname  string
-	CreatedAt      time.Time
-	AcknowledgedAt *time.Time
-}
-
-// PlayerWarnings is a player's own view: no issuer or evidence details, and no
-// withdrawn warnings. Callers pass the authenticated subject.
-func (s *Service) PlayerWarnings(ctx context.Context, userID string) ([]PlayerWarning, error) {
-	warnings, err := s.store.ListWarnings(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PlayerWarning, 0, len(warnings))
-	for _, w := range warnings {
-		if w.WithdrawnAt != nil {
-			continue
-		}
-		out = append(out, PlayerWarning{ID: w.ID, Category: w.Category, Message: w.Message,
-			ResetNickname: w.ResetNickname, CreatedAt: w.CreatedAt, AcknowledgedAt: w.AcknowledgedAt})
-	}
-	return out, nil
-}
-
-// AcknowledgeWarning marks the player's own warning as read. Repeating it
-// keeps the first timestamp.
-func (s *Service) AcknowledgeWarning(ctx context.Context, userID string, id int64) error {
-	return s.store.AcknowledgeWarning(ctx, userID, id)
-}
-
 // WithdrawWarning retracts a warning. A reset nickname is not restored.
 func (s *Service) WithdrawWarning(ctx context.Context, actor pkgstaff.Actor, userID string, id int64) error {
 	if err := requireReviewer(actor); err != nil {
@@ -154,9 +118,7 @@ func (s *Service) WithdrawWarning(ctx context.Context, actor pkgstaff.Actor, use
 		if err := store.WithdrawWarning(ctx, userID, id, actor.ID); err != nil {
 			return err
 		}
-		if _, err := store.RecordAudit(ctx, audit.Entry{SubjectID: userID, ActorID: actor.ID, Action: audit.ActionNote, Reason: "Warning withdrawn", Metadata: map[string]any{"warningId": id}}); err != nil {
-			return err
-		}
-		return store.NotifyWarning(ctx, userID, id, map[string]any{"warningId": id, "withdrawn": true, "reason": "This warning has been withdrawn."})
+		_, err := store.RecordAudit(ctx, audit.Entry{SubjectID: userID, ActorID: actor.ID, Action: audit.ActionNote, Reason: "Warning withdrawn", Metadata: map[string]any{"warningId": id}})
+		return err
 	})
 }

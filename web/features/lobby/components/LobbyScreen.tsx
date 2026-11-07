@@ -1,6 +1,7 @@
+import { useMemo } from "react";
+import type { LeaderboardSummary } from "../lib/leaderboard";
 import React from "react";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
-import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
 import type { PartyTeamId, PartyMode } from "../lib/party-client";
 import type {
   MaintenanceStatus,
@@ -9,6 +10,7 @@ import type {
   QueueVariant,
 } from "../../matchmaking/lib/queue-client";
 import type { LobbyContentRoute } from "../lib/lobby-ui";
+import { InboxCard } from "../../inbox/components/InboxCard";
 import { PlayPanel } from "./PlayPanel";
 import { PartyPanel } from "./PartyPanel";
 import { LeaderboardPanel } from "./LeaderboardPanel";
@@ -25,12 +27,10 @@ import {
 } from "./MaintenanceNotice";
 import { MapRouteSurface } from "./maps/MapRouteSurfaces";
 import { FriendsDashboard } from "../../social/components/FriendsDashboard";
-import { RequestsCard } from "../../social/components/RequestsCard";
 import { LobbyScreenView } from "./LobbyScreenView";
 import { LobbyScreenModals } from "./LobbyScreenModals";
 import { useLobbyScreenState, type LobbyPartyView } from "../hooks/useLobbyScreenState";
 import { useMapList } from "../../maps/lib/map-hooks";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { createSeededRandom, featuredMapDay, selectHomepageMaps } from "../lib/featured-maps";
 import { useShowAppNoticeOnValue } from "../../../components/ui/AppNotice";
 
@@ -153,7 +153,7 @@ export default function LobbyScreen({
   const {
     openModal, setOpenModal, extensionStatus, extensionAvailable, duel, setDuel,
     singleplayer, setSingleplayer, inviteCopied, inviteCodeInput, setInviteCodeInput,
-    mapPickerOpen, setMapPickerOpen, currentNavRoute, partyPanelState, hasActiveParty,
+    mapPickerOpen, setMapPickerOpen, partyPanelState, hasActiveParty,
     isQueueing, isSingleplayerLoading, primaryButtonLabel,
     userAvatarFallback, maintenanceIsWarning,
     maintenanceIsActive, queuePaused, playPaused, maintenanceMessage,
@@ -169,7 +169,6 @@ export default function LobbyScreen({
   useShowAppNoticeOnValue(party.error);
   const canUploadCustomMaps = !!accessToken && !isGuest;
   const trendingMapsQuery = useMapList(
-    useRuntimeConfig(),
     accessToken,
     userId,
     "official",
@@ -177,7 +176,7 @@ export default function LobbyScreen({
     "",
     { enabled: contentRoute === "play" },
   );
-  const awardedMapsQuery = useMapList(useRuntimeConfig(), accessToken, userId, "awarded", "trending", "", {enabled:contentRoute === "play"});
+  const awardedMapsQuery = useMapList(accessToken, userId, "awarded", "trending", "", {enabled:contentRoute === "play"});
   const dailyFeaturedMapKey = featuredMapDay();
   const featuredOfficialMaps = React.useMemo(
     () => selectHomepageMaps(trendingMapsQuery.data || [], awardedMapsQuery.data || [], 10, createSeededRandom(`geoduels-featured-maps:${dailyFeaturedMapKey}`)),
@@ -194,7 +193,6 @@ export default function LobbyScreen({
     />
   );
   const donateCard = <DonateCard onSupportDonation={onSupportDonation} />;
-  const requestsCard = !isGuest && accessToken ? <RequestsCard accessToken={accessToken} /> : null;
   const socialCard = <SocialLinksCard />;
   const partyConfig = partyPanelState.config;
   const savePartyConfig = partyPanelState.saveConfig;
@@ -253,13 +251,13 @@ export default function LobbyScreen({
     : undefined;
   const showMaintenanceBanner =
     maintenanceIsWarning && !maintenanceAlertDismissed;
-  const maintenanceBanner = showMaintenanceBanner ? (
+  const maintenanceBanner = useMemo(() => (showMaintenanceBanner ? (
     <MaintenanceBanner
       message={maintenanceMessage}
       countdown={warningCountdown}
-      onDismiss={dismissMaintenanceAlert}
+      onDismiss={isAdmin ? () => setDismissedMaintenanceAlertKey(maintenanceAlertKey) : undefined}
     />
-  ) : null;
+  ) : null), [isAdmin, maintenanceAlertKey, maintenanceMessage, setDismissedMaintenanceAlertKey, showMaintenanceBanner, warningCountdown]);
 
   const maintenanceOverlay =
     maintenanceIsActive && !maintenanceAlertDismissed ? (
@@ -311,9 +309,9 @@ export default function LobbyScreen({
       trendingMaps={featuredOfficialMaps}
       trendingMapsLoading={trendingMapsQuery.isLoading || awardedMapsQuery.isLoading}
       changelogCard={newsPanel}
+      inboxCard={<InboxCard />}
       donateCard={donateCard}
       socialCard={socialCard}
-      requestsCard={requestsCard}
     />
   );
 
@@ -365,7 +363,6 @@ export default function LobbyScreen({
 
   return (
     <LobbyScreenView
-      activeNavRoute={currentNavRoute}
       backgroundBlurred={showPartyPanel}
       contentClassName={showPartyPanel ? "overflow-hidden" : undefined}
       contentRoute={contentRoute}
@@ -373,7 +370,6 @@ export default function LobbyScreen({
       maintenanceBanner={maintenanceBanner}
       maintenanceOverlay={maintenanceOverlay}
       modalNodes={modalNodes}
-      onlinePlayers={onlinePlayers}
       showPartyPanel={showPartyPanel}
       partyPanel={partyPanel}
       mapRouteSurface={mapRouteSurface}

@@ -10,7 +10,7 @@ Not a pretty readme, but does the job.
 
 ### Development
 
-You need Docker, Go 1.26, and Node 22 (matching CI). All commands run from the repository root.
+You need Docker, Go 1.26, Node 22 (matching CI), and [Overmind](https://github.com/DarthSim/overmind) (`brew install overmind`). All commands run from the repository root.
 
 ```sh
 cp .env.example .env
@@ -19,19 +19,18 @@ cd backend
 go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
 cd ..
 
-docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-
+docker compose up -d
 npm --prefix web ci
-npm --prefix web run dev
+overmind start
 ```
 
-Open `http://localhost:24000`. The Go services run under Air, rebuilt and restarted as you edit; Next's dev server takes the front door's port and passes `/api` to the API (port 24001), as production's ingress does. On startup the gameplay node imports the bundled sample dataset for any required playable map that is not configured yet (`DEV_MAP_DATASET` in `compose.dev.yaml`; it never replaces existing maps). Start the optional workers by adding `workers` to `COMPOSE_PROFILES` in `.env`; stop everything with `docker compose down`.
+Open `http://localhost:24000`. Docker runs only Postgres and NATS; the `Procfile` runs everything else on your machine, with the Go services under Air, rebuilt and restarted as you edit. Next's dev server takes the front door's port and routes `/api` as production's ingress does. See [development notes](docs/development.md#local-infrastructure).
 
-To run it as production does, from images, leave out `compose.dev.yaml` and Next: `docker compose up -d --build` serves the same address.
+To run it as production does, from images, stop Overmind and run `COMPOSE_PROFILES=app docker compose up -d --build`, which serves the same address.
 
 ### Self-hosted
 
-`compose.yaml` runs the published images (amd64 and arm64) with every port bound to host loopback. On the server, copy `.env.example` to `.env` and change what it marks "Self-hosting": `NEXT_PUBLIC_SITE_URL`, new secrets, `GEODUELS_VERSION` (for example `v2.2.7`), and `COMPOSE_PROFILES=workers,tls`, with which Caddy gets the certificate and serves ports 80 and 443. Behind a reverse proxy of your own (nginx, say), leave `tls` out and send everything to port 24000. Then:
+`compose.yaml` runs the published images (amd64 and arm64) with every port bound to host loopback. On the server, copy `.env.example` to `.env` and change what it marks "Self-hosting": `NEXT_PUBLIC_SITE_URL`, new secrets, `GEODUELS_VERSION` (for example `v2.2.7`), and `COMPOSE_PROFILES=app,workers,tls`, with which Caddy gets the certificate and serves ports 80 and 443. Behind a reverse proxy of your own (nginx, say), leave `tls` out and send everything to port 24000. Then:
 
 ```sh
 docker compose up -d

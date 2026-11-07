@@ -118,15 +118,25 @@ func (s *PGStore) Join(ctx context.Context, userID string, variants []Variant, m
 	})
 }
 
-// Touch keeps the player's tickets fresh. It reports whether they are still queued: false once a
-// pairing took them.
-func (s *PGStore) Touch(ctx context.Context, userID string) (bool, error) {
+// TouchAll keeps these connected players' tickets fresh.
+func (s *PGStore) TouchAll(ctx context.Context, userIDs []string) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	return s.db.TouchQueueTicketsOf(ctx, storekit.UUIDList(userIDs))
+}
+
+// QueuedSince is when the player joined the queue, if they're in it.
+func (s *PGStore) QueuedSince(ctx context.Context, userID string) (time.Time, bool, error) {
 	id, err := storekit.ProfileUUID(userID)
 	if err != nil {
-		return false, err
+		return time.Time{}, false, err
 	}
-	n, err := s.db.TouchQueueTickets(ctx, id)
-	return n > 0, err
+	joinedAt, err := s.db.QueueTicketJoinedAt(ctx, id)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return joinedAt.Time, joinedAt.Valid, nil
 }
 
 // Leave takes the player out of every variant.

@@ -11,10 +11,9 @@ type StorageCleanupResult struct {
 	Parties            int64
 	MapUploadEvents    int64
 	MapDailyUsers      int64
-	UserNotifications  int64
+	InboxMessages      int64
 	Leases             int64
 	RateLimitWindows   int64
-	Presence           int64
 	InterruptedMatches int64
 	ExpiredParties     int64
 }

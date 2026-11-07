@@ -37,7 +37,7 @@ SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
        l.last_match_id AS last_match_id,
        COALESCE(gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at), '')::text AS last_match_status,
        l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
-       COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
+       COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0), l.revision
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
 LEFT JOIN match_sessions ms ON ms.match_id = l.last_match_id
 WHERE l.id = $1;
@@ -47,7 +47,7 @@ SELECT l.id, l.invite_code, l.owner_user_id, l.state, l.mode, l.map_scope,
        l.last_match_id AS last_match_id,
        COALESCE(gd_match_status(ms.ended_at, ms.node_id, ms.node_epoch, ms.created_at), '')::text AS last_match_status,
        l.created_at, l.expires_at, l.config_json, l.map_id AS map_id,
-       COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0)
+       COALESCE(mp.display_name, ''), COALESCE(mp.location_count, 0), l.revision
 FROM parties l LEFT JOIN maps mp ON mp.id = l.map_id
 LEFT JOIN match_sessions ms ON ms.match_id = l.last_match_id
 WHERE l.invite_code = $1;
@@ -106,7 +106,7 @@ ORDER BY ub.user_id ASC, ub.awarded_at DESC, ub.badge_code ASC;
 SELECT m.user_id, u.display_name, COALESCE(u.avatar_url, '') AS avatar_url,
        gd_is_guest(u.id) AS is_guest, gd_is_admin(u.id) AS is_admin,
        COALESCE(u.selected_badge_code, 0) AS selected_badge_code, m.team_id AS team_id,
-       m.role, m.ready, m.joined_at, m.seen_at,
+       m.role, m.ready, m.joined_at,
        EXISTS (
            SELECT 1 FROM parties p JOIN match_participants mp ON mp.match_id = p.last_match_id
            WHERE p.id = m.party_id AND mp.user_id = m.user_id AND mp.active
@@ -176,22 +176,6 @@ WHERE id = $1 AND state = 'open';
 UPDATE parties SET updated_at = now()
 WHERE id = $1 AND state = 'open';
 
--- name: TouchPartyMemberSeen :one
--- Marks the member as having the party open now, returning when they did before.
-WITH previous AS (
-    SELECT seen_at FROM party_members
-    WHERE party_id = $1 AND user_id = $2 AND left_at IS NULL
-    FOR UPDATE
-)
-UPDATE party_members m SET seen_at = now()
-FROM previous
-WHERE m.party_id = $1 AND m.user_id = $2 AND m.left_at IS NULL
-RETURNING previous.seen_at AS previous_seen_at;
-
--- name: ClearPartyMemberSeen :execrows
-UPDATE party_members SET seen_at = NULL
-WHERE party_id = $1 AND user_id = $2 AND seen_at IS NOT NULL;
-
 -- name: TransferPartyOwner :exec
 UPDATE parties SET owner_user_id = $2, updated_at = now() WHERE id = $1;
 
@@ -203,3 +187,7 @@ JOIN party_members m ON m.party_id = c.party_id AND m.user_id = c.user_id
 WHERE c.user_id = $1 AND m.left_at IS NULL
   AND p.state = 'open'
   AND (p.expires_at > now() OR EXISTS (SELECT 1 FROM match_sessions ms WHERE ms.match_id = p.last_match_id AND ms.ended_at IS NULL));
+
+-- name: NextPartyRevision :one
+-- Taken before the party is read, so a higher revision never carries older state.
+UPDATE parties SET revision = revision + 1 WHERE id = $1 RETURNING revision;

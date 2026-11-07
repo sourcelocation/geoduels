@@ -1,12 +1,13 @@
 import type { Snapshot, TeamPing } from '../../game/model/types';
 import type { SfxController } from '../../../lib/audio/sfx';
-import type { RuntimeConfig } from '../../../lib/runtime-config';
-import { ObservableStore } from '../../../lib/observable-store';
+import { Listeners } from "../../../lib/listeners";
 import { initialMatchmakingState, matchmakingReducer, type MatchmakingAction, type MatchmakingState } from '../../../lib/matchmaking';
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
+import type { ActiveMatch, QueueState } from '../../live/events';
 import { GameplaySocketClient } from '../lib/gameplay-socket-client';
-import { fetchMatchView, isOpenMatch, startSoloMatch, streamQueue, type MatchConfig, type MatchReturnTarget, type QueueVariant } from '../lib/queue-client';
+import { fetchMatchView, isOpenMatch, startSoloMatch, enterQueue, leaveQueue, type MatchConfig, type MatchReturnTarget, type QueueVariant } from '../lib/queue-client';
+import { CONNECTION_ERROR_MESSAGE, GAME_CONNECTION_ERROR_MESSAGE, SOCKET_HEARTBEAT_INTERVAL_MS, SOCKET_STALE_AFTER_MS } from "../../../lib/constants";
 
 // Where the player goes after a match and which party it came from, as its view says.
 export type MatchSource = { sourcePartyId?: string; sourcePartyInviteCode?: string; returnTarget?: MatchReturnTarget };
@@ -21,6 +22,10 @@ export type MatchState = {
   snapshot: Snapshot | null;
   lastFinalizedMatchId?: string;
   activeMatchId: string;
+  // A match the server told this player they're seated in, for the app to go to.
+  launchMatchId: string;
+  // The open match the player can go back to, as the server last said.
+  resumeMatchId: string;
   sourcePartyId: string;
   sourcePartyInviteCode: string;
   returnTarget?: MatchReturnTarget;
@@ -37,6 +42,8 @@ const initialState: MatchState = {
   snapshot: null,
   lastFinalizedMatchId: '',
   activeMatchId: '',
+  launchMatchId: '',
+  resumeMatchId: '',
   sourcePartyId: '',
   sourcePartyInviteCode: '',
   returnTarget: { kind: 'home' },
@@ -47,15 +54,16 @@ const initialState: MatchState = {
   teamPings: []
 };
 
-export class MatchController extends ObservableStore<MatchState> {
-  private readonly config: RuntimeConfig;
+export class MatchController {
+  private readonly listeners = new Listeners();
+  readonly subscribe = this.listeners.subscribe;
   private state: MatchState = initialState;
   private readonly sessionController: SessionController;
   private readonly sfxController?: SfxController;
   private readonly socketClient: GameplaySocketClient;
   private activeSession: AuthSessionSnapshot | null = null;
   private recoverAbort: AbortController | null = null;
-  private queueAbort: AbortController | null = null;
+  private soloAbort: AbortController | null = null;
   private singleplayerStartInFlight = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private responseTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -67,12 +75,10 @@ export class MatchController extends ObservableStore<MatchState> {
   private destroyed = false;
   private started = false;
 
-  constructor(params: { config: RuntimeConfig; sessionController: SessionController; sfxController?: SfxController }) {
-    super();
-    this.config = params.config;
+  constructor(params: { sessionController: SessionController; sfxController?: SfxController }) {
     this.sessionController = params.sessionController;
     this.sfxController = params.sfxController;
-    this.socketClient = new GameplaySocketClient(this.config, {
+    this.socketClient = new GameplaySocketClient({
       onOpen: () => {
         this.sendGameCommand('ping', { userId: this.activeSession?.userId || '' });
       },
@@ -106,6 +112,10 @@ export class MatchController extends ObservableStore<MatchState> {
             snapshot.state === 'ended'
               ? snapshot.matchId
               : this.state.lastFinalizedMatchId,
+          resumeMatchId:
+            snapshot.state === 'ended' && snapshot.matchId === this.state.resumeMatchId
+              ? ''
+              : this.state.resumeMatchId,
         });
         this.noteServerActivity();
         this.dispatchMatchmaking({ type: 'game_connected' });
@@ -130,7 +140,7 @@ export class MatchController extends ObservableStore<MatchState> {
     if (this.started || typeof window === 'undefined') return;
     this.destroyed = false;
     this.started = true;
-    this.heartbeatInterval = setInterval(() => this.probeConnection(), this.config.socketHeartbeatIntervalMs);
+    this.heartbeatInterval = setInterval(() => this.probeConnection(), SOCKET_HEARTBEAT_INTERVAL_MS);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('online', this.handleOnline);
   }
@@ -139,7 +149,7 @@ export class MatchController extends ObservableStore<MatchState> {
     this.destroyed = true;
     this.started = false;
     this.stopConnection();
-    this.queueAbort?.abort();
+    this.soloAbort?.abort();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('online', this.handleOnline);
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
@@ -153,7 +163,7 @@ export class MatchController extends ObservableStore<MatchState> {
   private patchState(patch: Partial<MatchState>) {
     this.state = { ...this.state, ...patch };
     if (!this.destroyed) {
-      this.emit();
+      this.listeners.emit();
     }
   }
 
@@ -192,7 +202,7 @@ export class MatchController extends ObservableStore<MatchState> {
     }
   };
 
-  private probeConnection(timeout = this.config.socketStaleAfterMs) {
+  private probeConnection(timeout = SOCKET_STALE_AFTER_MS) {
     if (!this.connectionWanted || document.hidden || this.responseTimeout || !this.socketClient.isOpen()) return;
     // Arm before sending: any server activity proves liveness, but only a new
     // snapshot makes a replacement socket ready for gameplay.
@@ -207,7 +217,7 @@ export class MatchController extends ObservableStore<MatchState> {
     this.patchState({
       connected: true,
       connectionIssue: '',
-      queueError: this.state.queueError === this.config.connectionErrorMessage ? '' : this.state.queueError
+      queueError: this.state.queueError === CONNECTION_ERROR_MESSAGE ? '' : this.state.queueError
     });
   }
 
@@ -230,7 +240,7 @@ export class MatchController extends ObservableStore<MatchState> {
     this.clearResponseTimeout();
     this.socketClient.close();
     this.awaitingSnapshot = true;
-    this.patchState({ connected: false, connectionIssue: this.config.gameConnectionErrorMessage });
+    this.patchState({ connected: false, connectionIssue: GAME_CONNECTION_ERROR_MESSAGE });
     this.dispatchMatchmaking({ type: 'ws_closed' });
     if (this.recoverAbort) return;
     if (this.reconnectTimeout) {
@@ -253,7 +263,7 @@ export class MatchController extends ObservableStore<MatchState> {
 
   resetConnectionState = () => {
     this.stopConnection();
-    this.queueAbort?.abort();
+    this.soloAbort?.abort();
     this.activeSession = null;
     this.patchState({
       ...this.state,
@@ -261,6 +271,8 @@ export class MatchController extends ObservableStore<MatchState> {
       snapshot: null,
       lastFinalizedMatchId: '',
       activeMatchId: '',
+      launchMatchId: '',
+      resumeMatchId: '',
       sourcePartyId: '',
       sourcePartyInviteCode: '',
       returnTarget: { kind: 'home' },
@@ -292,7 +304,7 @@ export class MatchController extends ObservableStore<MatchState> {
         this.markUnavailable('Session expired. Please sign in again.');
         return;
       }
-      const view = await fetchMatchView(this.config, targetMatchID, controller.signal, session.accessToken);
+      const view = await fetchMatchView(targetMatchID, controller.signal, session.accessToken);
       if (!isCurrent()) return;
       if (isOpenMatch(view) && view.playing) {
         this.recoverAbort = null;
@@ -348,16 +360,16 @@ export class MatchController extends ObservableStore<MatchState> {
       returnTarget: source?.returnTarget || this.state.returnTarget || { kind: 'home' }
     });
     try {
-      this.socketClient.connect(matchId, session.accessToken);
+      this.socketClient.connect(matchId);
       this.armResponseTimeout(10_000);
     } catch {
       this.beginRecovery();
     }
   }
 
-  resumeMatch = async (matchId: string, source?: MatchSource, options?: { playMatchFoundSfx?: boolean }) => {
+  resumeMatch = async (matchId: string, source?: MatchSource) => {
     this.stopConnection();
-    this.queueAbort?.abort();
+    this.soloAbort?.abort();
     const generation = this.connectionGeneration;
     const session = this.sessionController.getSessionSnapshot() || (await this.sessionController.ensureFreshSession());
     if (this.destroyed || generation !== this.connectionGeneration || !session || !matchId) {
@@ -365,59 +377,52 @@ export class MatchController extends ObservableStore<MatchState> {
     }
     this.patchState({ queueError: '', connectionIssue: '' });
     this.dispatchMatchmaking({ type: 'set_status', status: 'matched_connecting' });
-    if (options?.playMatchFoundSfx) {
-      this.playMatchFoundSfx();
-    }
     this.connectToMatch(session, matchId, source);
     return true;
   };
 
   joinQueue = (queues: QueueVariant[] = ['moving']) => {
     this.stopConnection();
-    this.queueAbort?.abort();
-    this.patchState({ queueError: '' });
-    const controller = new AbortController();
-    this.queueAbort = controller;
-
+    this.soloAbort?.abort();
+    this.patchState({ queueError: '', launchMatchId: '' });
     void (async () => {
       try {
         const session = await this.sessionController.getPlayableSession();
-        if (controller.signal.aborted || this.destroyed) return;
-        if (!session) {
-          this.patchState({ queueError: 'Unable to create session' });
-          this.dispatchMatchmaking({ type: 'queue_error' });
-          return;
-        }
+        if (!session) throw new Error('Unable to create session');
         this.dispatchMatchmaking({ type: 'join_requested', startedAt: Date.now() });
-        await streamQueue(this.config, session, controller.signal, queues, (event) => {
-          if (controller.signal.aborted || this.destroyed) return;
-          if (event.type === 'queue_status') {
-            this.dispatchMatchmaking({ type: 'queue_status', status: event.status, queuedAt: event.queuedAt });
-            return;
-          }
-          if (event.type === 'match_found') {
-            this.dispatchMatchmaking({ type: 'match_found' });
-            this.queueAbort = null;
-            this.patchState({ queueError: '' });
-            this.playMatchFoundSfx();
-            this.connectToMatch(session, event.matchId, { returnTarget: { kind: 'home' } });
-            return;
-          }
-          throw new Error(event.message);
-        });
-      } catch (error: any) {
-        if (error?.name === 'AbortError') {
-          return;
-        }
-        this.patchState({ queueError: error?.message || 'Queue failed' });
+        await enterQueue(session.accessToken, queues.length ? queues : ['moving']);
+      } catch (error) {
+        this.patchState({ queueError: error instanceof Error ? error.message : 'Queue failed' });
         this.dispatchMatchmaking({ type: 'queue_error' });
-      } finally {
-        if (this.queueAbort === controller) {
-          this.queueAbort = null;
-        }
       }
     })();
   };
+
+  /** Where the server says this person is in the queue. */
+  applyQueue(queue: QueueState) {
+    if (queue.error) this.patchState({ queueError: queue.error });
+    if (queue.queued) {
+      this.dispatchMatchmaking({ type: 'queue_status', status: 'queueing', queuedAt: queue.queuedAt });
+    } else if (this.state.matchmaking.status === 'queueing') {
+      this.dispatchMatchmaking({ type: 'queue_status', status: 'left' });
+    }
+  }
+
+  /** What the server says on every connection, which may have changed while disconnected. */
+  applySession(queue: QueueState, activeMatch?: ActiveMatch) {
+    this.patchState({ resumeMatchId: activeMatch?.matchId ?? '' });
+    this.applyQueue(queue);
+  }
+
+  /** The server seated this player in a new match. Says whether anything still has to connect to it. */
+  matchStarted(matchId: string) {
+    // A solo start goes there itself, once it has the match.
+    if (this.state.launchMatchId === matchId || this.singleplayerStartInFlight || this.state.activeMatchId === matchId) return false;
+    this.patchState({ launchMatchId: matchId, queueError: '' });
+    this.dispatchMatchmaking({ type: 'match_found' });
+    this.playMatchFoundSfx();
+    return true;
+  }
 
   startSingleplayer = async (matchConfig?: MatchConfig, returnTarget?: MatchReturnTarget) => {
     if (this.singleplayerStartInFlight) {
@@ -425,11 +430,11 @@ export class MatchController extends ObservableStore<MatchState> {
     }
     this.singleplayerStartInFlight = true;
     this.stopConnection();
-    this.queueAbort?.abort();
+    this.soloAbort?.abort();
     this.patchState({ singleplayerError: '', connectionIssue: '' });
     this.dispatchMatchmaking({ type: 'set_status', status: 'matched_connecting' });
     const controller = new AbortController();
-    this.queueAbort = controller;
+    this.soloAbort = controller;
 
     try {
       const session = await this.sessionController.getPlayableSession();
@@ -440,7 +445,6 @@ export class MatchController extends ObservableStore<MatchState> {
         return '';
       }
       const view = await startSoloMatch(
-        this.config,
         session.accessToken,
         controller.signal,
         matchConfig,
@@ -449,9 +453,10 @@ export class MatchController extends ObservableStore<MatchState> {
       if (!view.matchId || !isOpenMatch(view)) {
         throw new Error('Singleplayer unavailable');
       }
-      if (controller.signal.aborted || this.destroyed || this.queueAbort !== controller) {
+      if (controller.signal.aborted || this.destroyed || this.soloAbort !== controller) {
         return '';
       }
+      this.patchState({ launchMatchId: view.matchId });
       this.connectToMatch(session, view.matchId, { returnTarget: view.returnTarget });
       return view.matchId;
     } catch (error: any) {
@@ -463,8 +468,8 @@ export class MatchController extends ObservableStore<MatchState> {
       return '';
     } finally {
       this.singleplayerStartInFlight = false;
-      if (this.queueAbort === controller) {
-        this.queueAbort = null;
+      if (this.soloAbort === controller) {
+        this.soloAbort = null;
       }
     }
   };
@@ -475,11 +480,11 @@ export class MatchController extends ObservableStore<MatchState> {
   };
 
   cancelQueue = () => {
-    if (!this.sessionController.getSessionSnapshot()) return;
-    this.stopConnection();
-    this.queueAbort?.abort();
     this.dispatchMatchmaking({ type: 'leave_requested' });
     this.patchState({ queueError: '' });
+    void this.sessionController.ensureFreshSession().then((session) => {
+      if (session) return leaveQueue(session.accessToken);
+    }).catch(() => undefined);
   };
 
   setStatus = (status: MatchmakingState['status']) => {

@@ -30,8 +30,8 @@ var queryOwners = map[string]string{
 	"map_revisions.sql": "maps", "map_settings.sql": "maps", "map_stats.sql": "maps", "map_trust.sql": "maps", "maps.sql": "maps",
 	"match_readers.sql": "matches", "match_sessions.sql": "matches", "match_writes.sql": "matches",
 	"moderation_enforcement.sql": "moderation", "moderation_review.sql": "moderation", "moderation_v2.sql": "moderation", "warnings.sql": "moderation",
-	"notifications.sql": "notifications", "parties.sql": "parties", "preferences.sql": "preferences", "profiles.sql": "profiles",
-	"notify.sql": "*", "queue.sql": "queue", "rate_limits.sql": "*",
+	"inbox.sql": "inbox", "presence.sql": "presence", "parties.sql": "parties", "preferences.sql": "preferences", "profiles.sql": "profiles",
+	"queue.sql": "queue", "rate_limits.sql": "*",
 	"settings.sql": "*", "social.sql": "social", "staff.sql": "staff", "storage_cleanup.sql": "storage",
 }
 
@@ -53,13 +53,14 @@ var queryExceptions = map[string][]string{
 
 // allowedImports lists, per module, the other domain modules it may import.
 var allowedImports = map[string][]string{
-	"badges":     {"accounts", "audit"},
+	"badges":     {"accounts", "audit", "inbox"},
 	"curation":   {"badges"},
 	"matches":    {"badges", "seasons"},
-	"moderation": {"accounts", "audit", "seasons"},
+	"moderation": {"accounts", "audit", "inbox", "seasons"},
 	"parties":    {"badges", "maps"},
 	"profiles":   {"badges", "seasons"},
 	"seasons":    {"badges"},
+	"social":     {"inbox"},
 	"staff":      {"audit", "badges"},
 	"storage":    {"matches"},
 }

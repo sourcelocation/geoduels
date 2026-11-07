@@ -1,5 +1,4 @@
 import { Heading, Text } from "../../../components/ui/typography";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { AdminPanel as Panel } from "../components/admin-primitives";
 import { ChangelogSection } from "./operations/ChangelogSection";
 import { CommunityPardonSection } from "./operations/CommunityPardonSection";
@@ -10,7 +9,6 @@ import { NotificationsSection } from "./operations/NotificationsSection";
 import { SeasonsSection } from "./operations/SeasonsSection";
 
 export function OperationsRoute(props: {
-  config: ReturnType<typeof useRuntimeConfig>;
   accessToken: string;
   leaf: string;
   canManageAdmin: boolean;

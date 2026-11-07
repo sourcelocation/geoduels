@@ -1,14 +1,13 @@
-import type { RuntimeConfig } from "../../../lib/runtime-config";
+
 import { apiFetch, authHeaders, mergeHeaders, readError } from "../../../lib/http";
 import type { HotkeyPreferences } from "../model/types";
 
 export async function patchPreferences(
-  config: RuntimeConfig,
   accessToken: string,
   preferences: HotkeyPreferences,
   revision: number,
 ) {
-  const response = await apiFetch(config, "/api/me/preferences", {
+  const response = await apiFetch("/api/me/preferences", {
     method: "PATCH",
     headers: mergeHeaders({ "content-type": "application/json" }, authHeaders(accessToken)),
     body: JSON.stringify({ preferences, revision }),

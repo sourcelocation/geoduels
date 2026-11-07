@@ -39,6 +39,7 @@ target "backend" {
   matrix = {
     service = [
       "api",
+      "gateway",
       "discord-worker",
       "moderation-worker",
       "gameplay-node",

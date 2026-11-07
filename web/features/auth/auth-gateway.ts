@@ -1,4 +1,4 @@
-import type { RuntimeConfig } from "../../lib/runtime-config";
+
 import {
   requestGuestSession,
   requestLogout,
@@ -15,6 +15,7 @@ export type GuestVerification = () => Promise<string>;
 type AuthBroadcast = { source: string; type: "changed" | "logout" };
 const AUTH_LOCK = "geoduels-auth-cookie";
 const AUTH_CHANNEL = "geoduels-auth";
+const NO_CLIENT_KEYS: AppBootstrapPayload["client"] = { googleClientId: "", discordClientId: "", turnstileSiteKey: "", googleEmbedKey: "" };
 
 /** The sole browser owner allowed to commit authentication state. */
 export class AuthGateway {
@@ -31,21 +32,16 @@ export class AuthGateway {
   private readonly source = Math.random().toString(36).slice(2);
   private readonly listeners = new Set<(snapshot: AuthSessionSnapshot | null) => void>();
 
-  constructor(private readonly config: RuntimeConfig) {
-    if (typeof BroadcastChannel !== "undefined") {
-      try {
-        this.channel = new BroadcastChannel(AUTH_CHANNEL);
-        this.channel.onmessage = (event: MessageEvent<AuthBroadcast>) => this.receiveBroadcast(event.data);
-      } catch {
-        this.channel = null;
-      }
-    }
+  /** Runs in the browser, once the app has mounted: rendering a page never opens anything. */
+  start() {
+    if (this.channel || typeof BroadcastChannel === "undefined") return;
+    this.channel = new BroadcastChannel(AUTH_CHANNEL);
+    this.channel.onmessage = (event: MessageEvent<AuthBroadcast>) => this.receiveBroadcast(event.data);
   }
 
-  dispose() {
-    this.channel?.close();
-    this.channel = null;
-    this.listeners.clear();
+  /** What the browser needs to start third-party flows; empty until the bootstrap has returned. */
+  getClientKeys(): AppBootstrapPayload["client"] {
+    return this.bootstrapPayload?.client ?? NO_CLIENT_KEYS;
   }
 
   setGuestVerification(callback: GuestVerification | null) {
@@ -164,7 +160,7 @@ export class AuthGateway {
 
     const generation = this.generation;
     this.restoreGeneration = generation;
-    const promise = requestBootstrap(this.config)
+    const promise = requestBootstrap()
       .then((bootstrapPayload) => {
         if (generation === this.generation) {
           this.bootstrapPayload = bootstrapPayload;
@@ -204,7 +200,7 @@ export class AuthGateway {
       // Another tab may have rotated the cookie while this tab waited for the lock.
       if (requestedGeneration !== this.generation) return this.bootstrap({ force: true });
       const generation = this.generation;
-      const payload = await requestRefreshSession(this.config);
+      const payload = await requestRefreshSession();
       if (generation === this.generation) {
         const snapshot = this.commit(payload);
         this.announce("changed");
@@ -231,7 +227,7 @@ export class AuthGateway {
       if (operationGeneration !== this.generation) return null;
       const generation = ++this.generation;
       const token = this.guestVerification ? await this.guestVerification() : "";
-      const payload = await requestGuestSession(this.config, token);
+      const payload = await requestGuestSession(token);
       if (generation === this.generation) {
         const snapshot = this.commit(payload);
         this.announce("changed");
@@ -261,7 +257,7 @@ export class AuthGateway {
     if (hasMountedModals()) await dismissAllModals();
     this.commit(null);
     await this.withCookieLock(async () => {
-      await requestLogout(this.config);
+      await requestLogout();
     });
     // A remote auth-change may have arrived while this tab waited for the lock.
     // Completion is therefore a second, final identity boundary.
@@ -291,24 +287,4 @@ function toSnapshot(payload: AuthSessionPayload | null): AuthSessionSnapshot | n
   };
 }
 
-let gateway: AuthGateway | null = null;
-let gatewayConfig: RuntimeConfig | null = null;
-
-const serverGateways = new WeakMap<RuntimeConfig, AuthGateway>();
-
-export function getAuthGateway(config: RuntimeConfig) {
-  if (typeof window === 'undefined') {
-    let serverGateway = serverGateways.get(config);
-    if (!serverGateway) {
-      serverGateway = new AuthGateway(config);
-      serverGateways.set(config, serverGateway);
-    }
-    return serverGateway;
-  }
-  if (!gateway || gatewayConfig !== config) {
-    gateway?.dispose();
-    gateway = new AuthGateway(config);
-    gatewayConfig = config;
-  }
-  return gateway;
-}
+export const authGateway = new AuthGateway();

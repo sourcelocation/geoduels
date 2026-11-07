@@ -16,7 +16,7 @@ export function NotificationsSection(props: OperationsSectionProps) {
   const settingsQuery = useQuery({
     queryKey: ["admin-moderation-settings", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminModerationSettings(props.config, props.accessToken),
+    queryFn: () => requestAdminModerationSettings(props.accessToken),
   });
 
   useEffect(() => {
@@ -24,7 +24,7 @@ export function NotificationsSection(props: OperationsSectionProps) {
   }, [settingsQuery.data?.discordWebhookUrl]);
 
   const saveSettings = useMutation({
-    mutationFn: () => requestAdminPutModerationSettings(props.config, props.accessToken, { discordWebhookUrl: webhook }),
+    mutationFn: () => requestAdminPutModerationSettings(props.accessToken, { discordWebhookUrl: webhook }),
     onSuccess: props.refreshAdminData,
   });
 

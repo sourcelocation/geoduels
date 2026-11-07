@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"geoduels/internal/inbox"
+	"geoduels/internal/jobs"
 	"strings"
 	"time"
 
@@ -20,11 +22,14 @@ import (
 // PGStore persists social data using the pool, or the transaction supplied
 // by WithinTx. The original store is never mutated when starting a transaction.
 type PGStore struct {
-	pool *pgxpool.Pool
-	tx   pgx.Tx
+	pool   *pgxpool.Pool
+	tx     pgx.Tx
+	teller jobs.Teller
 }
 
-func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
+func NewPGStore(pool *pgxpool.Pool, teller jobs.Teller) *PGStore {
+	return &PGStore{pool: pool, teller: teller}
+}
 
 // q selects the transaction when present and the pool otherwise.
 func (s *PGStore) q() *db.Queries {
@@ -324,14 +329,21 @@ func (s *PGStore) AcceptFriendRequest(ctx context.Context, requestID, recipientI
 	return acceptFriendRequestTx(ctx, tx, requestID, recipientID)
 }
 
-func (s *PGStore) NotifyUser(ctx context.Context, userID, notificationType, dedupeKey string, payload map[string]any, actorID string) error {
+// TellFriendshipAccepted puts it in the inbox of whoever sent the request.
+func (s *PGStore) TellFriendshipAccepted(ctx context.Context, senderID, requestID, recipientID string) error {
 	tx, err := s.requireTx()
 	if err != nil {
 		return err
 	}
-	// A notification about something that expires, such as a request, ends with it.
-	expiresAt, _ := time.Parse(time.RFC3339, fmt.Sprint(payload["expiresAt"]))
-	_, err = storekit.UpsertUserNotificationTx(ctx, tx, userID, notificationType, dedupeKey, payload, actorID, expiresAt)
+	recipient, err := storekit.ProfileUUID(recipientID)
+	if err != nil {
+		return err
+	}
+	name, err := db.New(tx).SocialDisplayName(ctx, recipient)
+	if err != nil {
+		return err
+	}
+	_, err = inbox.SendTx(ctx, tx, s.teller, senderID, inbox.FriendshipAccepted(requestID, name))
 	return err
 }
 
@@ -398,10 +410,6 @@ func (s *PGStore) CancelFriendRequest(ctx context.Context, requestID, senderID s
 		return ErrNotFound
 	}
 	return nil
-}
-
-func (s *PGStore) MarkFriendRequestNotificationRead(ctx context.Context, requestID string) error {
-	return s.q().MarkFriendRequestNotificationRead(ctx, storekit.IngestText(requestID))
 }
 
 func (s *PGStore) RemoveFriend(ctx context.Context, userID, targetID string) error {
@@ -571,14 +579,6 @@ func (s *PGStore) UpsertPartyInvitation(ctx context.Context, partyID, inviterID,
 	return PartyInvitation{ID: storekit.UUIDVal(row.ID), PartyID: partyID, CreatedAt: row.CreatedAt.Time, ExpiresAt: row.ExpiresAt.Time}, nil
 }
 
-func (s *PGStore) MarkPartyInvitationNotificationRead(ctx context.Context, userID, invitationID string) error {
-	userUUID, err := storekit.ProfileUUID(userID)
-	if err != nil {
-		return err
-	}
-	return s.q().MarkPartyInvitationNotificationRead(ctx, db.MarkPartyInvitationNotificationReadParams{UserID: userUUID, InvitationID: storekit.IngestText(invitationID)})
-}
-
 func (s *PGStore) ListPartyInviteStatus(ctx context.Context, inviterID, partyID string) (map[string]CompactPartyInvite, error) {
 	out := map[string]CompactPartyInvite{}
 	partyUUID, err := storekit.ProfileUUID(partyID)
@@ -638,5 +638,25 @@ func (s *PGStore) RespondPartyInvitation(ctx context.Context, userID, invitation
 	if err != nil {
 		return PartyInvitation{}, ErrNotFound
 	}
-	return PartyInvitation{ID: storekit.UUIDVal(row.InvitationID), PartyID: storekit.UUIDVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
+	return PartyInvitation{Inviter: CompactPlayer{UserID: storekit.UUIDVal(row.InviterUserID)}, ID: storekit.UUIDVal(row.InvitationID), PartyID: storekit.UUIDVal(row.PartyID), InviteCode: row.InviteCode, Mode: string(row.Mode), ExpiresAt: row.ExpiresAt.Time}, nil
+}
+
+// FriendRequestOther is the other person in a friend request, for either of them.
+func (s *PGStore) FriendRequestOther(ctx context.Context, userID, requestID string) (string, error) {
+	user, err := storekit.ProfileUUID(userID)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	request, err := storekit.ProfileUUID(requestID)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	other, err := s.q().FriendRequestOther(ctx, db.FriendRequestOtherParams{UserID: user, RequestID: request})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return storekit.UUIDVal(other), nil
 }

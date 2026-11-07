@@ -5,13 +5,11 @@ import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
 import { Table, TableHead } from "../../../components/ui/Table";
 import { Heading, Text } from "../../../components/ui/typography";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { AdminPanel as Panel } from "../components/admin-primitives";
 import { requestAdminGrantRole, requestAdminRevokeRole, requestAdminRoles } from "../lib/admin-client";
 import type { UserRoleGrant } from "../types";
 
 export function AccessRoute(props: {
-  config: ReturnType<typeof useRuntimeConfig>;
   accessToken: string;
   canManageAdmin: boolean;
   refreshAdminData: () => Promise<void>;
@@ -22,14 +20,14 @@ export function AccessRoute(props: {
   const rolesQuery = useQuery({
     queryKey: ["admin-roles", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminRoles(props.config, props.accessToken),
+    queryFn: () => requestAdminRoles(props.accessToken),
   });
   const grantRole = useMutation({
-    mutationFn: () => requestAdminGrantRole(props.config, props.accessToken, { userId, role, reason }),
+    mutationFn: () => requestAdminGrantRole(props.accessToken, { userId, role, reason }),
     onSuccess: props.refreshAdminData,
   });
   const revokeRole = useMutation({
-    mutationFn: (grant: UserRoleGrant) => requestAdminRevokeRole(props.config, props.accessToken, grant.userId, grant.role, reason),
+    mutationFn: (grant: UserRoleGrant) => requestAdminRevokeRole(props.accessToken, grant.userId, grant.role, reason),
     onSuccess: props.refreshAdminData,
   });
   const roles = (rolesQuery.data?.roles || []) as UserRoleGrant[];

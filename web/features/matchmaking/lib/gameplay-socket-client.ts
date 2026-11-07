@@ -1,5 +1,4 @@
 import type { Snapshot, TeamPing } from '../../game/model/types';
-import type { RuntimeConfig } from '../../../lib/runtime-config';
 import { matchSocketURL } from './queue-client';
 
 type Handlers = {
@@ -15,16 +14,14 @@ type Handlers = {
 
 export class GameplaySocketClient {
   private socket: WebSocket | null = null;
-  private readonly config: RuntimeConfig;
   private readonly handlers: Handlers;
 
-  constructor(config: RuntimeConfig, handlers: Handlers) {
-    this.config = config;
+  constructor(handlers: Handlers) {
     this.handlers = handlers;
   }
 
-  connect(matchId: string, accessToken: string) {
-    const target = matchSocketURL(this.config, matchId, accessToken);
+  connect(matchId: string) {
+    const target = matchSocketURL(matchId);
     this.close();
     const ws = new WebSocket(target);
     this.socket = ws;

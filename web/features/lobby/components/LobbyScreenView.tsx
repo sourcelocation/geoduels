@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AppShell } from "../../app-shell/components/AppShell";
+import { useAppShellOptions } from "../../app-shell/components/AppShell";
 import { AppContentRail } from "../../app-shell/components/AppContentRail";
-import type { AppNavRoute } from "../../app-shell/navigation";
 import { CenteredSpinner } from "../../../components/ui/Spinner";
 import type { LobbyContentRoute } from "../lib/lobby-ui";
 
@@ -14,7 +13,6 @@ const tabPanelMotion = {
 };
 
 export type LobbyScreenViewProps = {
-  activeNavRoute: AppNavRoute;
   backgroundBlurred: boolean;
   contentClassName?: string;
   contentRoute: LobbyContentRoute;
@@ -22,7 +20,6 @@ export type LobbyScreenViewProps = {
   maintenanceBanner: ReactNode;
   maintenanceOverlay: ReactNode;
   modalNodes: ReactNode;
-  onlinePlayers: number;
   showPartyPanel: boolean;
   partyPanel: ReactNode;
   mapRouteSurface: ReactNode;
@@ -33,7 +30,6 @@ export type LobbyScreenViewProps = {
 };
 
 export function LobbyScreenView({
-  activeNavRoute,
   backgroundBlurred,
   contentClassName,
   contentRoute,
@@ -41,7 +37,6 @@ export function LobbyScreenView({
   maintenanceBanner,
   maintenanceOverlay,
   modalNodes,
-  onlinePlayers,
   showPartyPanel,
   partyPanel,
   mapRouteSurface,
@@ -50,18 +45,11 @@ export function LobbyScreenView({
   friendsDashboard,
   legalCard,
 }: LobbyScreenViewProps) {
+  useAppShellOptions({ backgroundBlurred, contentClassName, maintenanceBanner, viewportLocked: showPartyPanel });
   return (
     <>
       <AnimatePresence>{maintenanceOverlay}</AnimatePresence>
       <AnimatePresence>{modalNodes}</AnimatePresence>
-      <AppShell
-        activeNavRoute={activeNavRoute}
-        backgroundBlurred={backgroundBlurred}
-        contentClassName={contentClassName}
-        maintenanceBanner={maintenanceBanner}
-        onlinePlayers={onlinePlayers}
-        viewportLocked={showPartyPanel}
-      >
         <AppContentRail
           as="main"
           size="wide"
@@ -110,7 +98,6 @@ export function LobbyScreenView({
             <div className="mt-10 w-full sm:mt-16">{legalCard}</div>
           ) : null}
         </AppContentRail>
-      </AppShell>
     </>
   );
 }

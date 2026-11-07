@@ -12,7 +12,7 @@ func (a *PGStore) AwardTeamBadge(ctx context.Context, userID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = badges.AwardBadgeTx(ctx, tx, userID, "geoduels-team")
+	_, err = badges.AwardBadgeTx(ctx, tx, a.teller, userID, "geoduels-team")
 	return err
 }
 

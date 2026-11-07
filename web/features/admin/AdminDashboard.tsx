@@ -17,12 +17,10 @@ import { PlayerDetailRoute } from "./routes/PlayerDetailRoute";
 import { PlayersRoute } from "./routes/PlayersRoute";
 import { staffNavigation, moderatorPathFromRouter, pathFromRouter } from "./lib/admin-navigation";
 import { useHomeModel } from "../home/model/useHomeModel";
-import { useRuntimeConfig } from "../../lib/runtime-config-context";
 
 type AdminSurface = "admin" | "moderator";
 
 export default function AdminPage({ surface = "admin" }: { surface?: AdminSurface }) {
-  const config = useRuntimeConfig();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { view } = useHomeModel({ routeContext: "home", backgroundDataEnabled: false });
@@ -126,7 +124,6 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                 {section === "lanista" ? <Panel className="p-6"><Heading as="h2" variant="heading-md">Events</Heading><p className="mt-3 text-content-secondary">Event management is coming soon.</p></Panel> : null}
                 {moderatorSurface && section === "subjects" && !leaf ? (
                   <PlayersRoute
-                    config={config}
                     accessToken={accessToken}
                     canManageAdmin={canManageAdmin}
                     basePath="/admin/judge/subjects"
@@ -137,7 +134,6 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                 ) : null}
                 {moderatorSurface && section === "subjects" && leaf ? (
                   <PlayerDetailRoute
-                    config={config}
                     accessToken={accessToken}
                     userId={leaf}
                     canManageAdmin={canManageAdmin}
@@ -147,14 +143,13 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                   />
                 ) : null}
                 {moderatorSurface && section === "log" ? (
-                  <EnforcementRoute config={config} accessToken={accessToken} canViewEnforcement={canViewReports} />
+                  <EnforcementRoute accessToken={accessToken} canViewEnforcement={canViewReports} />
                 ) : null}
                 {moderatorSurface && section === "signals" ? (
-                  <SignalsRoute config={config} accessToken={accessToken} />
+                  <SignalsRoute accessToken={accessToken} />
                 ) : null}
                 {!moderatorSurface && (section === "operations" || section === "content") ? (
                   <OperationsRoute
-                    config={config}
                     accessToken={accessToken}
                     leaf={leaf || path[1] || path[0]}
                     canManageAdmin={canManageAdmin}
@@ -163,10 +158,9 @@ export default function AdminPage({ surface = "admin" }: { surface?: AdminSurfac
                 ) : null}
                 {!moderatorSurface && section === "access" ? (
                   leaf === "badges" ? (
-                    <BadgeGrantsRoute config={config} accessToken={accessToken} canManageAdmin={canManageAdmin} />
+                    <BadgeGrantsRoute accessToken={accessToken} canManageAdmin={canManageAdmin} />
                   ) : (
                     <AccessRoute
-                      config={config}
                       accessToken={accessToken}
                       canManageAdmin={canManageAdmin}
                       refreshAdminData={refreshAdminData}

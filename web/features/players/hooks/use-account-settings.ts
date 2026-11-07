@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/router";
 import { useState } from "react";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import {
   requestDeleteAccount,
   requestDiscordStart,
@@ -9,7 +8,7 @@ import {
   requestUnlinkAuthProvider,
 } from "../../auth/lib/auth-client";
 import { useAuthState } from "../../auth/components/AuthProvider";
-import { getAuthGateway } from "../../auth/auth-gateway";
+import { authGateway } from "../../auth/auth-gateway";
 
 type Provider = "google" | "discord";
 type AccountData = {
@@ -20,11 +19,9 @@ type AccountData = {
 };
 
 export function useAccountSettings(profilePath: string) {
-  const config = useRuntimeConfig();
   const router = useRouter();
   const queryClient = useQueryClient();
   const auth = useAuthState();
-  const authGateway = getAuthGateway(config);
   const [error, setError] = useState("");
   const accountQuery = useQuery({
     queryKey: ["profile-account-settings", auth.userId || "anonymous"],
@@ -49,13 +46,13 @@ export function useAccountSettings(profilePath: string) {
     setError(value instanceof Error ? value.message : fallback);
   const unlinkMutation = useMutation({
     mutationFn: (provider: Provider) =>
-      requestUnlinkAuthProvider(config, account?.accessToken || "", provider),
+      requestUnlinkAuthProvider(account?.accessToken || "", provider),
     onSuccess: refresh,
     onError: fail("Failed to unlink sign-in method"),
   });
   const deleteMutation = useMutation({
     mutationFn: () =>
-      requestDeleteAccount(config, account?.accessToken || ""),
+      requestDeleteAccount(account?.accessToken || ""),
     onSuccess: async () => {
       await authGateway.clear();
       await exit();
@@ -75,7 +72,7 @@ export function useAccountSettings(profilePath: string) {
     setError("");
     try {
       const request = provider === "google" ? requestGoogleStart : requestDiscordStart;
-      const payload = await request(config, {
+      const payload = await request({
         accessToken: account.accessToken,
         intent: account.isGuest ? "upgrade_guest" : "link",
         returnTo: `${profilePath}?settings=account`,
@@ -85,8 +82,9 @@ export function useAccountSettings(profilePath: string) {
       fail("Failed to start sign-in method")(providerError);
     }
   };
+  const { googleClientId, discordClientId } = authGateway.getClientKeys();
   const providers = (["google", "discord"] as Provider[]).filter((provider) =>
-    provider === "google" ? config.googleClientId : config.discordClientId,
+    provider === "google" ? googleClientId : discordClientId,
   );
 
   return {

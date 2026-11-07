@@ -2,6 +2,19 @@ import Head from "next/head";
 import { getLobbyLayout } from "../features/home/page/LobbyApplicationLayout";
 import { useSiteURL } from "../lib/site";
 import type { NextPageWithLayout } from "./_app";
+import { mapListKey } from "../features/maps/lib/map-hooks";
+import { listMaps } from "../features/maps/lib/maps-client";
+import { cachedPage } from "../lib/cached-page";
+
+export const getStaticProps = cachedPage(async (_context, queries) => {
+  const [official, awarded] = await Promise.all([
+    listMaps(undefined, { scope: "official" }),
+    listMaps(undefined, { scope: "awarded" }),
+  ]);
+  queries.setQueryData(mapListKey("official", "trending", "", ""), official);
+  queries.setQueryData(mapListKey("awarded", "trending", "", ""), awarded);
+  return {};
+});
 
 const HomePage: NextPageWithLayout = function HomePage() {
   const siteURL = useSiteURL();

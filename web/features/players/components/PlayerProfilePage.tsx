@@ -1,7 +1,6 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { useRouter } from "next/router";
 import { useState } from "react";
-import { AppShell } from "../../app-shell/components/AppShell";
 import { AppContentRail } from "../../app-shell/components/AppContentRail";
 import { SocialPreviewHead } from "../../../components/SocialPreviewHead";
 import { AppPanel } from "../../../components/ui/compositions";
@@ -22,11 +21,9 @@ import { ProfileSocialActions } from "../../social/components/ProfileSocialActio
 export function PlayerProfilePage({
   playerId,
   initialProfile,
-  previewMissing = false,
 }: {
   playerId: string;
   initialProfile?: PublicPlayerProfile;
-  previewMissing?: boolean;
 }) {
   const [historyFilter, setHistoryFilter] = useState<"all" | "ranked">("all");
   const { profileQuery, matchesQuery } = usePlayerProfile(
@@ -45,18 +42,18 @@ export function PlayerProfilePage({
   );
   const matches = matchesQuery.data?.pages.flatMap((page) => page.matches) || [];
   const profilePath = `/players/${encodeURIComponent(profile?.displayName || playerId)}`;
-  if (!playerId || (profileQuery.isLoading && !previewMissing)) {
+  if (!playerId || profileQuery.isLoading) {
     return (
-      <AppShell activeNavRoute={null}>
+      <>
         <ProfileMain>
           <CenteredSpinner label="Loading player profile" className="min-h-[520px]" />
         </ProfileMain>
-      </AppShell>
+      </>
     );
   }
   if (profileQuery.isError || !profile) {
     return (
-      <AppShell activeNavRoute={null}>
+      <>
         <SocialPreviewHead
           title="Player not found | GeoDuels"
           description="This profile does not exist or is no longer available."
@@ -72,15 +69,13 @@ export function PlayerProfilePage({
             </p>
           </AppPanel>
         </ProfileMain>
-      </AppShell>
+      </>
     );
   }
 
   return (
     <>
-      <AppShell
-        activeNavRoute={null}
-      >
+      <>
         <ProfileMetadata profile={profile} path={profilePath} />
         <ProfileMain>
           <ProfileContent>
@@ -104,7 +99,7 @@ export function PlayerProfilePage({
             />
           </ProfileContent>
         </ProfileMain>
-      </AppShell>
+      </>
     </>
   );
 }

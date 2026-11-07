@@ -23,9 +23,6 @@ func (a *api) healthLive(c echo.Context) error {
 }
 
 func (a *api) healthReady(c echo.Context) error {
-	if a.draining.Load() {
-		return plainTextError(c, http.StatusServiceUnavailable, "draining")
-	}
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)
 	defer cancel()
 	if err := a.db.Pool().Ping(ctx); err != nil {

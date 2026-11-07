@@ -66,9 +66,8 @@ type Store interface {
 	ResetNickname(ctx context.Context, userID string) (previous, reset string, err error)
 	InsertWarning(ctx context.Context, warning Warning) error
 	ListWarnings(ctx context.Context, userID string) ([]Warning, error)
-	AcknowledgeWarning(ctx context.Context, userID string, id int64) error
 	WithdrawWarning(ctx context.Context, userID string, id int64, actorID string) error
-	NotifyWarning(ctx context.Context, userID string, id int64, payload map[string]any) error
+	SendWarning(ctx context.Context, userID string, id int64, reason, nicknameReset string) (int64, error)
 }
 
 // PGStore persists moderation data using the pool, or the transaction bound

@@ -4,24 +4,13 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useHotkey } from '../../hotkeys/hooks/use-hotkey';
 import { useOptionalHotkeys } from '../../hotkeys/components/HotkeyProvider';
 import { isChatMuted, setChatMuted } from '../lib/chat-preferences';
-import type { ChatAudience, ChatEmote, ChatMessage } from '../model/types';
+import { chatEmotes, emoteGlyph } from '../lib/emotes';
+import type { ChatAudience, ChatEmote, ConversationItem } from '../model/types';
 import { Select } from '../../../components/ui/select';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { getTeamPresentation } from '../../../lib/team-presentation';
 import PlayerProfileLink from '../../players/components/PlayerProfileLink';
-
-const chatEmotes: Array<{ emote: ChatEmote; label: string; glyph: string }> = [
-  { emote: 'skull', label: 'Skull', glyph: '💀' },
-  { emote: 'sob', label: 'Sob', glyph: '😭' },
-  { emote: 'thinking', label: 'Thinking', glyph: '🤔' },
-  { emote: 'sunglasses', label: 'Sunglasses', glyph: '😎' },
-  { emote: 'wave', label: 'Wave', glyph: '👋' }
-];
-
-function emoteGlyph(emote?: ChatEmote) {
-  return chatEmotes.find((item) => item.emote === emote)?.glyph || '';
-}
 
 function teamChatLabel(teamId?: string) {
   return getTeamPresentation(teamId).name.replace(/^Team\s+/, '');
@@ -36,7 +25,7 @@ export default function ChatPanel({
   mode = "interactive",
   className = "absolute left-3 top-24 z-game-controls w-[min(calc(100vw-1.5rem),21rem)] md:left-4 md:top-28",
 }: {
-  messages: ChatMessage[];
+  messages: ConversationItem[];
   selfUserId: string;
   teamId?: string;
   onSendMessage?: (body: string, audience?: ChatAudience) => boolean;
@@ -51,7 +40,7 @@ export default function ChatPanel({
   const muted = hotkeys?.preferences.audioMuted ?? legacyMuted;
   const [body, setBody] = useState('');
   const [audience, setAudience] = useState<ChatAudience>('all');
-  const [previewMessage, setPreviewMessage] = useState<ChatMessage | null>(null);
+  const [previewMessage, setPreviewMessage] = useState<ConversationItem | null>(null);
   const [previewVisible, setPreviewVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);

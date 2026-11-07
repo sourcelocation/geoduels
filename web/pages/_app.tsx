@@ -1,32 +1,34 @@
-import NextApp, { type AppContext, type AppProps } from 'next/app';
-import type { RuntimeConfig } from '../lib/runtime-config';
-import { RuntimeConfigProvider } from '../lib/runtime-config-context';
+import type { AppProps } from 'next/app';
 import type { NextPage } from 'next';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { HydrationBoundary, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Head from 'next/head';
 import type { ReactElement, ReactNode } from 'react';
 import { useState } from 'react';
+import { SiteURLProvider } from '../lib/site';
 import { TooltipProvider } from '../components/ui/Tooltip';
 import { HotkeyProvider } from '../features/hotkeys/components/HotkeyProvider';
 import { AuthProvider } from '../features/auth/components/AuthProvider';
 import { AppActivityProvider } from '../features/app-shell/components/AppActivityProvider';
 import { AppNoticeProvider } from '../components/ui/AppNotice';
 import { Notifications } from '../features/notifications/components/Notifications';
-import { WarningPrompt } from '../features/notifications/components/WarningPrompt';
+import { AppShell } from '../features/app-shell/components/AppShell';
+import { DirectChat } from '../features/chat/components/DirectChat';
+import { LiveProvider } from '../features/live/LiveProvider';
 import 'leaflet/dist/leaflet.css';
 import 'easymde/dist/easymde.min.css';
 import '../styles/globals.css';
 
 export type NextPageWithLayout<P = object, IP = P> = NextPage<P, IP> & {
   getLayout?: (page: ReactElement) => ReactNode;
+  // The staff tools are the one thing that isn't inside GeoDuels' frame.
+  surface?: "admin";
 };
 
 type AppPropsWithLayout = AppProps & {
   Component: NextPageWithLayout;
-  runtimeConfig: RuntimeConfig;
 };
 
-export default function App({ Component, pageProps, runtimeConfig }: AppPropsWithLayout) {
+export default function App({ Component, pageProps }: AppPropsWithLayout) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -38,10 +40,11 @@ export default function App({ Component, pageProps, runtimeConfig }: AppPropsWit
         }
       })
   );
-  const getLayout = Component.getLayout ?? ((page) => page);
+  const getLayout = Component.getLayout ?? ((content) => content);
+  const page = getLayout(<Component {...pageProps} />);
 
   return (
-    <RuntimeConfigProvider config={runtimeConfig}>
+    <SiteURLProvider value={pageProps.siteURL ?? ''}>
       <Head>
         <link rel="icon" href="/icon.v1.png" type="image/png" />
         <link rel="shortcut icon" href="/icon.v1.png" type="image/png" />
@@ -50,31 +53,25 @@ export default function App({ Component, pageProps, runtimeConfig }: AppPropsWit
       <div className="font-body">
         <TooltipProvider>
           <QueryClientProvider client={queryClient}>
+            <HydrationBoundary state={pageProps.dehydratedState}>
             <AuthProvider>
               <AppActivityProvider>
                 <HotkeyProvider>
                   <AppNoticeProvider>
-                    {getLayout(<Component {...pageProps} />)}
-                    <Notifications />
-                    <WarningPrompt />
+                    <LiveProvider>
+                      {Component.surface === 'admin' ? page : <AppShell>{page}</AppShell>}
+                      <Notifications />
+                      <DirectChat />
+                    </LiveProvider>
                   </AppNoticeProvider>
                 </HotkeyProvider>
               </AppActivityProvider>
             </AuthProvider>
+            </HydrationBoundary>
           </QueryClientProvider>
         </TooltipProvider>
       </div>
-    </RuntimeConfigProvider>
+    </SiteURLProvider>
   );
 }
 
-// Request-time configuration is serialized by Next with the initial page props.
-// This intentionally disables automatic static optimization for these pages.
-App.getInitialProps = async (context: AppContext) => {
-  const props = await NextApp.getInitialProps(context);
-  const runtimeConfig: RuntimeConfig = typeof window === 'undefined'
-    ? (await import('../lib/runtime-config.server')).readServerConfig()
-    : window.__NEXT_DATA__.props.runtimeConfig;
-  if (!runtimeConfig) throw new Error('Missing server-provided application configuration.');
-  return { ...props, runtimeConfig };
-};

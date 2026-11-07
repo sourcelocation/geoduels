@@ -161,10 +161,6 @@ func (s *Service) SendFriendRequest(ctx context.Context, userID, targetID string
 		if err != nil {
 			return err
 		}
-		if err := store.NotifyUser(ctx, targetID, "friend_request_received", "friend_request:"+request.ID,
-			map[string]any{"requestId": request.ID, "expiresAt": request.ExpiresAt.UTC().Format(time.RFC3339)}, userID); err != nil {
-			return err
-		}
 		out = FriendRequest{ID: request.ID, Direction: "outgoing", CreatedAt: request.CreatedAt, ExpiresAt: request.ExpiresAt}
 		return nil
 	})
@@ -172,6 +168,11 @@ func (s *Service) SendFriendRequest(ctx context.Context, userID, targetID string
 		return FriendRequest{}, err
 	}
 	return out, nil
+}
+
+// FriendRequestOther is the other person in a friend request, for either of them.
+func (s *Service) FriendRequestOther(ctx context.Context, userID, requestID string) (string, error) {
+	return s.store.FriendRequestOther(ctx, userID, requestID)
 }
 
 func (s *Service) RespondFriendRequest(ctx context.Context, userID, requestID, response string) error {
@@ -184,7 +185,7 @@ func (s *Service) RespondFriendRequest(ctx context.Context, userID, requestID, r
 			if err := store.AcceptFriendRequest(ctx, requestID, userID); err != nil {
 				return err
 			}
-			if err := store.NotifyUser(ctx, senderID, "friendship_accepted", "friendship_accepted:"+requestID, map[string]any{}, userID); err != nil {
+			if err := store.TellFriendshipAccepted(ctx, senderID, requestID, userID); err != nil {
 				return err
 			}
 		} else if response == "cancel" {
@@ -195,9 +196,6 @@ func (s *Service) RespondFriendRequest(ctx context.Context, userID, requestID, r
 			if err := store.DeclineFriendRequest(ctx, requestID, userID); err != nil {
 				return ErrNotFound
 			}
-		}
-		if err := store.MarkFriendRequestNotificationRead(ctx, requestID); err != nil {
-			return err
 		}
 		return nil
 	})
@@ -291,10 +289,6 @@ func (s *Service) CreatePartyInvitation(ctx context.Context, partyID, inviterID,
 		invitation.InviteCode = eligibility.InviteCode
 		invitation.Mode = eligibility.Mode
 		invitation.MemberCount = eligibility.MemberCount
-		if err := store.NotifyUser(ctx, recipientID, "party_invitation_received", "party_invitation:"+invitation.ID,
-			map[string]any{"invitationId": invitation.ID, "expiresAt": invitation.ExpiresAt.UTC().Format(time.RFC3339)}, inviterID); err != nil {
-			return err
-		}
 		out = invitation
 		return nil
 	})
@@ -313,9 +307,6 @@ func (s *Service) RespondPartyInvitation(ctx context.Context, userID, invitation
 	err := s.store.WithinTx(ctx, func(store Store) error {
 		invitation, err := store.RespondPartyInvitation(ctx, userID, invitationID, response)
 		if err != nil {
-			return err
-		}
-		if err := store.MarkPartyInvitationNotificationRead(ctx, userID, invitationID); err != nil {
 			return err
 		}
 		out = invitation

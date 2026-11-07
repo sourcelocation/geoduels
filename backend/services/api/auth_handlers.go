@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"geoduels/pkg/observability"
 	"net/http"
 	"strings"
 	"time"
@@ -205,6 +206,9 @@ func (a *api) logoutAll(c echo.Context) error {
 	}
 	if err := a.sessionService().RevokeAll(r.Context(), claims.Sub); err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "logout failed")
+	}
+	if err := a.bus.Disconnect(claims.Sub); err != nil {
+		observability.Log("warn", "live disconnect failed", map[string]any{"error": err.Error()})
 	}
 	a.clearRefreshCookie(c, r)
 	c.Response().WriteHeader(http.StatusNoContent)

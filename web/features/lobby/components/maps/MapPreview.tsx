@@ -28,7 +28,7 @@ export function MapPreview({ name, imageURL, href, onClick, disabled, selected, 
       {actionLabel ? <p className="mt-1 text-body-sm font-semibold">{actionLabel}</p> : null}
     </div>}
   </>;
-  if (href) return <Link href={href} className={classes}>{content}</Link>;
+  if (href) return <Link href={href} prefetch={false} className={classes}>{content}</Link>;
   if (onClick) return <Button variant="ghost" onClick={onClick} disabled={disabled} aria-label={actionLabel ? `${actionLabel}: ${name}` : name} aria-pressed={selected} className={classes}>{content}</Button>;
   return <div className={classes}>{content}</div>;
 }

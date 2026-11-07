@@ -27,6 +27,7 @@ type Party struct {
 	LastMatchID      string
 	CreatedAt        time.Time
 	ExpiresAt        time.Time
+	Revision         int64
 	Members          []Member
 }
 
@@ -57,12 +58,11 @@ type Member struct {
 	JoinedAt       time.Time
 }
 
-// Presence is how recently a member's party socket was seen.
+// Presence is whether a member is connected. The API fills it in: a party doesn't know who is.
 type Presence string
 
 const (
 	PresenceOnline  Presence = "online"
-	PresenceAway    Presence = "away"
 	PresenceOffline Presence = "offline"
 )
 

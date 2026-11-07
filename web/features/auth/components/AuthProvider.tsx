@@ -1,6 +1,5 @@
 import { staffRoles, type StaffRole } from "../roles";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import {
   requestDiscordStart,
   requestGoogleStart,
@@ -9,8 +8,7 @@ import {
 import { clearAuthCallbackParams, readAuthCallback } from "../lib/auth-callback";
 import type { AppBootstrapPayload, AuthSessionPayload } from "../lib/auth-client";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
-import { getAuthGateway } from "../auth-gateway";
-import { UserLiveProvider } from "./UserLiveProvider";
+import { authGateway } from "../auth-gateway";
 import AppModalShell from "../../../components/ui/AppModalShell";
 import { Button } from "../../../components/ui/button";
 
@@ -150,14 +148,15 @@ export function deriveAuthState(
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const config = useRuntimeConfig();
-  const gateway = getAuthGateway(config);
-  const session = useSyncExternalStore(gateway.subscribe.bind(gateway), gateway.getPayload.bind(gateway), gateway.getPayload.bind(gateway));
-  const restored = useSyncExternalStore(gateway.subscribe.bind(gateway), gateway.isRestored.bind(gateway), gateway.isRestored.bind(gateway));
-  useSyncExternalStore(gateway.subscribe.bind(gateway), gateway.getBootstrapEpoch.bind(gateway), gateway.getBootstrapEpoch.bind(gateway));
-  const bootstrap = restored ? gateway.getBootstrapPayload() : null;
+  const session = useSyncExternalStore(authGateway.subscribe.bind(authGateway), authGateway.getPayload.bind(authGateway), authGateway.getPayload.bind(authGateway));
+  const restored = useSyncExternalStore(authGateway.subscribe.bind(authGateway), authGateway.isRestored.bind(authGateway), authGateway.isRestored.bind(authGateway));
+  useSyncExternalStore(authGateway.subscribe.bind(authGateway), authGateway.getBootstrapEpoch.bind(authGateway), authGateway.getBootstrapEpoch.bind(authGateway));
+  const bootstrap = restored ? authGateway.getBootstrapPayload() : null;
 
-  useEffect(() => { void gateway.bootstrap().catch(() => undefined); }, [gateway]);
+  useEffect(() => {
+    authGateway.start();
+    void authGateway.bootstrap().catch(() => undefined);
+  }, []);
 
   const value = useMemo(
     () => deriveAuthState(session, restored, null, bootstrap),
@@ -166,9 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthStateProvider value={value}>
-      <UserLiveProvider>
         <AuthGlobalUi>{children}</AuthGlobalUi>
-      </UserLiveProvider>
     </AuthStateProvider>
   );
 }
@@ -201,26 +198,16 @@ function currentReturnTo() {
   return path.startsWith("/") ? path : "/";
 }
 
-function googleSignInEnabled(config: ReturnType<typeof useRuntimeConfig>) {
-  if (!config.googleClientId || typeof window === "undefined") return false;
-  if (config.googleAllowedOrigins.length > 0) {
-    return config.googleAllowedOrigins.includes(window.location.origin);
-  }
-  // Keep the existing development safety rule: localhost must be explicitly
-  // allow-listed because Google will otherwise reject the OAuth redirect.
-  return window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
-}
-
 function AuthGlobalUi({ children }: { children: ReactNode }) {
   const auth = useAuthState();
-  const config = useRuntimeConfig();
-  const gateway = getAuthGateway(config);
   const [signInOpen, setSignInOpen] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const oauthCallbackHandledRef = useRef(false);
-  const googleEnabled = googleSignInEnabled(config);
-  const discordEnabled = !!config.discordClientId;
+  // Set once the bootstrap has returned, which also re-renders this.
+  const { googleClientId, discordClientId } = authGateway.getClientKeys();
+  const googleEnabled = !!googleClientId;
+  const discordEnabled = !!discordClientId;
 
   useEffect(() => {
     if (typeof window === "undefined" || oauthCallbackHandledRef.current) return;
@@ -239,7 +226,7 @@ function AuthGlobalUi({ children }: { children: ReactNode }) {
     setAuthError("");
     void (async () => {
       try {
-        const session = await gateway.oauthCompleted();
+        const session = await authGateway.oauthCompleted();
         if (!session) {
           setAuthError(
             "Sign-in completed, but restoring the session failed. Please try again.",
@@ -257,7 +244,7 @@ function AuthGlobalUi({ children }: { children: ReactNode }) {
         setAuthLoading(false);
       }
     })();
-  }, [gateway]);
+  }, []);
 
   const openSignIn = useCallback(() => {
     setAuthError("");
@@ -275,7 +262,7 @@ function AuthGlobalUi({ children }: { children: ReactNode }) {
     setAuthError("");
     try {
       const session = auth.accessToken
-        ? await gateway.ensureFreshSession(60_000, {
+        ? await authGateway.ensureFreshSession(60_000, {
             allowNicknameRequired: true,
             forceRefresh: false,
           })
@@ -284,19 +271,19 @@ function AuthGlobalUi({ children }: { children: ReactNode }) {
       const accessToken = auth.isGuest ? session?.accessToken || auth.accessToken : undefined;
       if (auth.isGuest && !accessToken) throw new Error("Your guest session expired. Please play again to continue.");
       const request = provider === "google" ? requestGoogleStart : requestDiscordStart;
-      const data = await request(config, { intent, accessToken, returnTo: currentReturnTo() });
+      const data = await request({ intent, accessToken, returnTo: currentReturnTo() });
       if (!data.authURL) throw new Error(`Missing ${provider} auth URL`);
       if (typeof window !== "undefined") window.location.assign(data.authURL);
     } catch (error) {
       setAuthLoading(false);
       setAuthError(error instanceof Error && error.message ? error.message : `Failed to start ${provider} sign-in`);
     }
-  }, [auth.accessToken, auth.isGuest, config, discordEnabled, gateway, googleEnabled]);
+  }, [auth.accessToken, auth.isGuest, discordEnabled, googleEnabled]);
   const devLogin = useCallback(async () => {
     setAuthLoading(true);
     setAuthError("");
     try {
-      const session = await gateway.ensurePlayableSession();
+      const session = await authGateway.ensurePlayableSession();
       if (!session) throw new Error("Unable to start a playable session");
       setSignInOpen(false);
       setAuthLoading(false);
@@ -304,7 +291,7 @@ function AuthGlobalUi({ children }: { children: ReactNode }) {
       setAuthLoading(false);
       setAuthError(error instanceof Error && error.message ? error.message : "Unable to start a playable session");
     }
-  }, [gateway]);
+  }, []);
   const actions = useMemo<AuthActions>(() => ({
     signInOpen,
     authLoading,

@@ -43,19 +43,19 @@ WITH ended AS (
 )
 SELECT ended.match_id FROM ended;
 
--- name: EndInterruptedMatches :execrows
+-- name: EndInterruptedMatches :many
 -- Ends the matches whose node is gone or that no node picked up, freeing their players' seats.
 WITH ended AS (
     UPDATE match_sessions s
     SET ended_at = now(), outcome = 'interrupted'
     WHERE s.ended_at IS NULL
       AND gd_match_status(s.ended_at, s.node_id, s.node_epoch, s.created_at) = 'interrupted'
-    RETURNING s.match_id
+    RETURNING s.match_id, s.source_party_id
 ), released AS (
     UPDATE match_participants mp SET active = false
     FROM ended WHERE mp.match_id = ended.match_id AND mp.active
 )
-SELECT ended.match_id FROM ended;
+SELECT ended.source_party_id FROM ended;
 
 -- name: InsertMatchSession :exec
 INSERT INTO match_sessions(

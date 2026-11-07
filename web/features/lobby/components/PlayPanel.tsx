@@ -33,10 +33,9 @@ type PlayPanelProps = {
   trendingMaps: CustomMap[];
   trendingMapsLoading: boolean;
   changelogCard: React.ReactNode;
+  inboxCard: React.ReactNode;
   donateCard: React.ReactNode;
   socialCard: React.ReactNode;
-  /** Signed-in players only; without it the news takes both rows. */
-  requestsCard?: React.ReactNode;
 };
 
 type PlayModeActionButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -81,9 +80,9 @@ export const PlayPanel = forwardRef<HTMLDivElement, PlayPanelProps>(function Pla
   trendingMaps,
   trendingMapsLoading,
   changelogCard,
+  inboxCard,
   donateCard,
   socialCard,
-  requestsCard,
 }, ref) {
   return (
     <motion.div
@@ -134,8 +133,8 @@ export const PlayPanel = forwardRef<HTMLDivElement, PlayPanelProps>(function Pla
       <section>
         <Heading as="h2" variant="heading-md" className="mb-3">GeoDuels</Heading>
         <div className="grid w-full gap-4 sm:grid-cols-2">
-          <div className={requestsCard ? "min-w-0" : "min-w-0 sm:row-span-2"}>{changelogCard}</div>
-          {requestsCard ? <div className="min-w-0">{requestsCard}</div> : null}
+          <div className="min-w-0">{changelogCard}</div>
+          <div className="min-w-0">{inboxCard}</div>
           {socialCard}
           {donateCard}
         </div>

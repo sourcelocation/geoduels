@@ -1,7 +1,5 @@
 import type { StaffRole } from "../roles";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { apiFetch, authHeaders, mergeHeaders, readError } from "../../../lib/http";
-import type { LeaderboardSummary } from "../controllers/session-controller";
 
 export type OAuthIntent = "signin" | "link" | "upgrade_guest";
 
@@ -48,15 +46,14 @@ export type BootstrapViewer = {
 };
 
 export type AppBootstrapPayload = {
-  version: 1 | 2;
   auth: AuthSessionPayload | null;
   viewer: BootstrapViewer | null;
   preferences: { revision: number; value: unknown } | null;
-  activity: {
-    currentParty?: { id: string; inviteCode: string } | null;
-    // The open match the player can return to, of any kind.
-    activeMatch: { matchId: string; kind?: string; mode?: string; status?: "starting" | "live" } | null;
-    notifications: UserNotification[];
+  client: {
+    googleClientId: string;
+    discordClientId: string;
+    turnstileSiteKey: string;
+    googleEmbedKey: string;
   };
   global: {
     onlinePlayers: number;
@@ -75,9 +72,8 @@ export class AuthSessionError extends Error {
   constructor(public readonly status: number, message: string) { super(message); }
 }
 
-export async function requestBootstrap(config: RuntimeConfig): Promise<AppBootstrapPayload> {
-  // Older API deployments ignore the version parameter and return compatible v1 data.
-  const resp = await apiFetch(config, "/api/bootstrap?version=2", { credentials: "include" });
+export async function requestBootstrap(): Promise<AppBootstrapPayload> {
+  const resp = await apiFetch("/api/bootstrap", { credentials: "include" });
   if (!resp.ok) {
     throw new AuthSessionError(resp.status, await readError(resp, "Application bootstrap failed"));
   }
@@ -85,10 +81,9 @@ export async function requestBootstrap(config: RuntimeConfig): Promise<AppBootst
 }
 
 export async function requestGuestSession(
-  config: RuntimeConfig,
   turnstileToken?: string,
 ): Promise<AuthSessionPayload> {
-  const resp = await apiFetch(config, "/api/auth/guest", {
+  const resp = await apiFetch("/api/auth/guest", {
     method: "POST",
     credentials: "include",
     headers: turnstileToken
@@ -104,8 +99,8 @@ export async function requestGuestSession(
   return resp.json();
 }
 
-export async function requestRefreshSession(config: RuntimeConfig): Promise<AuthSessionPayload | null> {
-  const resp = await apiFetch(config, "/api/auth/refresh", {
+export async function requestRefreshSession(): Promise<AuthSessionPayload | null> {
+  const resp = await apiFetch("/api/auth/refresh", {
     method: "POST",
     credentials: "include",
   });
@@ -116,72 +111,11 @@ export async function requestRefreshSession(config: RuntimeConfig): Promise<Auth
   return resp.json();
 }
 
-/** A notification the server wrote, shown once on whichever device sees it first. */
-export type UserNotification = {
-  id: number;
-  type: string;
-  payload: {
-    badge?: {
-      id: string;
-      kind: string;
-      label: string;
-      description: string;
-      imageUrl: string;
-      rarity?: string;
-      seasonId?: string;
-      rank?: number;
-      owned?: boolean;
-      unobtainable?: boolean;
-    };
-    refundDelta?: number;
-    matchId?: string;
-    requestId?: string;
-    invitationId?: string;
-    expiresAt?: string;
-    reason?: string;
-    withdrawn?: boolean;
-    nicknameReset?: string;
-  };
-  actorUserId?: string;
-  actorDisplayName?: string;
-  createdAt: string;
-};
-
-/** The notifications no device has shown yet, oldest first. */
-export async function requestUnseenNotifications(
-  config: RuntimeConfig,
-  accessToken: string,
-): Promise<UserNotification[]> {
-  const resp = await apiFetch(config, "/api/me/notifications", {
-    headers: authHeaders(accessToken),
-  });
-  if (!resp.ok) throw new Error(await readError(resp, "Notifications unavailable"));
-  const body = (await resp.json()) as { notifications?: UserNotification[] };
-  return body.notifications || [];
-}
-
-/** Records that this device showed a notification, so no other shows it again. */
-export async function markNotificationSeen(
-  config: RuntimeConfig,
-  accessToken: string,
-  notificationId: number,
-) {
-  const resp = await apiFetch(
-    config,
-    `/api/me/notifications/${encodeURIComponent(notificationId)}/read`,
-    {
-      method: "POST",
-      headers: authHeaders(accessToken),
-    },
-  );
-  if (!resp.ok) throw new Error(await readError(resp, "Notification could not be marked seen"));
-}
 
 export async function requestSupportDonation(
-  config: RuntimeConfig,
   accessToken: string,
 ): Promise<{ donationUrl: string }> {
-  const resp = await apiFetch(config, "/api/support/donate", {
+  const resp = await apiFetch("/api/support/donate", {
     method: "POST",
     headers: authHeaders(accessToken),
   });
@@ -191,32 +125,19 @@ export async function requestSupportDonation(
   return resp.json();
 }
 
-export async function requestLeaderboard(
-  config: RuntimeConfig,
-  accessToken?: string,
-): Promise<LeaderboardSummary | null> {
-  const resp = await apiFetch(config, "/api/leaderboard", {
-    headers: authHeaders(accessToken),
-  });
-  if (!resp.ok) {
-    return null;
-  }
-  return resp.json();
-}
 
-export async function requestLogout(config: RuntimeConfig) {
-  await apiFetch(config, "/api/auth/logout", {
+export async function requestLogout() {
+  await apiFetch("/api/auth/logout", {
     method: "POST",
     credentials: "include",
   });
 }
 
 export async function requestUpdateNickname(
-  config: RuntimeConfig,
   accessToken: string,
   nickname: string,
 ) {
-  const resp = await apiFetch(config, "/api/me/nickname", {
+  const resp = await apiFetch("/api/me/nickname", {
     method: "PUT",
     credentials: "include",
     headers: mergeHeaders({
@@ -231,11 +152,10 @@ export async function requestUpdateNickname(
 }
 
 export async function requestUpdateSelectedBadge(
-  config: RuntimeConfig,
   accessToken: string,
   badgeId: string,
 ) {
-  const resp = await apiFetch(config, "/api/me/badge", {
+  const resp = await apiFetch("/api/me/badge", {
     method: "PATCH",
     credentials: "include",
     headers: mergeHeaders({
@@ -250,14 +170,13 @@ export async function requestUpdateSelectedBadge(
 }
 
 export async function requestGoogleStart(
-  config: RuntimeConfig,
   params: {
     intent?: OAuthIntent;
     accessToken?: string;
     returnTo?: string;
   } = {},
 ) {
-  const resp = await apiFetch(config, "/api/auth/google/start", {
+  const resp = await apiFetch("/api/auth/google/start", {
     method: "POST",
     credentials: "include",
     headers: mergeHeaders({
@@ -275,14 +194,13 @@ export async function requestGoogleStart(
 }
 
 export async function requestDiscordStart(
-  config: RuntimeConfig,
   params: {
     intent?: OAuthIntent;
     accessToken?: string;
     returnTo?: string;
   } = {},
 ) {
-  const resp = await apiFetch(config, "/api/auth/discord/start", {
+  const resp = await apiFetch("/api/auth/discord/start", {
     method: "POST",
     credentials: "include",
     headers: mergeHeaders({
@@ -300,12 +218,10 @@ export async function requestDiscordStart(
 }
 
 export async function requestUnlinkAuthProvider(
-  config: RuntimeConfig,
   accessToken: string,
   provider: "google" | "discord",
 ) {
   const resp = await apiFetch(
-    config,
     `/api/me/auth-providers/${encodeURIComponent(provider)}`,
     {
       method: "DELETE",
@@ -320,10 +236,9 @@ export async function requestUnlinkAuthProvider(
 }
 
 export async function requestDeleteAccount(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, "/api/me", {
+  const resp = await apiFetch("/api/me", {
     method: "DELETE",
     credentials: "include",
     headers: mergeHeaders({
@@ -336,8 +251,8 @@ export async function requestDeleteAccount(
   }
 }
 
-export async function requestLobbyChangelog(config: RuntimeConfig) {
-  const resp = await apiFetch(config, "/api/content/lobby-changelog");
+export async function requestLobbyChangelog() {
+  const resp = await apiFetch("/api/content/lobby-changelog");
   if (!resp.ok) {
     return null;
   }
@@ -351,7 +266,6 @@ export async function requestLobbyChangelog(config: RuntimeConfig) {
 }
 
 export async function requestMatchReport(
-  config: RuntimeConfig,
   accessToken: string,
   matchId: string,
   reportedUserId: string,
@@ -359,7 +273,6 @@ export async function requestMatchReport(
   reason = "",
 ) {
   const resp = await apiFetch(
-    config,
     `/api/matches/${encodeURIComponent(matchId)}/reports`,
     {
       method: "POST",

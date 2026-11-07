@@ -27,7 +27,8 @@ export function buildMapSocialPreview(
       ? `/maps/${encodeURIComponent(routeId)}`
       : "/maps";
   if (!map) {
-    return { ...GENERIC_MAP, canonicalPath };
+    // Missing, or private to someone signed in: anyone without access sees it isn't there.
+    return { ...GENERIC_MAP, canonicalPath, robots: "noindex" };
   }
 
   const kind = map.official || map.system

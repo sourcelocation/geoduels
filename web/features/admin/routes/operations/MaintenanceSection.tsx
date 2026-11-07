@@ -27,7 +27,7 @@ export function MaintenanceSection(props: OperationsSectionProps) {
   const maintenanceQuery = useQuery({
     queryKey: ["admin-maintenance", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminMaintenance(props.config, props.accessToken),
+    queryFn: () => requestAdminMaintenance(props.accessToken),
   });
 
   useEffect(() => {
@@ -43,7 +43,7 @@ export function MaintenanceSection(props: OperationsSectionProps) {
 
   const saveMaintenance = useMutation({
     mutationFn: () =>
-      requestAdminPutMaintenance(props.config, props.accessToken, {
+      requestAdminPutMaintenance(props.accessToken, {
         phase,
         message,
         startsAt: fromLocalDateTime(startsAt) || undefined,
@@ -54,7 +54,7 @@ export function MaintenanceSection(props: OperationsSectionProps) {
     onSuccess: props.refreshAdminData,
   });
   const clearMaintenance = useMutation({
-    mutationFn: () => requestAdminClearMaintenance(props.config, props.accessToken),
+    mutationFn: () => requestAdminClearMaintenance(props.accessToken),
     onSuccess: props.refreshAdminData,
   });
 

@@ -3,7 +3,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Heart } from "lucide-react";
 import { useAuthState } from "../../auth/components/AuthProvider";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { toPublicEntityId } from "../../../lib/entity-id";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -12,13 +11,12 @@ import { nominations, likeNomination, reschedulePromotion, type Nomination } fro
 
 function PromotionSchedule({ closesAt, onSaved }: { closesAt: string; onSaved: (value: string) => void }) {
   const auth = useAuthState();
-  const config = useRuntimeConfig();
   const client = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(() => localDateTime(closesAt));
   const [validationError, setValidationError] = useState("");
   const mutation = useMutation({
-    mutationFn: (nextClosesAt: string) => reschedulePromotion(config, auth.accessToken, {
+    mutationFn: (nextClosesAt: string) => reschedulePromotion(auth.accessToken, {
       expectedClosesAt: closesAt,
       closesAt: nextClosesAt,
     }),
@@ -79,18 +77,17 @@ function PromotionSchedule({ closesAt, onSaved }: { closesAt: string; onSaved: (
 
 export function MapOfTheWeekRoute() {
   const auth = useAuthState();
-  const config = useRuntimeConfig();
   const client = useQueryClient();
   const [page, setPage] = useState(1);
   const [savedClosesAt, setSavedClosesAt] = useState("");
   const query = useQuery({
     queryKey: ["motw", auth.userId, page],
-    queryFn: () => nominations(config, auth.accessToken, page),
+    queryFn: () => nominations(auth.accessToken, page),
     enabled: auth.isModerator,
     refetchInterval: 30_000,
   });
   const mutation = useMutation({
-    mutationFn: (item: Nomination) => likeNomination(config, auth.accessToken, item.id, !item.liked),
+    mutationFn: (item: Nomination) => likeNomination(auth.accessToken, item.id, !item.liked),
     onSuccess: () => client.invalidateQueries({ queryKey: ["motw"] }),
   });
   const data = query.data;

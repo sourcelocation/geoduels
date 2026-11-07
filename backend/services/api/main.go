@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	// A pod stops receiving traffic before it stops serving what it already has.
 	apiDrainTimeout    = 5 * time.Second
 	apiShutdownTimeout = 10 * time.Second
 )
@@ -50,11 +51,7 @@ func handleAPIShutdown(a *api, srv *http.Server, drained chan<- struct{}) {
 	defer signal.Stop(sigCh)
 
 	<-sigCh
-	a.draining.Store(true)
 	time.Sleep(apiDrainTimeout)
-	// Shutdown leaves WebSockets open: proxied games are asked to reconnect through another pod.
-	a.proxied.drain(apiDrainTimeout)
-
 	ctx, cancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

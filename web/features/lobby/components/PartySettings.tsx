@@ -1,6 +1,5 @@
 import { Tabs, type TabItem } from "../../../components/ui/Tabs";
 import { DiscreteSlider } from "../../../components/ui/DiscreteSlider";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { useMapDetails } from "../../maps/lib/map-hooks";
 import { mapThumbnailURL } from "../../maps/lib/map-thumbnails";
 import type { MatchConfig, GameRuleset } from "../../matchmaking/lib/queue-client";
@@ -41,7 +40,7 @@ export function PartySettings({
   setMapPickerOpen: (open: boolean) => void;
   snapshot: PartySnapshot;
 }) {
-  const mapQuery = useMapDetails(useRuntimeConfig(), accessToken, config.mapId || "", userId);
+  const mapQuery = useMapDetails(accessToken, config.mapId || "", userId);
   const map = mapQuery.data?.map;
   const disabled = busy || !isOwner || snapshot.state !== "open";
 

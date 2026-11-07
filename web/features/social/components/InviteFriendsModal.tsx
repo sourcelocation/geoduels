@@ -18,7 +18,7 @@ export function InviteFriendsModal({
 }) {
   const page = useFriendsPage(accessToken, true, partyId);
   const memberIds = new Set(memberUserIds);
-  const available = (page.data?.friends || []).filter((player) => !memberIds.has(player.userId));
+  const available = page.friends.filter((player) => !memberIds.has(player.userId));
   const online = available.filter((player) => player.presenceStatus === "online");
   const offline = available.filter((player) => player.presenceStatus !== "online");
   const inviteActions = (player: CompactPlayer) => (

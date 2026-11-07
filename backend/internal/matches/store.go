@@ -2,6 +2,7 @@ package matches
 
 import (
 	"context"
+	"geoduels/internal/jobs"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,10 +19,11 @@ type PGStore struct {
 	pool    *pgxpool.Pool
 	db      *db.Queries
 	analyze MatchAnalyzeEnqueuer
+	teller  jobs.Teller
 }
 
-func NewPGStore(pool *pgxpool.Pool, analyze MatchAnalyzeEnqueuer) *PGStore {
-	return &PGStore{pool: pool, db: db.New(pool), analyze: analyze}
+func NewPGStore(pool *pgxpool.Pool, analyze MatchAnalyzeEnqueuer, teller jobs.Teller) *PGStore {
+	return &PGStore{pool: pool, db: db.New(pool), analyze: analyze, teller: teller}
 }
 
 func (s *PGStore) withTx(ctx context.Context, fn func(pgx.Tx) error) error {

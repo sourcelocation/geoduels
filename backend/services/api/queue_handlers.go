@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 
 	"geoduels/internal/matches"
@@ -16,19 +13,13 @@ import (
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchkind"
 	"geoduels/pkg/observability"
-	"geoduels/pkg/pgnotify"
 )
 
-// A queued player holds the queue socket open. It keeps their tickets fresh and tells them which
-// match the matchmaker started for them; the matchmaker itself runs in whichever process gets its
-// lock first.
+// A queued player stays queued for as long as they're connected: gateway heartbeats keep their tickets
+// fresh, and their last connection closing takes them out. The matchmaker runs in whichever process
+// gets its lock first, and tells players what it found.
 
-const (
-	queueTouchEvery = 10 * time.Second
-	queuePingEvery  = 20 * time.Second
-	queueReadTTL    = 70 * time.Second
-	matchmakeEvery  = 500 * time.Millisecond
-)
+const matchmakeEvery = 500 * time.Millisecond
 
 func maintenanceQueueMessage(status maintenance.Status) string {
 	if status.Message != "" {
@@ -44,157 +35,59 @@ func maintenanceQueueMessage(status maintenance.Status) string {
 	}
 }
 
-type queueStatusEvent struct {
-	Status   string `json:"status"`
-	QueuedAt int64  `json:"queuedAt"`
+type queueJoinRequest struct {
+	Queues string `json:"queues"`
 }
 
-type socketWriter struct {
-	mu   sync.Mutex
-	conn *websocket.Conn
-}
-
-func (w *socketWriter) send(event string, payload any) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_ = w.conn.SetWriteDeadline(time.Now().Add(8 * time.Second))
-	return w.conn.WriteJSON(map[string]any{"type": event, "payload": payload}) == nil
-}
-
-func (w *socketWriter) ping() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)) == nil
-}
-
-func (a *api) queueSocket(c echo.Context) error {
+func (a *api) joinQueue(c echo.Context) error {
 	r := c.Request()
-	if a.draining.Load() {
-		return plainTextError(c, http.StatusServiceUnavailable, "draining")
+	ctx := r.Context()
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
-	status, err := a.maintenanceStatus(r.Context())
+	userID := claims.Sub
+	status, err := a.maintenanceStatus(ctx)
 	if err != nil {
 		return plainTextError(c, http.StatusBadGateway, "queue unavailable")
 	}
 	if status.QueueBlocked() {
 		return plainTextError(c, http.StatusServiceUnavailable, maintenanceQueueMessage(status))
 	}
-	claims, err := a.liveClaims(r)
-	if err != nil {
-		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
-	}
-	userID := claims.Sub
-	if err := a.admit(r.Context(), matchkind.Of(matchkind.RankedDuel), []string{userID}); err != nil {
+	if err := a.admit(ctx, matchkind.Of(matchkind.RankedDuel), []string{userID}); err != nil {
 		return plainTextError(c, http.StatusForbidden, a.startErrorMessage(err))
+	}
+	// A player already in a match that queueing would not replace goes back to it.
+	if current, ok, err := a.matchStore.ActiveMatchForUser(ctx, userID); err == nil && ok && !matchkind.Of(current.Kind).Replaceable {
+		a.tell([]string{userID}, matchStarted{Match: *a.activeMatch(ctx, userID)})
+		return c.NoContent(http.StatusNoContent)
+	}
+	var req queueJoinRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		return plainTextError(c, http.StatusBadRequest, "invalid payload")
 	}
 	profile, err := a.profiles.GetProfile(userID)
 	if err != nil {
 		return plainTextError(c, http.StatusInternalServerError, "profile unavailable")
 	}
-	variants := queue.ParseVariants(c.QueryParam("queues"))
+	if err := a.queue.Join(ctx, userID, queue.ParseVariants(req.Queues), profile.MMR); err != nil {
+		return plainTextError(c, http.StatusBadGateway, "queue unavailable")
+	}
+	a.tell([]string{userID}, queueUpdated{Queued: true, QueuedAt: time.Now().UnixMilli()})
+	return c.NoContent(http.StatusNoContent)
+}
 
-	conn, err := a.live.upgrader.Upgrade(c.Response().Writer, r, nil)
+func (a *api) leaveQueue(c echo.Context) error {
+	r := c.Request()
+	claims, err := a.authenticatedClaims(r)
 	if err != nil {
-		return nil
+		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
 	}
-	defer conn.Close()
-	w := &socketWriter{conn: conn}
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	conn.SetReadLimit(1024)
-	_ = conn.SetReadDeadline(time.Now().Add(queueReadTTL))
-	conn.SetPongHandler(func(string) error {
-		a.touchViewerPresence(context.Background(), userID)
-		return conn.SetReadDeadline(time.Now().Add(queueReadTTL))
-	})
-	go func() {
-		defer cancel()
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
-			}
-		}
-	}()
-	a.touchViewerPresence(context.Background(), userID)
-
-	// A player already in a match that queueing would not replace goes back to it.
-	if current, ok, err := a.matchStore.ActiveMatchForUser(r.Context(), userID); err == nil && ok && !matchkind.Of(current.Kind).Replaceable {
-		w.send("match_found", a.activeMatch(r.Context(), userID))
-		return nil
+	if err := a.queue.Leave(r.Context(), claims.Sub); err != nil {
+		return plainTextError(c, http.StatusBadGateway, "queue unavailable")
 	}
-
-	// Listen before joining, so the match the matchmaker starts is never missed.
-	events, unsubscribe := a.events.Subscribe(pgnotify.LiveTopic(userID))
-	defer unsubscribe()
-	if err := a.queue.Join(r.Context(), userID, variants, profile.MMR); err != nil {
-		w.send("queue_error", map[string]string{"code": "QUEUE_UNAVAILABLE", "message": "queue unavailable"})
-		return nil
-	}
-	matched := false
-	defer func() {
-		if !matched {
-			_ = a.queue.Leave(context.Background(), userID)
-		}
-	}()
-	if !w.send("queue_status", queueStatusEvent{Status: "queued", QueuedAt: time.Now().UnixMilli()}) {
-		return nil
-	}
-
-	// foundMatch reports the player's new match, if the matchmaker started one.
-	foundMatch := func() bool {
-		current := a.activeMatch(context.Background(), userID)
-		if current == nil || current.Kind != matchkind.RankedDuel {
-			return false
-		}
-		matched = true
-		w.send("match_found", current)
-		return true
-	}
-	touch := time.NewTicker(queueTouchEvery)
-	defer touch.Stop()
-	ping := time.NewTicker(queuePingEvery)
-	defer ping.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case message := <-events:
-			if message.Resync {
-				if foundMatch() {
-					return nil
-				}
-				continue
-			}
-			var event liveEvent
-			if json.Unmarshal(message.Data, &event) == nil && event.Type == liveMatchStarted && event.Match != nil && event.Match.Kind == matchkind.RankedDuel {
-				matched = true
-				w.send("match_found", event.Match)
-				return nil
-			}
-		case <-touch.C:
-			if a.draining.Load() {
-				// Another process serves the queue; the client reconnects there and queues again.
-				w.send("queue_reconnect", nil)
-				return nil
-			}
-			queued, err := a.queue.Touch(context.Background(), userID)
-			if err != nil {
-				observability.Log("warn", "queue touch failed", map[string]any{"userId": userID, "error": err.Error()})
-				continue
-			}
-			if !queued {
-				if foundMatch() {
-					return nil
-				}
-				w.send("queue_error", map[string]string{"code": "QUEUE_EXPIRED", "message": "Queue expired. Please re-queue."})
-				return nil
-			}
-		case <-ping.C:
-			if !w.ping() {
-				return nil
-			}
-		}
-	}
+	a.tell([]string{claims.Sub}, queueUpdated{})
+	return c.NoContent(http.StatusNoContent)
 }
 
 // runMatchmaker pairs queued players and starts their matches, in whichever process holds the
@@ -203,9 +96,6 @@ func (a *api) runMatchmaker() {
 	ticker := time.NewTicker(matchmakeEvery)
 	defer ticker.Stop()
 	for range ticker.C {
-		if a.draining.Load() {
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := a.matchmakingPass(ctx); err != nil {
 			observability.Log("warn", "matchmaking pass failed", map[string]any{"error": err.Error()})
@@ -232,6 +122,9 @@ func (a *api) matchmakingPass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Told once everything has committed.
+	started := []startedMatch{}
+	removed := []string{}
 	for _, pair := range queue.Pairings(tickets, time.Now()) {
 		pairTx, err := tx.Begin(ctx)
 		if err != nil {
@@ -245,26 +138,29 @@ func (a *api) matchmakingPass(ctx context.Context) error {
 			}
 			continue
 		}
-		_, err = a.startMatchIn(ctx, pairTx, startRequest{
+		req := startRequest{
 			Kind:   matchkind.RankedDuel,
 			Seats:  []matchkind.Seat{{UserID: pair.Second.UserID}, {UserID: pair.First.UserID}},
 			Config: queue.Config(pair.Variant),
-		})
+		}
+		match, err := a.startMatchIn(ctx, pairTx, req)
 		if err == nil {
 			if err := pairTx.Commit(ctx); err != nil {
 				return err
 			}
+			started = append(started, match)
 			continue
 		}
 		_ = pairTx.Rollback(ctx)
-		// A player who cannot play any more leaves the queue; their socket finds out from its
-		// next touch. The other stays queued in their place.
+		// A player who cannot play any more leaves the queue. The other stays queued in their place.
 		var conflict *matches.ConflictError
 		var admission *admissionError
 		switch {
 		case errors.As(err, &conflict) && conflict.UserID != "":
+			removed = append(removed, conflict.UserID)
 			err = queue.LeaveTx(ctx, tx, conflict.UserID)
 		case errors.As(err, &admission) && admission.UserID != "":
+			removed = append(removed, admission.UserID)
 			err = queue.LeaveTx(ctx, tx, admission.UserID)
 		default:
 			observability.Log("warn", "ranked match start failed", map[string]any{"error": err.Error()})
@@ -274,14 +170,12 @@ func (a *api) matchmakingPass(ctx context.Context) error {
 			return err
 		}
 	}
-	return tx.Commit(ctx)
-}
-
-func (a *api) publishPartyChanged(ctx context.Context, partyID string) {
-	if partyID == "" {
-		return
+	if err := tx.Commit(ctx); err != nil {
+		return err
 	}
-	if err := pgnotify.Publish(ctx, a.db.Pool(), pgnotify.PartyTopic(partyID), pgnotify.PartyChanged); err != nil {
-		observability.Log("warn", "party event publish failed", map[string]any{"partyId": partyID, "error": err.Error()})
+	for _, match := range started {
+		a.tellMatchStarted(ctx, match)
 	}
+	a.tell(removed, queueUpdated{Error: "You can't play right now, so you left the queue."})
+	return nil
 }

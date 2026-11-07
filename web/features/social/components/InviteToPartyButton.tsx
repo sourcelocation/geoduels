@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Button } from "../../../components/ui/button";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { partyInviteCanResend, partyInviteResendInMs } from "../lib/party-invite";
 import { socialClient } from "../lib/social-client";
 import type { PartyInviteStatus } from "../types";
@@ -22,7 +21,6 @@ export function InviteToPartyButton({
   disabled?: boolean;
 }) {
   const queryClient = useQueryClient();
-  const config = useRuntimeConfig();
   const [now, setNow] = useState(() => Date.now());
   const [optimisticCreatedAt, setOptimisticCreatedAt] = useState<string | undefined>();
   const sentAt = partyInvite?.createdAt || optimisticCreatedAt;
@@ -33,7 +31,7 @@ export function InviteToPartyButton({
     return () => window.clearTimeout(timer);
   }, [sentAt]);
   const mutation = useMutation({
-    mutationFn: () => socialClient.inviteToParty(config, accessToken, partyId, userId),
+    mutationFn: () => socialClient.inviteToParty(accessToken, partyId, userId),
     onSuccess: (invitation) => {
       setOptimisticCreatedAt(invitation.createdAt || new Date().toISOString());
       setNow(Date.now());

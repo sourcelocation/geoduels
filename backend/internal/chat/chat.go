@@ -27,12 +27,6 @@ func chatUUIDErr(s string) (pgtype.UUID, error) {
 	return u, nil
 }
 func chatText(s string) pgtype.Text { return pgtype.Text{String: s, Valid: s != ""} }
-func chatStr(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	return v.(string)
-}
 func (s *PGStore) RecordChatMessage(cid, scope, scopeID string, m Message) error {
 	cid, scope, scopeID = strings.TrimSpace(cid), strings.TrimSpace(scope), strings.TrimSpace(scopeID)
 	if cid == "" || scope == "" || scopeID == "" {
@@ -97,7 +91,7 @@ func (s *PGStore) listChatMessages(id, u string, n int, revealTeam bool) ([]Mess
 		if r.TeamID.Valid {
 			teamID = string(r.TeamID.GdTeamID)
 		}
-		out = append(out, Message{SenderTeamID: string(r.SenderTeamID.GdTeamID), ID: r.ID.String(), ConversationID: chatStr(r.ConversationID), MatchID: storekit.UUIDVal(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: Kind(r.Kind), Body: r.Body, Emote: Emote(r.Emote), Audience: Audience(r.Audience), TeamID: teamID, CreatedAt: r.CreatedAt.Time})
+		out = append(out, Message{SenderTeamID: string(r.SenderTeamID.GdTeamID), ID: r.ID.String(), ConversationID: id, MatchID: storekit.UUIDVal(r.MatchID), SenderUserID: r.SenderUserID.String(), SenderDisplayName: r.SenderDisplayName, Kind: Kind(r.Kind), Body: r.Body, Emote: Emote(r.Emote), Audience: Audience(r.Audience), TeamID: teamID, CreatedAt: r.CreatedAt.Time})
 	}
 	return out, nil
 }
@@ -111,8 +105,7 @@ func (s *PGStore) ActivePartyChatTeam(p, u string) (string, string, bool, error)
 	if e != nil {
 		return "", "", false, e
 	}
-	t := chatStr(r.TeamID)
-	return storekit.UUIDVal(r.MatchID), t, t != "", nil
+	return storekit.UUIDVal(r.MatchID), r.TeamID, r.TeamID != "", nil
 }
 func (s *PGStore) ChatTeamForMatch(m, u string) (string, bool, error) {
 	ctx, c := context.WithTimeout(context.Background(), 4*time.Second)
@@ -124,8 +117,7 @@ func (s *PGStore) ChatTeamForMatch(m, u string) (string, bool, error) {
 	if e != nil {
 		return "", false, e
 	}
-	t := chatStr(v)
-	return t, t != "", nil
+	return v, v != "", nil
 }
 func (s *PGStore) GetActiveChatRestriction(u string) (ChatRestriction, bool, error) {
 	if strings.TrimSpace(u) == "" {
@@ -140,5 +132,54 @@ func (s *PGStore) GetActiveChatRestriction(u string) (ChatRestriction, bool, err
 	if e != nil {
 		return ChatRestriction{}, false, e
 	}
-	return ChatRestriction{ActionType: r.ActionType, ReasonCode: r.ReasonCode, ReasonNote: chatStr(r.ReasonNote), EndsAt: r.EndsAt.(pgtype.Timestamptz).Time}, true, nil
+	return ChatRestriction{ActionType: r.ActionType, ReasonCode: r.ReasonCode, ReasonNote: r.ReasonNote, EndsAt: r.EndsAt.Time}, true, nil
+}
+
+// DirectID is the conversation between two people, whichever of them asks.
+func DirectID(a, b string) string {
+	if b < a {
+		a, b = b, a
+	}
+	return "direct:" + a + ":" + b
+}
+
+// ScopeID is what a conversation's row is filed under: a direct conversation has no party or match.
+func ScopeID(conversationID string) string {
+	return entityid.Derive("conversation-scope", conversationID)
+}
+
+// Summary is what a list of conversations shows of one.
+type Summary struct {
+	Unread        int
+	LastMessageAt time.Time
+}
+
+// Summaries says, for each conversation with messages, how much of it the viewer hasn't read.
+func Summaries(ctx context.Context, q db.DBTX, viewerID string, conversationIDs []string) (map[string]Summary, error) {
+	out := make(map[string]Summary, len(conversationIDs))
+	if len(conversationIDs) == 0 {
+		return out, nil
+	}
+	byStored := make(map[string]string, len(conversationIDs))
+	stored := make([]pgtype.UUID, len(conversationIDs))
+	for i, id := range conversationIDs {
+		derived := entityid.Derive("conversation", id)
+		byStored[derived] = id
+		stored[i] = chatUUID(derived)
+	}
+	rows, err := db.New(q).ConversationSummaries(ctx, db.ConversationSummariesParams{ViewerUserID: chatUUID(viewerID), ConversationIds: stored})
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[byStored[storekit.UUIDVal(row.ConversationID)]] = Summary{Unread: int(row.Unread), LastMessageAt: row.LastMessageAt.Time}
+	}
+	return out, nil
+}
+
+// MarkRead records that the person has read the conversation up to now.
+func MarkRead(ctx context.Context, q db.DBTX, userID, conversationID string) error {
+	return db.New(q).MarkConversationRead(ctx, db.MarkConversationReadParams{
+		ConversationID: chatUUID(entityid.Derive("conversation", conversationID)), UserID: chatUUID(userID),
+	})
 }

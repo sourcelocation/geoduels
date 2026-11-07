@@ -1,5 +1,4 @@
 import { apiFetch, readError } from "../../../lib/http";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 import type { ChangelogPost, ChangelogPostInput } from "../../changelog/types";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 
@@ -14,10 +13,9 @@ export type AdminBadgeDefinition = {
 };
 
 export async function requestAdminBootstrap(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/bootstrap`, {
+  const resp = await apiFetch(`/api/staff/bootstrap`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -31,12 +29,10 @@ export async function requestAdminBootstrap(
 }
 
 export async function requestAdminPlayers(
-  config: RuntimeConfig,
   accessToken: string,
   query: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players?query=${encodeURIComponent(query)}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -49,10 +45,9 @@ export async function requestAdminPlayers(
 }
 
 export async function requestAdminBadgeDefinitions(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/badges`, {
+  const resp = await apiFetch(`/api/staff/badges`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -62,11 +57,10 @@ export async function requestAdminBadgeDefinitions(
 }
 
 export async function requestAdminGrantBadge(
-  config: RuntimeConfig,
   accessToken: string,
   payload: { nickname: string; badgeId: string },
 ) {
-  const resp = await apiFetch(config, `/api/staff/badges/grant`, {
+  const resp = await apiFetch(`/api/staff/badges/grant`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -81,12 +75,10 @@ export async function requestAdminGrantBadge(
 }
 
 export async function requestAdminPlayerDetail(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -99,13 +91,11 @@ export async function requestAdminPlayerDetail(
 }
 
 export async function requestAdminBanPlayer(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
   reason: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/ban`,
     {
       method: "POST",
@@ -123,12 +113,10 @@ export async function requestAdminBanPlayer(
 }
 
 export async function requestAdminUnbanPlayer(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/unban`,
     {
       method: "POST",
@@ -140,16 +128,16 @@ export async function requestAdminUnbanPlayer(
   }
 }
 
-export async function requestAdminCommunityPardonPreview(config: RuntimeConfig, accessToken: string) {
-  const resp = await apiFetch(config, `/api/staff/community-pardon`, {
+export async function requestAdminCommunityPardonPreview(accessToken: string) {
+  const resp = await apiFetch(`/api/staff/community-pardon`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) throw new Error(await readError(resp, "Failed to preview community pardon"));
   return resp.json() as Promise<{ eligible: number; pardoned: number; cutoff: string }>;
 }
 
-export async function requestAdminCommunityPardon(config: RuntimeConfig, accessToken: string) {
-  const resp = await apiFetch(config, `/api/staff/community-pardon`, {
+export async function requestAdminCommunityPardon(accessToken: string) {
+  const resp = await apiFetch(`/api/staff/community-pardon`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -162,12 +150,10 @@ export async function requestAdminCommunityPardon(config: RuntimeConfig, accessT
 }
 
 export async function requestAdminClearReporterMute(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/report-mute`,
     {
       method: "DELETE",
@@ -180,12 +166,10 @@ export async function requestAdminClearReporterMute(
 }
 
 export async function requestAdminPromoteModerator(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/roles/judge`,
     {
       method: "POST",
@@ -198,12 +182,10 @@ export async function requestAdminPromoteModerator(
 }
 
 export async function requestAdminDemoteModerator(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/roles/judge`,
     {
       method: "DELETE",
@@ -216,10 +198,9 @@ export async function requestAdminDemoteModerator(
 }
 
 export async function requestAdminRoles(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/roles`, {
+  const resp = await apiFetch(`/api/staff/roles`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -229,11 +210,10 @@ export async function requestAdminRoles(
 }
 
 export async function requestAdminGrantRole(
-  config: RuntimeConfig,
   accessToken: string,
   payload: { userId: string; role: string; reason?: string },
 ) {
-  const resp = await apiFetch(config, `/api/staff/roles`, {
+  const resp = await apiFetch(`/api/staff/roles`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -247,14 +227,12 @@ export async function requestAdminGrantRole(
 }
 
 export async function requestAdminRevokeRole(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
   role: string,
   reason = "",
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/roles/${encodeURIComponent(userId)}/${encodeURIComponent(role)}`,
     {
       method: "DELETE",
@@ -271,10 +249,9 @@ export async function requestAdminRevokeRole(
 }
 
 export async function requestAdminIPSignupBans(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/ip-bans`, {
+  const resp = await apiFetch(`/api/staff/ip-bans`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -284,12 +261,11 @@ export async function requestAdminIPSignupBans(
 }
 
 export async function requestAdminAddIPSignupBan(
-  config: RuntimeConfig,
   accessToken: string,
   ipAddress: string,
   reason: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/ip-bans`, {
+  const resp = await apiFetch(`/api/staff/ip-bans`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -303,12 +279,10 @@ export async function requestAdminAddIPSignupBan(
 }
 
 export async function requestAdminRemoveIPSignupBan(
-  config: RuntimeConfig,
   accessToken: string,
   ipAddress: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/ip-bans/${encodeURIComponent(ipAddress)}`,
     {
       method: "DELETE",
@@ -321,10 +295,9 @@ export async function requestAdminRemoveIPSignupBan(
 }
 
 export async function requestAdminMaintenance(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/maintenance`, {
+  const resp = await apiFetch(`/api/staff/maintenance`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -355,10 +328,9 @@ export type AdminRankedSeasonSettings = {
 };
 
 export async function requestAdminModerationSettings(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/settings/moderation`, {
+  const resp = await apiFetch(`/api/staff/settings/moderation`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -370,11 +342,10 @@ export async function requestAdminModerationSettings(
 }
 
 export async function requestAdminPutModerationSettings(
-  config: RuntimeConfig,
   accessToken: string,
   settings: AdminModerationSettings,
 ) {
-  const resp = await apiFetch(config, `/api/staff/settings/moderation`, {
+  const resp = await apiFetch(`/api/staff/settings/moderation`, {
     method: "PUT",
     headers: {
       "content-type": "application/json",
@@ -391,10 +362,9 @@ export async function requestAdminPutModerationSettings(
 }
 
 export async function requestAdminDiscordIntegrationSettings(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/settings/discord`, {
+  const resp = await apiFetch(`/api/staff/settings/discord`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -404,11 +374,10 @@ export async function requestAdminDiscordIntegrationSettings(
 }
 
 export async function requestAdminPutDiscordIntegrationSettings(
-  config: RuntimeConfig,
   accessToken: string,
   settings: AdminDiscordIntegrationSettings,
 ) {
-  const resp = await apiFetch(config, `/api/staff/settings/discord`, {
+  const resp = await apiFetch(`/api/staff/settings/discord`, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -423,10 +392,9 @@ export async function requestAdminPutDiscordIntegrationSettings(
 }
 
 export async function requestAdminRankedSeason(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/seasons`, {
+  const resp = await apiFetch(`/api/staff/seasons`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -436,11 +404,10 @@ export async function requestAdminRankedSeason(
 }
 
 export async function requestAdminSetRankedSeasonResetRule(
-  config: RuntimeConfig,
   accessToken: string,
   monthlyResetDay: number,
 ) {
-  const resp = await apiFetch(config, `/api/staff/seasons/reset-rule`, {
+  const resp = await apiFetch(`/api/staff/seasons/reset-rule`, {
     method: "PUT",
     headers: {
       "content-type": "application/json",
@@ -455,11 +422,10 @@ export async function requestAdminSetRankedSeasonResetRule(
 }
 
 export async function requestAdminPutMaintenance(
-  config: RuntimeConfig,
   accessToken: string,
   status: MaintenanceStatus,
 ) {
-  const resp = await apiFetch(config, `/api/staff/maintenance`, {
+  const resp = await apiFetch(`/api/staff/maintenance`, {
     method: "PUT",
     headers: {
       "content-type": "application/json",
@@ -474,10 +440,9 @@ export async function requestAdminPutMaintenance(
 }
 
 export async function requestAdminClearMaintenance(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/maintenance`, {
+  const resp = await apiFetch(`/api/staff/maintenance`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -487,10 +452,9 @@ export async function requestAdminClearMaintenance(
 }
 
 export async function requestAdminGetChangelog(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/changelog`, {
+  const resp = await apiFetch(`/api/staff/changelog`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -500,11 +464,10 @@ export async function requestAdminGetChangelog(
 }
 
 export async function requestAdminCreateChangelogPost(
-  config: RuntimeConfig,
   accessToken: string,
   content: ChangelogPostInput,
 ) {
-  const resp = await apiFetch(config, `/api/staff/changelog`, {
+  const resp = await apiFetch(`/api/staff/changelog`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -519,12 +482,11 @@ export async function requestAdminCreateChangelogPost(
 }
 
 export async function requestAdminUpdateChangelogPost(
-  config: RuntimeConfig,
   accessToken: string,
   id: number,
   content: ChangelogPostInput,
 ) {
-  const resp = await apiFetch(config, `/api/staff/changelog/${encodeURIComponent(String(id))}`, {
+  const resp = await apiFetch(`/api/staff/changelog/${encodeURIComponent(String(id))}`, {
     method: "PUT",
     headers: {
       "content-type": "application/json",
@@ -539,7 +501,6 @@ export async function requestAdminUpdateChangelogPost(
 }
 
 export async function requestAdminUploadCurrentMap(
-  config: RuntimeConfig,
   accessToken: string,
   file: File,
   mapKey = "a-source-world",
@@ -547,7 +508,6 @@ export async function requestAdminUploadCurrentMap(
   const body = new FormData();
   body.append("file", file);
   const resp = await apiFetch(
-    config,
     `/api/staff/maps/${encodeURIComponent(mapKey)}/upload`,
     {
       method: "POST",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"geoduels/internal/jobs"
 	"strings"
 	"time"
 
@@ -215,8 +216,19 @@ func (s *PGStore) EndMatch(ctx context.Context, matchID, outcome string) (bool, 
 // node is gone, in the caller's transaction. Nothing waits on it: a new match already frees its
 // players' seats in such matches, and a party reads them as over from their status; it only lets
 // the rows be cleaned up.
-func EndInterruptedMatchesTx(ctx context.Context, tx pgx.Tx) (int64, error) {
-	return db.New(tx).EndInterruptedMatches(ctx)
+func EndInterruptedMatchesTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller) (int64, error) {
+	parties, err := db.New(tx).EndInterruptedMatches(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, party := range parties {
+		if party.Valid {
+			if err := teller.EnqueuePartyChanged(ctx, tx, storekit.UUIDVal(party)); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return int64(len(parties)), nil
 }
 
 // Node is a gameplay node process: its id, the fencing token of its lease, and where it serves.

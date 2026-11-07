@@ -21,16 +21,16 @@ type Store interface {
 	SendAllowed(ctx context.Context, userID, targetID string) (bool, error)
 	CrossedRequest(ctx context.Context, senderID, recipientID string) (string, bool, error)
 	InsertFriendRequest(ctx context.Context, senderID, recipientID string, expiresAt time.Time) (FriendRequest, error)
+	FriendRequestOther(ctx context.Context, userID, requestID string) (string, error)
 	FriendRequestSender(ctx context.Context, requestID, recipientID string) (string, error)
 	AcceptFriendRequest(ctx context.Context, requestID, recipientID string) error
 	DeclineFriendRequest(ctx context.Context, requestID, recipientID string) error
 	CancelFriendRequest(ctx context.Context, requestID, senderID string) error
-	MarkFriendRequestNotificationRead(ctx context.Context, requestID string) error
 	RemoveFriend(ctx context.Context, userID, targetID string) error
 	AddUserBlock(ctx context.Context, userID, targetID string) error
 	RemoveUserBlock(ctx context.Context, userID, targetID string) error
 	CancelPairFriendRequests(ctx context.Context, userID, targetID string) error
-	NotifyUser(ctx context.Context, userID, notificationType, dedupeKey string, payload map[string]any, actorID string) error
+	TellFriendshipAccepted(ctx context.Context, senderID, requestID, recipientID string) error
 	RevokeFriendCodes(ctx context.Context, userID string) error
 	InsertFriendCode(ctx context.Context, userID, code string, expiresAt time.Time) error
 	ResolveFriendCode(ctx context.Context, userID, code string) (CompactPlayer, error)
@@ -40,5 +40,4 @@ type Store interface {
 	ListPartyInvitations(ctx context.Context, userID string, limit int) ([]PartyInvitation, error)
 	ListPartyInviteStatus(ctx context.Context, inviterID, partyID string) (map[string]CompactPartyInvite, error)
 	RespondPartyInvitation(ctx context.Context, userID, invitationID, response string) (PartyInvitation, error)
-	MarkPartyInvitationNotificationRead(ctx context.Context, userID, invitationID string) error
 }

@@ -1,5 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   archiveMap,
   createMapComment,
@@ -68,8 +67,15 @@ function updateMapDetailsComment(details: MapDetails | undefined, commentId: str
   return details ? { ...details, comments: updateComment(details.comments, commentId, update) } : details;
 }
 
+export function mapListKey(scope: MapScope, sort: MapSort, search: string, userId: string) {
+  return ["maps", scope, sort, search, userId || "anonymous"];
+}
+
+export function mapDetailsKey(mapId: string, userId: string) {
+  return ["map-details", mapId, userId || "anonymous"];
+}
+
 export function useMapList(
-  config: RuntimeConfig,
   accessToken: string | undefined,
   userId: string,
   scope: MapScope,
@@ -80,36 +86,38 @@ export function useMapList(
   const trimmedSearch = search.trim();
   const enabled = options.enabled ?? true;
   return useQuery({
-    queryKey: ["maps", scope, sort, trimmedSearch, userId || "anonymous"],
-    queryFn: () => listMaps(config, accessToken, { scope, sort: scope === "community" ? sort : undefined, search: trimmedSearch }),
+    queryKey: mapListKey(scope, sort, trimmedSearch, userId),
+    queryFn: () => listMaps(accessToken, { scope, sort: scope === "community" ? sort : undefined, search: trimmedSearch }),
     enabled: enabled && (scope === "official" || scope === "community" || !!accessToken),
     staleTime: 60_000,
   });
 }
 
-export function useMapDetails(config: RuntimeConfig, accessToken: string | undefined, mapId: string, userId = "") {
+export function useMapDetails(accessToken: string | undefined, mapId: string, userId = "") {
   return useQuery({
-    queryKey: ["map-details", mapId, userId || "anonymous"],
-    queryFn: () => getMap(config, accessToken, mapId),
+    queryKey: mapDetailsKey(mapId, userId),
+    queryFn: () => getMap(accessToken, mapId),
     enabled: !!mapId,
     staleTime: 60_000,
+    // The cached page's data stays up while the signed-in player's own loads.
+    placeholderData: keepPreviousData,
   });
 }
 
-export function useMapUploadQuota(config: RuntimeConfig, accessToken: string | undefined, enabled = true) {
+export function useMapUploadQuota(accessToken: string | undefined, enabled = true) {
   return useQuery({
     queryKey: ["map-upload-quota", accessToken ? "authenticated" : "anonymous"],
-    queryFn: () => getMapUploadQuota(config, accessToken || ""),
+    queryFn: () => getMapUploadQuota(accessToken || ""),
     enabled: enabled && !!accessToken,
     staleTime: 30_000,
   });
 }
 
-export function useFavoriteMap(config: RuntimeConfig, accessToken: string | undefined) {
+export function useFavoriteMap(accessToken: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ mapId, favorite }: { mapId: string; favorite: boolean }) =>
-      setMapFavorite(config, accessToken || "", mapId, favorite),
+      setMapFavorite(accessToken || "", mapId, favorite),
     onSuccess: (_item, vars) => {
       void queryClient.invalidateQueries({ queryKey: ["maps"] });
       void queryClient.invalidateQueries({ queryKey: ["map-details", vars.mapId] });
@@ -117,12 +125,12 @@ export function useFavoriteMap(config: RuntimeConfig, accessToken: string | unde
   });
 }
 
-export function useMapComments(config: RuntimeConfig, accessToken: string | undefined, mapId: string) {
+export function useMapComments(accessToken: string | undefined, mapId: string) {
   const queryClient = useQueryClient();
   return {
     createComment: useMutation({
       mutationFn: (input: { body: string; parentId?: string }) =>
-        createMapComment(config, accessToken || "", mapId, input),
+        createMapComment(accessToken || "", mapId, input),
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: ["map-details", mapId] });
         void queryClient.invalidateQueries({ queryKey: ["maps"] });
@@ -130,7 +138,7 @@ export function useMapComments(config: RuntimeConfig, accessToken: string | unde
     }),
     deleteComment: useMutation({
       mutationFn: ({ commentId }: { commentId: string }) =>
-        deleteMapComment(config, accessToken || "", mapId, commentId),
+        deleteMapComment(accessToken || "", mapId, commentId),
       onSuccess: (_item, vars) => {
         queryClient.setQueriesData<MapDetails>(
           { queryKey: ["map-details", mapId] },
@@ -142,7 +150,7 @@ export function useMapComments(config: RuntimeConfig, accessToken: string | unde
     }),
     likeComment: useMutation({
       mutationFn: ({ commentId, liked }: { commentId: string; liked: boolean }) =>
-        setMapCommentLike(config, accessToken || "", mapId, commentId, liked),
+        setMapCommentLike(accessToken || "", mapId, commentId, liked),
       onMutate: async ({ commentId, liked }) => {
         await queryClient.cancelQueries({ queryKey: ["map-details", mapId] });
         const previous = queryClient.getQueriesData<MapDetails>({ queryKey: ["map-details", mapId] });
@@ -170,20 +178,20 @@ export function useMapComments(config: RuntimeConfig, accessToken: string | unde
   };
 }
 
-export function useMapManagement(config: RuntimeConfig, accessToken: string | undefined, onUploadError: (message: string) => void, maxMapLocations = 1_000_000) {
+export function useMapManagement(accessToken: string | undefined, onUploadError: (message: string) => void, maxMapLocations = 1_000_000) {
   const queryClient = useQueryClient();
   return {
     archiveMap: useMutation({
-      mutationFn: (mapId: string) => archiveMap(config, accessToken || "", mapId),
+      mutationFn: (mapId: string) => archiveMap(accessToken || "", mapId),
       onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["maps"] }),
     }),
     publishMap: useMutation({
-      mutationFn: (mapId: string) => publishMap(config, accessToken || "", mapId),
+      mutationFn: (mapId: string) => publishMap(accessToken || "", mapId),
       onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["maps"] }),
     }),
     updateMap: useMutation({
       mutationFn: ({ mapId, input }: { mapId: string; input: MapUpdateInput }) =>
-        updateMap(config, accessToken || "", mapId, input),
+        updateMap(accessToken || "", mapId, input),
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: ["maps"] });
         void queryClient.invalidateQueries({ queryKey: ["map-details"] });
@@ -191,7 +199,7 @@ export function useMapManagement(config: RuntimeConfig, accessToken: string | un
     }),
     setOfficial: useMutation({
       mutationFn: ({ mapId, official }: { mapId: string; official: boolean }) =>
-        setMapOfficial(config, accessToken || "", mapId, official),
+        setMapOfficial(accessToken || "", mapId, official),
       onSuccess: (_item, vars) => {
         void queryClient.invalidateQueries({ queryKey: ["maps"] });
         void queryClient.invalidateQueries({ queryKey: ["map-details", vars.mapId] });
@@ -199,7 +207,7 @@ export function useMapManagement(config: RuntimeConfig, accessToken: string | un
     }),
     setRole: useMutation({
       mutationFn: ({ mapId, role }: { mapId: string; role: GameplayMapRole }) =>
-        setGameplayMapRole(config, accessToken || "", mapId, role),
+        setGameplayMapRole(accessToken || "", mapId, role),
       onSuccess: (_item, vars) => {
         void queryClient.invalidateQueries({ queryKey: ["maps"] });
         void queryClient.invalidateQueries({ queryKey: ["map-details", vars.mapId] });
@@ -208,7 +216,7 @@ export function useMapManagement(config: RuntimeConfig, accessToken: string | un
     replaceLocations: useMutation({
       mutationFn: async ({ mapId, file }: { mapId: string; file: File }) => {
         await validateMapFile(file, maxMapLocations);
-        return replaceMapLocations(config, accessToken || "", mapId, file);
+        return replaceMapLocations(accessToken || "", mapId, file);
       },
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: ["maps"] });

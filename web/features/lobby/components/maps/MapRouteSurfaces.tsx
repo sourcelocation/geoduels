@@ -2,7 +2,6 @@ import { forwardRef, useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import Router from "next/router";
-import { useRuntimeConfig } from "../../../../lib/runtime-config-context";
 import type { MatchConfig } from "../../../matchmaking/lib/queue-client";
 import {
   createMap,
@@ -126,7 +125,6 @@ export const MapRouteSurface = forwardRef<HTMLDivElement, MapRouteSurfaceProps>(
   userEmail,
   userId,
 }: MapRouteSurfaceProps, ref) {
-  const runtimeConfig = useRuntimeConfig();
   const queryClient = useQueryClient();
   const { show } = useAppNotice();
   const noticeError = (fallback: string) => (error: unknown) => {
@@ -159,7 +157,6 @@ export const MapRouteSurface = forwardRef<HTMLDivElement, MapRouteSurfaceProps>(
   }, [contentRoute, setMapScope]);
 
   const mapsQuery = useMapList(
-    runtimeConfig,
     accessToken,
     userId,
     browser.mapScope,
@@ -167,18 +164,18 @@ export const MapRouteSurface = forwardRef<HTMLDivElement, MapRouteSurfaceProps>(
     browser.debouncedMapSearch,
     { enabled: contentRoute === "maps" },
   );
-  const selectedMapQuery = useMapDetails(runtimeConfig, accessToken, contentRoute === "map-details" ? mapId : "", userId);
-  const mapQuotaQuery = useMapUploadQuota(runtimeConfig, accessToken, canUploadCustomMaps);
-  const favoriteMapMutation = useFavoriteMap(runtimeConfig, accessToken);
-  const mapComments = useMapComments(runtimeConfig, accessToken, contentRoute === "map-details" ? mapId : "");
-  const mapManagement = useMapManagement(runtimeConfig, accessToken, setMapUploadError, mapQuotaQuery.data?.maxMapLocations);
+  const selectedMapQuery = useMapDetails(accessToken, contentRoute === "map-details" ? mapId : "", userId);
+  const mapQuotaQuery = useMapUploadQuota(accessToken, canUploadCustomMaps);
+  const favoriteMapMutation = useFavoriteMap(accessToken);
+  const mapComments = useMapComments(accessToken, contentRoute === "map-details" ? mapId : "");
+  const mapManagement = useMapManagement(accessToken, setMapUploadError, mapQuotaQuery.data?.maxMapLocations);
   const createMapMutation = useMutation({
     mutationFn: async () => {
       if (!accessToken) throw new Error("Sign in to upload maps");
       if (!canUploadCustomMaps) throw new Error("Upgrade your guest profile to upload custom maps");
       if (!mapFile) throw new Error("Choose a JSON map file");
       await validateMapFile(mapFile, mapQuotaQuery.data?.maxMapLocations);
-      return createMap(runtimeConfig, accessToken, {
+      return createMap(accessToken, {
         file: mapFile,
         displayName: mapName,
         description: mapDescription,
@@ -411,10 +408,8 @@ export function MapPickerController({
   savePartyConfig,
   userId,
 }: MapPickerControllerProps) {
-  const runtimeConfig = useRuntimeConfig();
   const browser = useMapBrowserState();
   const mapsQuery = useMapList(
-    runtimeConfig,
     accessToken,
     userId,
     browser.mapScope,

@@ -1,7 +1,6 @@
 import { Gamepad2, HeartPulse, MapPinned, Swords } from "lucide-react";
 import Head from "next/head";
 import { AppContentRail } from "../app-shell/components/AppContentRail";
-import { AppShell } from "../app-shell/components/AppShell";
 import { ButtonLink } from "../../components/ui/button";
 import { AppPanel, SectionCard } from "../../components/ui/compositions";
 import { BodyText, Eyebrow, SectionTitle } from "../../components/ui/typography";
@@ -31,7 +30,7 @@ const sections = [
 
 export function HelpPage() {
   return (
-    <AppShell activeNavRoute={null} navigationHidden>
+    <>
       <Head>
         <title>How to play | GeoDuels</title>
         <meta
@@ -82,6 +81,6 @@ export function HelpPage() {
           </ButtonLink>
         </AppPanel>
       </AppContentRail>
-    </AppShell>
+    </>
   );
 }

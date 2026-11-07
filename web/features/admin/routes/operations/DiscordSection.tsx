@@ -23,7 +23,7 @@ export function DiscordSection(props: OperationsSectionProps) {
   const discordSettingsQuery = useQuery({
     queryKey: ["admin-discord-integration-settings", props.accessToken],
     enabled: props.canManageAdmin && !!props.accessToken,
-    queryFn: () => requestAdminDiscordIntegrationSettings(props.config, props.accessToken),
+    queryFn: () => requestAdminDiscordIntegrationSettings(props.accessToken),
   });
 
   useEffect(() => {
@@ -34,7 +34,6 @@ export function DiscordSection(props: OperationsSectionProps) {
   const saveDiscordSettings = useMutation({
     mutationFn: () =>
       requestAdminPutDiscordIntegrationSettings(
-        props.config,
         props.accessToken,
         discordSettings,
       ),

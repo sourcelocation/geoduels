@@ -1,13 +1,10 @@
 import { apiFetch, readError } from "../../../lib/http";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
 
 export async function requestModeratorSubject(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/review`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -18,13 +15,11 @@ export async function requestModeratorSubject(
 }
 
 export async function requestModeratorCheatingBan(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
   reason: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/ban`,
     {
       method: "POST",
@@ -42,13 +37,11 @@ export async function requestModeratorCheatingBan(
 }
 
 export async function requestModeratorSubjectUnban(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
   reason: string,
 ) {
   const resp = await apiFetch(
-    config,
     `/api/staff/players/${encodeURIComponent(userId)}/unban`,
     {
       method: "POST",
@@ -65,14 +58,13 @@ export async function requestModeratorSubjectUnban(
 }
 
 export async function requestModeratorSubjectMute(
-  config: RuntimeConfig,
   accessToken: string,
   userId: string,
   kind: "chat" | "report",
   reason: string,
   muted: boolean,
 ) {
-  const resp = await apiFetch(config, `/api/staff/players/${encodeURIComponent(userId)}/mutes/${kind}`, {
+  const resp = await apiFetch(`/api/staff/players/${encodeURIComponent(userId)}/mutes/${kind}`, {
     method: muted ? "POST" : "DELETE",
     headers: {
       "content-type": "application/json",
@@ -84,10 +76,9 @@ export async function requestModeratorSubjectMute(
 }
 
 export async function requestModeratorSignals(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/reports`, {
+  const resp = await apiFetch(`/api/staff/reports`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -97,10 +88,9 @@ export async function requestModeratorSignals(
 }
 
 export async function requestModeratorLog(
-  config: RuntimeConfig,
   accessToken: string,
 ) {
-  const resp = await apiFetch(config, `/api/staff/audit`, {
+  const resp = await apiFetch(`/api/staff/audit`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {

@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../../../components/ui/button";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { socialClient } from "../lib/social-client";
 import type { CompactPlayer, RelationshipState } from "../types";
 
@@ -16,13 +15,12 @@ export function RelationshipActions({
   requestId?: string;
 }) {
   const queryClient = useQueryClient();
-  const config = useRuntimeConfig();
   const mutation = useMutation({
     mutationFn: async (action: string) => {
-      if (action === "add") return socialClient.sendRequest(config, accessToken, player.userId);
+      if (action === "add") return socialClient.sendRequest(accessToken, player.userId);
       if (action === "accept" || action === "decline" || action === "cancel") {
         if (!requestId) throw new Error("Request is no longer available");
-        return socialClient.respondRequest(config, accessToken, requestId, action);
+        return socialClient.respondRequest(accessToken, requestId, action);
       }
     },
     onSuccess: () => {

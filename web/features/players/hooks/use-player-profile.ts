@@ -1,5 +1,4 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useRuntimeConfig } from "../../../lib/runtime-config-context";
 import { requestPlayerMatches, requestPlayerProfile } from "../lib/player-client";
 import type { PublicPlayerProfile } from "../types";
 
@@ -8,11 +7,10 @@ export function usePlayerProfile(
   initialProfile?: PublicPlayerProfile,
   matchFilter: "all" | "ranked" = "all",
 ) {
-  const config = useRuntimeConfig();
   const profileQuery = useQuery({
     queryKey: ["player-profile", playerId],
     enabled: !!playerId,
-    queryFn: () => requestPlayerProfile(config, playerId),
+    queryFn: () => requestPlayerProfile(playerId),
     initialData: initialProfile,
     refetchOnMount: false,
     staleTime: 60_000,
@@ -22,7 +20,7 @@ export function usePlayerProfile(
     enabled: !!playerId,
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
-      requestPlayerMatches(config, playerId, 20, pageParam, matchFilter),
+      requestPlayerMatches(playerId, 20, pageParam, matchFilter),
     getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
     refetchOnMount: false,
     staleTime: 30_000,

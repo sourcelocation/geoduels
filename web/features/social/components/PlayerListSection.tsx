@@ -3,7 +3,7 @@ import { AsyncState, InsetList, SectionHeader } from "../../../components/ui/pat
 import type { CompactPlayer } from "../types";
 import { CompactPlayerRow } from "./CompactPlayerRow";
 
-export function PlayerListSection({
+export function PlayerListSection<P extends CompactPlayer>({
   title,
   players,
   loading,
@@ -11,10 +11,10 @@ export function PlayerListSection({
   renderActions,
 }: {
   title: string;
-  players: CompactPlayer[];
+  players: P[];
   loading?: boolean;
   empty?: string;
-  renderActions?: (player: CompactPlayer) => ReactNode;
+  renderActions?: (player: P) => ReactNode;
 }) {
   return (
     <section className="mt-5">

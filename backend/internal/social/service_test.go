@@ -10,25 +10,23 @@ import (
 
 type memoryStore struct {
 	Store
-	account                         SocialAccount
-	allowed                         bool
-	friendCount                     int
-	crossedID                       string
-	requests                        []FriendRequest
-	accepted                        []string
-	notified                        []string
-	blocked, friends, pending       bool
-	removeErr, notifyErr, commitErr error
-	invitation                      PartyInvitation
-	invitationExists                bool
-	invitationWrites                int
+	account                   SocialAccount
+	allowed                   bool
+	friendCount               int
+	crossedID                 string
+	requests                  []FriendRequest
+	accepted                  []string
+	blocked, friends, pending bool
+	removeErr, commitErr      error
+	invitation                PartyInvitation
+	invitationExists          bool
+	invitationWrites          int
 }
 
 func (m *memoryStore) WithinTx(_ context.Context, fn func(Store) error) error {
 	tx := *m
 	tx.requests = slices.Clone(m.requests)
 	tx.accepted = slices.Clone(m.accepted)
-	tx.notified = slices.Clone(m.notified)
 	if err := fn(&tx); err != nil {
 		return err
 	}
@@ -58,11 +56,7 @@ func (m *memoryStore) InsertFriendRequest(_ context.Context, _, _ string, expire
 	m.requests = append(m.requests, request)
 	return request, nil
 }
-func (m *memoryStore) NotifyUser(_ context.Context, _, kind, _ string, _ map[string]any, _ string) error {
-	if m.notifyErr != nil {
-		return m.notifyErr
-	}
-	m.notified = append(m.notified, kind)
+func (m *memoryStore) TellFriendshipAccepted(context.Context, string, string, string) error {
 	return nil
 }
 func (m *memoryStore) AddUserBlock(context.Context, string, string) error {
@@ -124,12 +118,12 @@ func TestFriendRequestEligibilityAndExpiry(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.want, err)
 			}
 			if tc.want != nil {
-				if len(store.requests) != 0 || len(store.notified) != 0 {
+				if len(store.requests) != 0 {
 					t.Fatal("rejected request persisted")
 				}
 				return
 			}
-			if !request.ExpiresAt.Equal(now.Add(FriendRequestTTL)) || len(store.requests) != 1 || len(store.notified) != 1 {
+			if !request.ExpiresAt.Equal(now.Add(FriendRequestTTL)) || len(store.requests) != 1 {
 				t.Fatalf("incomplete request: %+v", request)
 			}
 		})
@@ -167,15 +161,6 @@ func TestBlockCascadeAndFailureAtomicity(t *testing.T) {
 	}
 }
 
-func TestNotificationFailureRollsBackFriendRequest(t *testing.T) {
-	store := socialStore()
-	store.notifyErr = errors.New("notification failed")
-	request, err := NewService(store).SendFriendRequest(context.Background(), "a", "b")
-	if !errors.Is(err, store.notifyErr) || request.ID != "" || len(store.requests) != 0 {
-		t.Fatalf("request=%+v err=%v", request, err)
-	}
-}
-
 func TestInvitationResendWindow(t *testing.T) {
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	store := socialStore()
@@ -193,7 +178,7 @@ func TestInvitationResendWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !repeat.CreatedAt.Equal(first.CreatedAt) || store.invitationWrites != 1 || len(store.notified) != 1 {
+	if !repeat.CreatedAt.Equal(first.CreatedAt) || store.invitationWrites != 1 {
 		t.Fatal("resend inside cooldown created a new invitation")
 	}
 	now = now.Add(time.Nanosecond)

@@ -13,6 +13,8 @@ import (
 
 	"geoduels/internal/accounts"
 	"geoduels/internal/audit"
+	"geoduels/internal/inbox"
+	"geoduels/internal/jobs"
 	"geoduels/internal/storekit"
 	"geoduels/pkg/entityid"
 	db "geoduels/pkg/persistence/sqlc/db"
@@ -213,15 +215,15 @@ func FromParts(code, level, extra int16, owned bool) Badge {
 	return badge
 }
 
-func notifyBadgeUnlock(ctx context.Context, tx pgx.Tx, userID string, badge Badge) (bool, error) {
-	key := "badge_unlocked:" + userID + ":" + badge.ID + ":" + strconv.Itoa(badge.Level)
-	if _, err := storekit.UpsertUserNotificationTx(ctx, tx, userID, "badge_unlocked", key, map[string]any{"badge": badge}, "", time.Time{}); err != nil {
+func notifyBadgeUnlock(ctx context.Context, tx pgx.Tx, teller jobs.Teller, userID string, badge Badge) (bool, error) {
+	message := inbox.BadgeUnlocked(userID, badge.ID, badge.Level, badge.Label, badge.Description, badge.ImageURL)
+	if _, err := inbox.SendTx(ctx, tx, teller, userID, message); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func upsertBadgeTx(ctx context.Context, tx pgx.Tx, userID string, code, level, extra int16, notify bool) (bool, error) {
+func upsertBadgeTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller, userID string, code, level, extra int16, notify bool) (bool, error) {
 	def, ok := badgeDefinitionByCode(code)
 	if !ok || code == 0 {
 		return false, errors.New("badge unavailable")
@@ -239,7 +241,7 @@ func upsertBadgeTx(ctx context.Context, tx pgx.Tx, userID string, code, level, e
 			return false, err
 		}
 		if notify {
-			return notifyBadgeUnlock(ctx, tx, userID, FromParts(code, level, extra, true))
+			return notifyBadgeUnlock(ctx, tx, teller, userID, FromParts(code, level, extra, true))
 		}
 		return true, nil
 	}
@@ -260,17 +262,17 @@ func upsertBadgeTx(ctx context.Context, tx pgx.Tx, userID string, code, level, e
 		return false, err
 	}
 	if notify && level > oldLevel {
-		return notifyBadgeUnlock(ctx, tx, userID, FromParts(code, level, extra, true))
+		return notifyBadgeUnlock(ctx, tx, teller, userID, FromParts(code, level, extra, true))
 	}
 	return true, nil
 }
 
-func AwardBadgeTx(ctx context.Context, tx pgx.Tx, userID, badgeID string) (bool, error) {
+func AwardBadgeTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller, userID, badgeID string) (bool, error) {
 	code, ok := RefFromID(badgeID)
 	if !ok || code == 0 || code == badgeCodeLegacyTopFinish || code == badgeCodeTopFinish {
 		return false, errors.New("badge unavailable")
 	}
-	return upsertBadgeTx(ctx, tx, userID, code, 1, 0, true)
+	return upsertBadgeTx(ctx, tx, teller, userID, code, 1, 0, true)
 }
 
 func (s *PGStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (Badge, bool, error) {
@@ -280,7 +282,7 @@ func (s *PGStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (Badge
 	var changed bool
 	err := storekit.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		badge, changed, err = GrantBadgeToUserTx(ctx, tx, nickname, badgeID, actorUserID)
+		badge, changed, err = GrantBadgeToUserTx(ctx, tx, s.jobs, nickname, badgeID, actorUserID)
 		return err
 	})
 	if err != nil {
@@ -290,7 +292,7 @@ func (s *PGStore) GrantBadgeToUser(nickname, badgeID, actorUserID string) (Badge
 }
 
 // GrantBadgeToUserTx writes the badge, notification and audit in the caller's transaction.
-func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, nickname, badgeID, actorUserID string) (Badge, bool, error) {
+func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller, nickname, badgeID, actorUserID string) (Badge, bool, error) {
 	nickname = strings.TrimSpace(nickname)
 	actorUserID = strings.TrimSpace(actorUserID)
 	def, ok := badgeDefinitionByID(badgeID)
@@ -308,7 +310,7 @@ func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, nickname, badgeID, actor
 		return Badge{}, false, ErrBadgeUserNotFound
 	}
 	userID := storekit.UUIDVal(userUUID)
-	changed, err := upsertBadgeTx(ctx, tx, userID, def.Code, 1, 0, true)
+	changed, err := upsertBadgeTx(ctx, tx, teller, userID, def.Code, 1, 0, true)
 	if err != nil {
 		return Badge{}, false, err
 	}
@@ -324,18 +326,18 @@ func GrantBadgeToUserTx(ctx context.Context, tx pgx.Tx, nickname, badgeID, actor
 	return FromParts(def.Code, level, extra, true), changed, nil
 }
 
-func AwardTopFinishTx(ctx context.Context, tx pgx.Tx, userID string) (bool, error) {
+func AwardTopFinishTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller, userID string) (bool, error) {
 	var count int16
 	value, err := db.New(tx).LockTopFinish(ctx, db.LockTopFinishParams{UserID: chatUUID(userID), BadgeCode: badgeCodeTopFinish})
 	count = int16(value)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return upsertBadgeTx(ctx, tx, userID, badgeCodeTopFinish, 1, 1, true)
+		return upsertBadgeTx(ctx, tx, teller, userID, badgeCodeTopFinish, 1, 1, true)
 	}
 	if err != nil {
 		return false, err
 	}
 	level := topFinishLevel(count)
-	return upsertBadgeTx(ctx, tx, userID, badgeCodeTopFinish, level, count, true)
+	return upsertBadgeTx(ctx, tx, teller, userID, badgeCodeTopFinish, level, count, true)
 }
 
 func topFinishLevel(count int16) int16 {
@@ -386,12 +388,12 @@ func (s *PGStore) SyncLoginBadges(userID string) error {
 	hasTeamRole = info.IsStaff
 	mmr = int(info.Mmr)
 	if hasTeamRole {
-		if _, err := AwardBadgeTx(ctx, tx, userID, "geoduels-team"); err != nil {
+		if _, err := AwardBadgeTx(ctx, tx, s.jobs, userID, "geoduels-team"); err != nil {
 			return err
 		}
 	}
 	if !isGuest {
-		if err := AwardEloBadgesTx(ctx, tx, userID, mmr); err != nil {
+		if err := AwardEloBadgesTx(ctx, tx, s.jobs, userID, mmr); err != nil {
 			return err
 		}
 	}
@@ -403,7 +405,7 @@ func (s *PGStore) SyncLoginBadges(userID string) error {
 	return tx.Commit(ctx)
 }
 
-func AwardEloBadgesTx(ctx context.Context, tx pgx.Tx, userID string, mmr int) error {
+func AwardEloBadgesTx(ctx context.Context, tx pgx.Tx, teller jobs.Teller, userID string, mmr int) error {
 	thresholds := []struct {
 		mmr     int
 		badgeID string
@@ -414,7 +416,7 @@ func AwardEloBadgesTx(ctx context.Context, tx pgx.Tx, userID string, mmr int) er
 	}
 	for _, threshold := range thresholds {
 		if mmr >= threshold.mmr {
-			if _, err := AwardBadgeTx(ctx, tx, userID, threshold.badgeID); err != nil {
+			if _, err := AwardBadgeTx(ctx, tx, teller, userID, threshold.badgeID); err != nil {
 				return err
 			}
 		}
@@ -441,7 +443,7 @@ func (s *PGStore) AwardDiscordServerMemberByDiscordID(discordUserID string) (boo
 		}
 		return false, err
 	}
-	awarded, err := AwardBadgeTx(ctx, tx, storekit.UUIDVal(userID), "discord-server-member")
+	awarded, err := AwardBadgeTx(ctx, tx, s.jobs, storekit.UUIDVal(userID), "discord-server-member")
 	if err != nil {
 		return false, err
 	}
@@ -500,7 +502,7 @@ func (s *PGStore) AwardSupporterByDonationRef(ref string) (bool, error) {
 		}
 		return false, err
 	}
-	awarded, err := AwardBadgeTx(ctx, tx, storekit.UUIDVal(userID), "supporter")
+	awarded, err := AwardBadgeTx(ctx, tx, s.jobs, storekit.UUIDVal(userID), "supporter")
 	if err != nil {
 		return false, err
 	}

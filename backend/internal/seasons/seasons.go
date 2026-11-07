@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"geoduels/internal/badges"
+	"geoduels/internal/jobs"
 	"geoduels/internal/storekit"
 	"regexp"
 	"strconv"
@@ -95,7 +96,7 @@ func (s *PGStore) RunDueRankedSeasonReset(now time.Time) (RankedSeasonResetResul
 	if err != nil {
 		return RankedSeasonResetResult{}, false, err
 	}
-	seeded, err := advanceRankedSeasonTx(ctx, db.New(tx), tx, settings.ActiveSeasonID, nextSeasonID)
+	seeded, err := advanceRankedSeasonTx(ctx, db.New(tx), tx, s.teller, settings.ActiveSeasonID, nextSeasonID)
 	if err != nil {
 		return RankedSeasonResetResult{}, false, err
 	}
@@ -116,7 +117,7 @@ func (s *PGStore) RunDueRankedSeasonReset(now time.Time) (RankedSeasonResetResul
 	}, true, nil
 }
 
-func advanceRankedSeasonTx(ctx context.Context, q *db.Queries, tx pgx.Tx, previousSeasonID, nextSeasonID string) (int, error) {
+func advanceRankedSeasonTx(ctx context.Context, q *db.Queries, tx pgx.Tx, teller jobs.Teller, previousSeasonID, nextSeasonID string) (int, error) {
 	if strings.TrimSpace(previousSeasonID) == "" || strings.TrimSpace(nextSeasonID) == "" {
 		return 0, errors.New("season id required")
 	}
@@ -130,7 +131,7 @@ func advanceRankedSeasonTx(ctx context.Context, q *db.Queries, tx pgx.Tx, previo
 		return 0, err
 	}
 	for _, userID := range finishers {
-		if _, err := badges.AwardTopFinishTx(ctx, tx, userID.String()); err != nil {
+		if _, err := badges.AwardTopFinishTx(ctx, tx, teller, userID.String()); err != nil {
 			return 0, err
 		}
 	}

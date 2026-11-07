@@ -3,15 +3,10 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"log"
 	"net/http"
-	"net/url"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 
 	"geoduels/internal/matches"
@@ -21,14 +16,13 @@ import (
 )
 
 // A match has one address, /api/v2/matches/{id}: its view says what it is and whether it is being
-// played, and a seated player connects to it at /ws, which this service proxies to the gameplay node
-// running it.
+// played, and a seated player connects to it at /api/live/matches/{id}, which the gateway forwards to
+// the gameplay node running it.
 
 const (
 	// placementWait is how long a start or a connect waits for a node to pick the match up.
-	placementWait  = 10 * time.Second
-	placementPoll  = 150 * time.Millisecond
-	matchSocketTTL = 70 * time.Second
+	placementWait = 10 * time.Second
+	placementPoll = 150 * time.Millisecond
 )
 
 // matchViewStatus is what a viewer finds at a match's address.
@@ -60,7 +54,7 @@ func matchViewStatusOf(status matches.SessionStatus) matchViewStatus {
 
 // matchView is everything a client needs about a match: what it is, whether it is being played and
 // whether the viewer plays in it, where to go after it, and how it ended. A seated viewer of a
-// starting or live match connects to /api/v2/matches/{id}/ws.
+// starting or live match connects to /api/live/matches/{id}.
 type matchView struct {
 	MatchID string                      `json:"matchId"`
 	Kind    matchkind.Kind              `json:"kind,omitempty"`
@@ -337,193 +331,27 @@ func (a *api) awaitPlacement(ctx context.Context, matchID string) matches.Sessio
 	}
 }
 
-// matchSocket proxies a seated player's socket to the node running the match.
-func (a *api) matchSocket(c echo.Context) error {
-	r := c.Request()
-	if a.draining.Load() {
-		return plainTextError(c, http.StatusServiceUnavailable, "draining")
-	}
-	claims, err := a.liveClaims(r)
+// matchNode finds the node running a player's match, waiting a moment if it's just starting. When it
+// can't be played it returns the status to answer with.
+func (a *api) matchNode(ctx context.Context, matchID, userID string) (bool, string, int) {
+	session, found, err := a.matchStore.GetSession(ctx, matchID)
 	if err != nil {
-		return plainTextError(c, http.StatusUnauthorized, "unauthorized")
-	}
-	if banned, err := a.accountBanned(claims.Sub); err != nil || banned {
-		return plainTextError(c, http.StatusForbidden, "forbidden")
-	}
-	matchID := a.resolveEntityID("match", c.Param("id"))
-	session, found, err := a.matchStore.GetSession(r.Context(), matchID)
-	if err != nil {
-		return plainTextError(c, http.StatusBadGateway, "match unavailable")
+		return false, "", http.StatusBadGateway
 	}
 	if !found {
-		return plainTextError(c, http.StatusNotFound, "match not found")
+		return false, "", http.StatusNotFound
 	}
-	if !session.Seated(claims.Sub) {
-		return plainTextError(c, http.StatusForbidden, "forbidden")
+	if !session.Seated(userID) {
+		return false, "", http.StatusForbidden
 	}
 	if session.Status == matches.SessionStarting {
-		a.awaitPlacement(r.Context(), matchID)
-		if session, found, err = a.matchStore.GetSession(r.Context(), matchID); err != nil || !found {
-			return plainTextError(c, http.StatusBadGateway, "match unavailable")
+		a.awaitPlacement(ctx, matchID)
+		if session, found, err = a.matchStore.GetSession(ctx, matchID); err != nil || !found {
+			return false, "", http.StatusBadGateway
 		}
 	}
 	if session.Status != matches.SessionLive || session.NodeURL == "" {
-		return plainTextError(c, http.StatusGone, "match is not being played")
+		return false, "", http.StatusGone
 	}
-
-	header := http.Header{}
-	header.Set("X-Internal-Secret", a.internalSecret)
-	header.Set("X-Geoduels-User", claims.Sub)
-	target := websocketTarget(session.NodeURL, "/internal/matches/"+url.PathEscape(matchID)+"/ws")
-	backendConn, resp, err := websocket.DefaultDialer.DialContext(r.Context(), target, header)
-	if err != nil {
-		if resp != nil && resp.StatusCode > 0 {
-			return plainTextError(c, resp.StatusCode, "gameplay unavailable")
-		}
-		return plainTextError(c, http.StatusBadGateway, "gameplay unavailable")
-	}
-	defer backendConn.Close()
-	clientConn, err := a.live.upgrader.Upgrade(c.Response().Writer, r, nil)
-	if err != nil {
-		return nil
-	}
-	defer clientConn.Close()
-
-	var once sync.Once
-	closeBoth := func() {
-		once.Do(func() {
-			_ = clientConn.Close()
-			_ = backendConn.Close()
-		})
-	}
-	if !a.proxied.track(clientConn, closeBoth) {
-		sendRestart(clientConn)
-		return nil
-	}
-	defer a.proxied.untrack(clientConn)
-
-	a.touchViewerPresence(context.Background(), claims.Sub)
-	errc := make(chan error, 2)
-	go proxyWS(errc, closeBoth, backendConn, clientConn, func() {
-		_ = clientConn.SetReadDeadline(time.Now().Add(matchSocketTTL))
-		a.touchViewerPresence(context.Background(), claims.Sub)
-	})
-	go proxyWS(errc, closeBoth, clientConn, backendConn, nil)
-	if err := <-errc; err != nil && !isExpectedWSClose(err) {
-		log.Printf("match socket proxy failed for %s: %v", matchID, err)
-	}
-	closeBoth()
-	<-errc
-	return nil
-}
-
-// proxiedSockets tracks the game sockets this process proxies, so a drain can ask them to reconnect
-// through another one.
-type proxiedSockets struct {
-	mu       sync.Mutex
-	draining bool
-	sockets  map[*websocket.Conn]func()
-}
-
-func (p *proxiedSockets) track(conn *websocket.Conn, closeBoth func()) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.draining {
-		return false
-	}
-	if p.sockets == nil {
-		p.sockets = map[*websocket.Conn]func(){}
-	}
-	p.sockets[conn] = closeBoth
-	return true
-}
-
-func (p *proxiedSockets) untrack(conn *websocket.Conn) {
-	p.mu.Lock()
-	delete(p.sockets, conn)
-	p.mu.Unlock()
-}
-
-// drain asks every proxied socket to reconnect, spread over spread so clients don't all come back at
-// once, and cuts the ones that don't go.
-func (p *proxiedSockets) drain(spread time.Duration) {
-	p.mu.Lock()
-	p.draining = true
-	sockets := make(map[*websocket.Conn]func(), len(p.sockets))
-	for conn, closeBoth := range p.sockets {
-		sockets[conn] = closeBoth
-	}
-	p.mu.Unlock()
-	if len(sockets) == 0 {
-		return
-	}
-	pause := spread / time.Duration(len(sockets))
-	first := true
-	for conn := range sockets {
-		if !first {
-			time.Sleep(pause)
-		}
-		first = false
-		sendRestart(conn)
-	}
-	time.Sleep(time.Second)
-	for _, closeBoth := range sockets {
-		closeBoth()
-	}
-}
-
-// sendRestart asks a client to reconnect. gorilla/websocket allows WriteControl alongside the proxy's writes.
-func sendRestart(conn *websocket.Conn) {
-	message := websocket.FormatCloseMessage(websocket.CloseServiceRestart, "restarting")
-	_ = conn.WriteControl(websocket.CloseMessage, message, time.Now().Add(time.Second))
-}
-
-func websocketTarget(baseURL, path string) string {
-	base := strings.TrimRight(baseURL, "/")
-	switch {
-	case strings.HasPrefix(base, "https://"):
-		base = "wss://" + strings.TrimPrefix(base, "https://")
-	case strings.HasPrefix(base, "http://"):
-		base = "ws://" + strings.TrimPrefix(base, "http://")
-	case strings.HasPrefix(base, "wss://"), strings.HasPrefix(base, "ws://"):
-	default:
-		base = "ws://" + base
-	}
-	return base + path
-}
-
-// proxyWS copies src's messages to dst until either side fails, calling onRead after each one.
-func proxyWS(errc chan<- error, closeBoth func(), dst, src *websocket.Conn, onRead func()) {
-	if onRead != nil {
-		onRead()
-	}
-	for {
-		messageType, payload, err := src.ReadMessage()
-		if err != nil {
-			closeBoth()
-			errc <- err
-			return
-		}
-		if onRead != nil {
-			onRead()
-		}
-		if err := dst.WriteMessage(messageType, payload); err != nil {
-			closeBoth()
-			errc <- err
-			return
-		}
-	}
-}
-
-func isExpectedWSClose(err error) bool {
-	if err == nil || errors.Is(err, io.EOF) {
-		return true
-	}
-	return websocket.IsCloseError(
-		err,
-		websocket.CloseNormalClosure,
-		websocket.CloseGoingAway,
-		websocket.CloseNoStatusReceived,
-		websocket.CloseServiceRestart,
-	)
+	return true, session.NodeURL, http.StatusOK
 }

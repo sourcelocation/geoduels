@@ -25,12 +25,19 @@ const (
 	KindStorageCleanup   = "storage_cleanup"
 	KindSeasonReset      = "season_reset"
 	KindCurationSweep    = "curation_sweep"
+	KindInboxChanged     = "inbox_changed"
+	KindPartyChanged     = "party_changed"
+	KindPresenceChanged  = "presence_changed"
 )
 
 // Queues. A worker client works only its own queue, so it never takes a job
 // kind it hasn't registered: the moderation worker works the default queue and
 // the Discord worker works QueueDiscord.
 const QueueDiscord = "discord"
+
+// QueueLive is worked by the API, which owns what clients receive. A transaction anywhere uses it to
+// tell people something once it has committed.
+const QueueLive = "live"
 
 // MatchAnalyzeArgs asks the integrity detector to evaluate a finished match.
 type MatchAnalyzeArgs struct {
@@ -83,8 +90,44 @@ type CurationSweepArgs struct{}
 
 func (CurationSweepArgs) Kind() string { return KindCurationSweep }
 
+// InboxChangedArgs tells a person about a new inbox message.
+type InboxChangedArgs struct {
+	UserID    string `json:"userId"`
+	MessageID int64  `json:"messageId"`
+}
+
+func (InboxChangedArgs) Kind() string { return KindInboxChanged }
+
+func (InboxChangedArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: QueueLive} }
+
+// PartyChangedArgs sends a party to its members as it now is.
+type PartyChangedArgs struct {
+	PartyID string `json:"partyId"`
+}
+
+func (PartyChangedArgs) Kind() string { return KindPartyChanged }
+
+func (PartyChangedArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: QueueLive} }
+
+// PresenceChangedArgs tells these players' friends what they're doing now.
+type PresenceChangedArgs struct {
+	UserIDs []string `json:"userIds"`
+}
+
+func (PresenceChangedArgs) Kind() string { return KindPresenceChanged }
+
+func (PresenceChangedArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: QueueLive} }
+
+// Teller tells people things from inside a transaction, once it commits.
+type Teller interface {
+	EnqueueInboxChanged(ctx context.Context, tx pgx.Tx, userID string, messageID int64) error
+	EnqueuePartyChanged(ctx context.Context, tx pgx.Tx, partyID string) error
+	EnqueuePresenceChanged(ctx context.Context, tx pgx.Tx, userIDs []string) error
+}
+
 // Enqueuer is the transactional insert surface other packages depend on.
 type Enqueuer interface {
+	Teller
 	EnqueueModerationSignal(ctx context.Context, tx pgx.Tx, signalID int64) error
 	EnqueueDiscordSync(ctx context.Context, tx pgx.Tx, action, discordUserID string) error
 	EnqueueDiscordSyncForUser(ctx context.Context, tx pgx.Tx, userID string) error
@@ -106,6 +149,8 @@ func NewClient(pool *pgxpool.Pool, queue string, workers *river.Workers, periodi
 		// Behind PgBouncer in transaction mode LISTEN never hears anything, and River would hold a
 		// connection for it forever; poll instead.
 		PollOnly: strings.EqualFold(os.Getenv("POSTGRES_PGBOUNCER"), "true"),
+		// Each process works its own queue and asks for jobs on the others, whose workers it doesn't have.
+		SkipUnknownJobCheck: true,
 	}
 	if workers != nil {
 		cfg.Workers = workers
@@ -126,6 +171,21 @@ func (c *Client) Start(ctx context.Context) error { return c.river.Start(ctx) }
 
 // Stop stops processing and waits for active jobs.
 func (c *Client) Stop(ctx context.Context) error { return c.river.Stop(ctx) }
+
+func (c *Client) EnqueueInboxChanged(ctx context.Context, tx pgx.Tx, userID string, messageID int64) error {
+	_, err := c.river.InsertTx(ctx, tx, InboxChangedArgs{UserID: userID, MessageID: messageID}, nil)
+	return err
+}
+
+func (c *Client) EnqueuePartyChanged(ctx context.Context, tx pgx.Tx, partyID string) error {
+	_, err := c.river.InsertTx(ctx, tx, PartyChangedArgs{PartyID: partyID}, nil)
+	return err
+}
+
+func (c *Client) EnqueuePresenceChanged(ctx context.Context, tx pgx.Tx, userIDs []string) error {
+	_, err := c.river.InsertTx(ctx, tx, PresenceChangedArgs{UserIDs: userIDs}, nil)
+	return err
+}
 
 func (c *Client) EnqueueMatchAnalyze(ctx context.Context, tx pgx.Tx, matchID string) error {
 	_, err := c.river.InsertTx(ctx, tx, MatchAnalyzeArgs{MatchID: matchID}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}})

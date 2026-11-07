@@ -1,5 +1,5 @@
-import type { RuntimeConfig } from "../../../lib/runtime-config";
-import { ObservableStore } from "../../../lib/observable-store";
+
+import { Listeners } from "../../../lib/listeners";
 import { INITIAL_MMR, INITIAL_RATING_RD } from "../../../lib/elo";
 import { decodeAccessTokenExpiry } from "../lib/token-expiry";
 import type { PlayerBadgeInfo } from "../../players/components/PlayerBadge";
@@ -47,7 +47,6 @@ type SessionPatch = Partial<
     | "wins"
     | "rankedGamesPlayed"
     | "rankedWins"
-    | "leaderboard"
     | "authLoading"
     | "authError"
     | "nicknameError"
@@ -95,7 +94,6 @@ export type SessionState = {
   wins: number;
   rankedGamesPlayed: number;
   rankedWins: number;
-  leaderboard: LeaderboardSummary | null;
   accessToken: string;
   nicknameRequired: boolean;
   authMigrationRequired?: boolean;
@@ -109,29 +107,6 @@ export type SessionState = {
   nicknameSaving: boolean;
   authLoading: boolean;
   authError: string;
-  googleSignInEnabled: boolean;
-  googleClientId: string;
-  discordSignInEnabled?: boolean;
-  discordClientId?: string;
-};
-
-export type LeaderboardEntrySummary = {
-  rank: number;
-  userId: string;
-  displayName: string;
-  avatarUrl: string;
-  mmr: number;
-  gamesPlayed: number;
-  wins: number;
-};
-
-export type LeaderboardSummary = {
-  mode: string;
-  season: string;
-  nextResetAt?: string;
-  selfRank: number;
-  totalPlayers: number;
-  entries: LeaderboardEntrySummary[];
 };
 
 const initialState: SessionState = {
@@ -148,7 +123,6 @@ const initialState: SessionState = {
   wins: 0,
   rankedGamesPlayed: 0,
   rankedWins: 0,
-  leaderboard: null,
   accessToken: "",
   nicknameRequired: false,
   authMigrationRequired: false,
@@ -162,17 +136,14 @@ const initialState: SessionState = {
   nicknameSaving: false,
   authLoading: false,
   authError: "",
-  googleSignInEnabled: false,
-  googleClientId: "",
-  discordSignInEnabled: false,
-  discordClientId: "",
 };
 
 const guestSessionExpiredMessage =
   "Guest session expired. Please start again or sign in.";
 
-export class SessionController extends ObservableStore<SessionState> {
-  private readonly config: RuntimeConfig;
+export class SessionController {
+  private readonly listeners = new Listeners();
+  readonly subscribe = this.listeners.subscribe;
   private state: SessionState = initialState;
   private session: AuthSessionSnapshot = emptyAuthSession();
   private mounted = true;
@@ -182,16 +153,7 @@ export class SessionController extends ObservableStore<SessionState> {
   private readonly unsubscribeGateway?: () => void;
   private readonly messageHandler: (event: MessageEvent) => void;
 
-  constructor(params: { config: RuntimeConfig; onResetSession: () => void; authGateway: AuthGateway }) {
-    super();
-    this.config = params.config;
-    this.state = {
-      ...initialState,
-      googleSignInEnabled: !!params.config.googleClientId,
-      googleClientId: params.config.googleClientId,
-      discordSignInEnabled: !!params.config.discordClientId,
-      discordClientId: params.config.discordClientId,
-    };
+  constructor(params: { onResetSession: () => void; authGateway: AuthGateway }) {
     this.onResetSession = params.onResetSession;
     this.authGateway = params.authGateway;
     this.unsubscribeGateway = this.authGateway.subscribe((session) => {
@@ -208,17 +170,7 @@ export class SessionController extends ObservableStore<SessionState> {
     });
     this.syncGatewaySession(this.authGateway.getSnapshot());
     this.messageHandler = (event: MessageEvent) => {
-      const expectedOrigin = (() => {
-        if (!this.config.apiURL.trim()) {
-          return typeof window !== "undefined" ? window.location.origin : "";
-        }
-        try {
-          return new URL(this.config.apiURL).origin;
-        } catch {
-          return "";
-        }
-      })();
-      if (expectedOrigin && event.origin !== expectedOrigin) return;
+      if (event.origin !== window.location.origin) return;
       if (
         !event.data ||
         (event.data.type !== "geoduels:auth" &&
@@ -241,9 +193,8 @@ export class SessionController extends ObservableStore<SessionState> {
     if (this.started || typeof window === "undefined") return;
     this.mounted = true;
     this.started = true;
-    this.syncGoogleSignInState();
     window.addEventListener("message", this.messageHandler);
-    this.emit();
+    this.listeners.emit();
   }
 
   destroy() {
@@ -263,7 +214,7 @@ export class SessionController extends ObservableStore<SessionState> {
   private patchState(patch: Partial<SessionState>) {
     this.state = { ...this.state, ...patch };
     if (this.mounted) {
-      this.emit();
+      this.listeners.emit();
     }
   }
 
@@ -293,45 +244,11 @@ export class SessionController extends ObservableStore<SessionState> {
     };
   }
 
-  private syncGoogleSignInState() {
-    if (typeof window === "undefined") return;
-    if (!this.config.googleClientId) {
-      this.patchState({ googleSignInEnabled: false });
-      return;
-    }
-    const currentOrigin = window.location.origin;
-    if (this.config.googleAllowedOrigins.length === 0) {
-      const isLocalHost =
-        window.location.hostname === "localhost" ||
-        window.location.hostname === "127.0.0.1";
-      if (isLocalHost) {
-        this.patchState({
-          googleSignInEnabled: false,
-          authError: `Google sign-in is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
-        });
-        return;
-      }
-      this.patchState({ googleSignInEnabled: true });
-      return;
-    }
-    const allowed = this.config.googleAllowedOrigins.includes(currentOrigin);
-    this.patchState({
-      googleSignInEnabled: allowed,
-      authError: allowed
-        ? this.state.authError
-        : `Google sign-in is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
-    });
-  }
-
   clearAuthSession = (message?: string, options?: { skipGateway?: boolean }) => {
     const hadSession = !!this.state.userId || !!this.session.userId;
     this.session = emptyAuthSession();
     this.patchState({
       ...initialState,
-      googleSignInEnabled: this.state.googleSignInEnabled,
-      googleClientId: this.config.googleClientId,
-      discordSignInEnabled: this.state.discordSignInEnabled,
-      discordClientId: this.config.discordClientId,
       authError: message || "",
     });
     if (hadSession) this.onResetSession();
@@ -398,8 +315,7 @@ export class SessionController extends ObservableStore<SessionState> {
       wins: 0,
       rankedGamesPlayed: 0,
       rankedWins: 0,
-      leaderboard: null,
-    });
+        });
   }
 
   setNicknameInputAndClearError = (value: string) => {
@@ -575,11 +491,6 @@ export class SessionController extends ObservableStore<SessionState> {
     });
   }
 
-  applyLeaderboardSummary(summary: unknown) {
-    this.patchState({
-      leaderboard: normalizeLeaderboardSummary(summary),
-    });
-  }
 }
 
 function normalizeBadge(value: unknown): PlayerBadgeInfo | null {
@@ -607,42 +518,4 @@ function normalizeBadges(value: unknown): PlayerBadgeInfo[] {
         .map((badge) => normalizeBadge(badge))
         .filter((badge): badge is PlayerBadgeInfo => !!badge?.id)
     : [];
-}
-
-function normalizeLeaderboardSummary(
-  value: unknown,
-): LeaderboardSummary | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as Record<string, unknown>;
-  const entries = Array.isArray(raw.entries)
-    ? raw.entries
-        .map((entry) => normalizeLeaderboardEntry(entry))
-        .filter((entry): entry is LeaderboardEntrySummary => entry !== null)
-    : [];
-  return {
-    mode: typeof raw.mode === "string" ? raw.mode : "duel",
-    season: typeof raw.season === "string" ? raw.season : "s2",
-    nextResetAt:
-      typeof raw.nextResetAt === "string" ? raw.nextResetAt : undefined,
-    selfRank: typeof raw.selfRank === "number" ? raw.selfRank : 0,
-    totalPlayers:
-      typeof raw.totalPlayers === "number" ? raw.totalPlayers : entries.length,
-    entries,
-  };
-}
-
-function normalizeLeaderboardEntry(
-  value: unknown,
-): LeaderboardEntrySummary | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as Record<string, unknown>;
-  return {
-    rank: typeof raw.rank === "number" ? raw.rank : 0,
-    userId: typeof raw.userId === "string" ? raw.userId : "",
-    displayName: typeof raw.displayName === "string" ? raw.displayName : "",
-    avatarUrl: typeof raw.avatarUrl === "string" ? raw.avatarUrl : "",
-    mmr: typeof raw.mmr === "number" ? raw.mmr : INITIAL_MMR,
-    gamesPlayed: typeof raw.gamesPlayed === "number" ? raw.gamesPlayed : 0,
-    wins: typeof raw.wins === "number" ? raw.wins : 0,
-  };
 }

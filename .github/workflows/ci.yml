@@ -63,7 +63,6 @@ jobs:
         env:
           NEXT_PUBLIC_APP_VERSION: ci
           NEXT_PUBLIC_GIT_SHA: ci
-          NEXT_PUBLIC_SITE_URL: http://localhost:3000
         run: |
           npm ci --no-audit --no-fund
           npm run lint:architecture:strict

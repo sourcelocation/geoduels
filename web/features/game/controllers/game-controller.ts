@@ -1,11 +1,11 @@
 import type { ResultPhase, RoundResult, Snapshot } from '../model/types';
-import type { RuntimeConfig } from '../../../lib/runtime-config';
 import type { SfxController } from '../../../lib/audio/sfx';
-import { ObservableStore } from '../../../lib/observable-store';
+import { Listeners } from "../../../lib/listeners";
 import type { SessionController } from '../../auth/controllers/session-controller';
 import type { MatchController } from '../../matchmaking/controllers/match-controller';
 import { ResultAnimation } from '../lib/result-animation';
 import { GUESS_INPUT_CUTOFF_MS, PRESSURE_VISIBLE_MS, RoundClock } from '../lib/round-clock';
+import { MAX_HP } from "../../../lib/constants";
 
 type Guess = { lat: number; lng: number } | undefined;
 
@@ -35,9 +35,10 @@ const initialState: GameState = {
   showMatchEndPage: false
 };
 
-export class GameController extends ObservableStore<GameState> {
+export class GameController {
+  private readonly listeners = new Listeners();
+  readonly subscribe = this.listeners.subscribe;
   private lastTeamPingAt = 0;
-  private readonly config: RuntimeConfig;
   private state: GameState = initialState;
   private readonly matchController: MatchController;
   private readonly sessionController: SessionController;
@@ -61,13 +62,10 @@ export class GameController extends ObservableStore<GameState> {
   private started = false;
 
   constructor(params: {
-    config: RuntimeConfig;
     matchController: MatchController;
     sessionController: SessionController;
     sfxController: SfxController;
   }) {
-    super();
-    this.config = params.config;
     this.matchController = params.matchController;
     this.sessionController = params.sessionController;
     this.sfxController = params.sfxController;
@@ -100,7 +98,7 @@ export class GameController extends ObservableStore<GameState> {
   private patchState(patch: Partial<GameState>) {
     this.state = { ...this.state, ...patch };
     if (!this.destroyed) {
-      this.emit();
+      this.listeners.emit();
     }
   }
 
@@ -556,15 +554,15 @@ export class GameController extends ObservableStore<GameState> {
   private getAnimatedStartHP(snapshot: Snapshot, playerId: string, hpAfterRound: number, hpNow: number) {
     const prevHP = this.prevSnapshot?.matchId === snapshot.matchId ? this.prevSnapshot.players?.[playerId]?.hp : undefined;
     if (typeof prevHP === 'number') {
-      return Math.max(hpAfterRound, Math.min(this.config.maxHP, prevHP));
+      return Math.max(hpAfterRound, Math.min(MAX_HP, prevHP));
     }
 
     const displayedHP = this.state.displayHP[playerId];
     if (typeof displayedHP === 'number') {
-      return Math.max(hpAfterRound, Math.min(this.config.maxHP, displayedHP));
+      return Math.max(hpAfterRound, Math.min(MAX_HP, displayedHP));
     }
 
-    return Math.max(hpAfterRound, Math.min(this.config.maxHP, hpNow));
+    return Math.max(hpAfterRound, Math.min(MAX_HP, hpNow));
   }
 
   private getAnimatedStartTeamHP(
@@ -578,17 +576,17 @@ export class GameController extends ObservableStore<GameState> {
         ? this.prevSnapshot.teams?.[teamId]?.hp
         : undefined;
     if (typeof prevHP === 'number') {
-      return Math.max(hpAfterRound, Math.min(this.config.maxHP, prevHP));
+      return Math.max(hpAfterRound, Math.min(MAX_HP, prevHP));
     }
 
     const displayedHP = (snapshot.teams?.[teamId]?.players || [])
       .map((playerId) => this.state.displayHP[playerId])
       .find((hp) => typeof hp === 'number');
     if (typeof displayedHP === 'number') {
-      return Math.max(hpAfterRound, Math.min(this.config.maxHP, displayedHP));
+      return Math.max(hpAfterRound, Math.min(MAX_HP, displayedHP));
     }
 
-    return Math.max(hpAfterRound, Math.min(this.config.maxHP, hpNow));
+    return Math.max(hpAfterRound, Math.min(MAX_HP, hpNow));
   }
 
   private isGuessInputClosed(snapshot: Snapshot) {

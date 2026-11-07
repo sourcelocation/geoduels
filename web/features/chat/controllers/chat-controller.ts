@@ -1,161 +1,129 @@
-import type { ChatAudience, ChatEmote, ChatMessage } from "../model/types";
 import type { SfxController } from "../../../lib/audio/sfx";
-import { ObservableStore } from "../../../lib/observable-store";
-import type { RuntimeConfig } from "../../../lib/runtime-config";
-import {
-  connectChat,
-  type ChatConnection,
-} from "../lib/chat-client";
+import { Listeners } from "../../../lib/listeners";
+import type { SessionController } from "../../auth/controllers/session-controller";
 import { isChatMuted } from "../lib/chat-preferences";
+import { markConversationRead, readConversation, sendToConversation } from "../lib/conversation-client";
+import type { ChatAudience, ChatEmote, ConversationItem } from "../model/types";
+
+const KEPT_ITEMS = 100;
 
 export type ChatRuntimeState = {
   conversationId: string;
-  messages: ChatMessage[];
+  messages: ConversationItem[];
   error: string;
 };
 
-const initialState: ChatRuntimeState = {
-  conversationId: "",
-  messages: [],
-  error: "",
-};
+const closed: ChatRuntimeState = { conversationId: "", messages: [], error: "" };
 
-export class ChatController extends ObservableStore<ChatRuntimeState> {
-  private readonly config: RuntimeConfig;
+/** One open conversation: read when opened, added to as the server tells it, written to over HTTP. */
+export class ChatController {
+  private readonly listeners = new Listeners();
+  readonly subscribe = this.listeners.subscribe;
+  private readonly sessionController: SessionController;
   private readonly sfxController?: SfxController;
-  private state: ChatRuntimeState = initialState;
-  private connection: ChatConnection | null = null;
-  private connectionKey = "";
-  private messagesByConversation = new Map<string, ChatMessage[]>();
-  private destroyed = false;
+  private readonly onRead?: (conversationId: string) => void;
+  private state = closed;
 
   constructor(params: {
-    config: RuntimeConfig;
+    sessionController: SessionController;
     sfxController?: SfxController;
+    /** For conversations that track what's been read. */
+    onRead?: (conversationId: string) => void;
   }) {
-    super();
-    this.config = params.config;
+    this.sessionController = params.sessionController;
     this.sfxController = params.sfxController;
+    this.onRead = params.onRead;
   }
 
-  getState() {
-    return this.state;
-  }
+  getState = () => this.state;
 
-  destroy() {
-    this.destroyed = true;
-    this.closeConnection();
-  }
-
-  reset = () => {
-    this.closeConnection();
-    this.connectionKey = "";
-    this.messagesByConversation.clear();
-    this.patchState(initialState);
+  open = (conversationId: string) => {
+    if (conversationId === this.state.conversationId) return;
+    this.patch({ ...closed, conversationId });
+    void this.load();
   };
 
-  setConversation = (conversationId: string, accessToken: string) => {
-    const nextConversationId = conversationId.trim();
-    const nextConnectionKey =
-      nextConversationId && accessToken
-        ? `${nextConversationId}:${accessToken}`
-        : "";
+  close = () => this.patch(closed);
 
-    if (!nextConversationId || !accessToken) {
-      this.closeConnection();
-      this.connectionKey = "";
-      this.patchState({
-        conversationId: "",
-        messages: [],
-        error: "",
-      });
-      return;
-    }
-
-    const cachedMessages =
-      this.messagesByConversation.get(nextConversationId) || [];
-    const conversationChanged = this.state.conversationId !== nextConversationId;
-    if (conversationChanged) {
-      this.patchState({
-        conversationId: nextConversationId,
-        messages: cachedMessages,
-        error: "",
-      });
-    }
-
-    if (this.connectionKey === nextConnectionKey && this.connection) {
-      return;
-    }
-
-    this.closeConnection();
-    this.connectionKey = nextConnectionKey;
-    const connection = connectChat(
-      this.config,
-      nextConversationId,
-      accessToken,
-      (event) => {
-        if (this.connection !== connection) return;
-        if (event.type === "chat.history") {
-          if (event.conversationId !== nextConversationId) return;
-          this.storeMessages(nextConversationId, event.messages);
-          return;
-        }
-        if (event.type === "chat.message") {
-          if (
-            event.message.conversationId &&
-            event.message.conversationId !== nextConversationId
-          ) {
-            return;
-          }
-          const current = this.messagesByConversation.get(nextConversationId) || [];
-          this.storeMessages(
-            nextConversationId,
-            [
-              ...current.filter((item) => item.id !== event.message.id),
-              event.message,
-            ].slice(-100),
-          );
-          if (!isChatMuted()) {
-            this.sfxController?.play("chat");
-          }
-          return;
-        }
-        if (event.type === "chat.error") {
-          this.patchState({ error: event.message });
-        }
-      },
-    );
-    this.connection = connection;
+  /** Reads the open conversation again, after a reconnect may have missed something. */
+  reload = () => {
+    void this.load();
   };
+
+  receive(item: ConversationItem) {
+    if (item.conversationId !== this.state.conversationId) return;
+    const known = this.state.messages.some((message) => message.id === item.id);
+    this.store(item);
+    if (known) return;
+    if (!isChatMuted()) this.sfxController?.play("chat");
+    void this.markRead();
+  }
+
+  remove(conversationId: string, itemId: string) {
+    if (conversationId !== this.state.conversationId) return;
+    this.patch({ messages: this.state.messages.filter((message) => message.id !== itemId) });
+  }
 
   sendMessage = (body: string, audience: ChatAudience = "all") => {
-    const trimmed = body.trim();
-    if (!trimmed || !this.state.conversationId) return false;
-    return this.connection?.sendMessage(trimmed, audience) || false;
+    const text = body.trim();
+    if (!text || !this.state.conversationId) return false;
+    void this.send({ kind: "text", body: text, audience });
+    return true;
   };
 
   sendEmote = (emote: ChatEmote, audience: ChatAudience = "all") => {
     if (!this.state.conversationId) return false;
-    return this.connection?.sendEmote(emote, audience) || false;
+    void this.send({ kind: "emote", emote, audience });
+    return true;
   };
 
-  private storeMessages(conversationId: string, messages: ChatMessage[]) {
-    const next = messages.slice(-100);
-    this.messagesByConversation.set(conversationId, next);
-    if (this.state.conversationId === conversationId) {
-      this.patchState({ messages: next });
+  private async send(message: Parameters<typeof sendToConversation>[2]) {
+    const { conversationId } = this.state;
+    try {
+      const token = await this.token();
+      this.receive(await sendToConversation(token, conversationId, message));
+    } catch (error) {
+      if (conversationId === this.state.conversationId) this.patch({ error: errorMessage(error) });
     }
   }
 
-  private closeConnection() {
-    this.connection?.close();
-    this.connection = null;
+  private async load() {
+    const { conversationId } = this.state;
+    if (!conversationId) return;
+    try {
+      const { items } = await readConversation(await this.token(), conversationId);
+      if (conversationId !== this.state.conversationId) return;
+      this.patch({ messages: items.slice(-KEPT_ITEMS), error: "" });
+      void this.markRead();
+    } catch (error) {
+      if (conversationId === this.state.conversationId) this.patch({ error: errorMessage(error) });
+    }
   }
 
-  private patchState(patch: Partial<ChatRuntimeState>) {
+  private async markRead() {
+    const { conversationId } = this.state;
+    if (!this.onRead || !conversationId) return;
+    this.onRead(conversationId);
+    await markConversationRead(await this.token(), conversationId).catch(() => undefined);
+  }
+
+  private async token() {
+    const session = await this.sessionController.ensureFreshSession();
+    if (!session) throw new Error("Sign in to chat");
+    return session.accessToken;
+  }
+
+  private store(item: ConversationItem) {
+    const others = this.state.messages.filter((message) => message.id !== item.id);
+    this.patch({ messages: [...others, item].slice(-KEPT_ITEMS) });
+  }
+
+  private patch(patch: Partial<ChatRuntimeState>) {
     this.state = { ...this.state, ...patch };
-    if (!this.destroyed) {
-      this.emit();
-    }
+    this.listeners.emit();
   }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Chat unavailable";
 }

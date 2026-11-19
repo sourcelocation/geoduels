@@ -10,12 +10,9 @@ concurrency:
 
 jobs:
   release:
-    uses: sourcelocation/.github/.github/workflows/release.yml@main
+    uses: sourcelocation/.github/.github/workflows/release.yml@2ac41d692fe5919c86b8c0664b46e6a3583825ff # main
     with:
-      app: geoduels
-      bake: true
       platforms: '["linux/amd64", "linux/arm64"]'
-      latest: true
     permissions:
       contents: write
       pull-requests: write

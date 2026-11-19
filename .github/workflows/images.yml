@@ -40,7 +40,7 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Login to registry
         run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - uses: sourcelocation/.github/actions/bake@b17a6ef9109e71f8212ebd0017429a9eb57adb08 # main
+      - uses: sourcelocation/.github/actions/bake@b17a6ef9109e71f8212ebd0017429a9eb57adb08 # master
         env:
           TAG: ci
           REVISION: ${{ github.sha }}

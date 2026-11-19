@@ -18,7 +18,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12
 LABEL org.opencontainers.image.source="https://github.com/sourcelocation/geoduels"
 COPY --from=build /out/api /api
-# Every workload's init container runs it before the workload starts (ops: apps/geoduels).
 COPY --from=build /out/migrate /migrate
 EXPOSE 8080
 ENTRYPOINT ["/api"]

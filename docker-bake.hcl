@@ -10,19 +10,21 @@ variable "PLATFORMS" {
   default = "linux/arm64"
 }
 
-variable "APP_VERSION" {
+variable "VERSION" {
   default = TAG
 }
 
-variable "GIT_SHA" {
+variable "REVISION" {
   default = "dev"
 }
 
-// The build cache lives in the registry (<image>:buildcache), so every run shares it. "write" (release
-// builds) reads and writes it, "read" (CI's image check) only reads it; empty, as in local builds,
-// leaves BuildKit to its own cache.
+// Registry cache: "write" in releases, "read" in CI, empty locally.
 variable "CACHE" {
   default = ""
+}
+
+variable "CACHE_TAG" {
+  default = "buildcache"
 }
 
 group "default" {
@@ -48,8 +50,8 @@ target "backend" {
   context = "backend"
   dockerfile = "services/${service}/Dockerfile"
   tags = ["${REGISTRY}/geoduels-${service}:${TAG}"]
-  cache-from = CACHE != "" ? ["type=registry,ref=${REGISTRY}/geoduels-${service}:buildcache"] : []
-  cache-to = CACHE == "write" ? ["type=registry,ref=${REGISTRY}/geoduels-${service}:buildcache,mode=max"] : []
+  cache-from = CACHE != "" ? ["type=registry,ref=${REGISTRY}/geoduels-${service}:${CACHE_TAG}"] : []
+  cache-to = CACHE == "write" ? ["type=registry,ref=${REGISTRY}/geoduels-${service}:${CACHE_TAG},mode=max"] : []
 }
 
 target "web" {
@@ -58,9 +60,9 @@ target "web" {
   dockerfile = "Dockerfile"
   tags = ["${REGISTRY}/geoduels-web:${TAG}"]
   args = {
-    NEXT_PUBLIC_APP_VERSION = APP_VERSION
-    NEXT_PUBLIC_GIT_SHA = GIT_SHA
+    NEXT_PUBLIC_APP_VERSION = VERSION
+    NEXT_PUBLIC_GIT_SHA = REVISION
   }
-  cache-from = CACHE != "" ? ["type=registry,ref=${REGISTRY}/geoduels-web:buildcache"] : []
-  cache-to = CACHE == "write" ? ["type=registry,ref=${REGISTRY}/geoduels-web:buildcache,mode=max"] : []
+  cache-from = CACHE != "" ? ["type=registry,ref=${REGISTRY}/geoduels-web:${CACHE_TAG}"] : []
+  cache-to = CACHE == "write" ? ["type=registry,ref=${REGISTRY}/geoduels-web:${CACHE_TAG},mode=max"] : []
 }

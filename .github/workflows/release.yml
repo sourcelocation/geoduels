@@ -1,7 +1,5 @@
 name: Release
 
-# See sourcelocation/.github's AGENTS.md. A release builds the amd64 images and deploys them through
-# ops; then the arm64 and multi-arch images for self-hosters follow.
 on:
   push:
     branches: [master]
@@ -10,165 +8,17 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-env:
-  REGISTRY: ${{ vars.REGISTRY != '' && vars.REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
-  OPS_REPOSITORY: ${{ vars.OPS_REPOSITORY != '' && vars.OPS_REPOSITORY || 'sourcelocation/ops' }}
-
 jobs:
   release:
     uses: sourcelocation/.github/.github/workflows/release.yml@main
+    with:
+      app: geoduels
+      bake: true
+      platforms: '["linux/amd64", "linux/arm64"]'
+      latest: true
     permissions:
       contents: write
       pull-requests: write
       issues: write
       packages: write
     secrets: inherit
-
-  build-amd64:
-    name: build-amd64
-    if: needs.release.outputs.release_created == 'true'
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.sha }}
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Login to registry
-        run: |
-          set -euo pipefail
-          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
-          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
-
-      - name: Build and push images (amd64)
-        uses: docker/bake-action@v6
-        env:
-          TAG: ${{ needs.release.outputs.tag }}-amd64
-          PLATFORMS: linux/amd64
-          APP_VERSION: ${{ needs.release.outputs.tag }}
-          GIT_SHA: ${{ needs.release.outputs.sha }}
-          CACHE: write
-        with:
-          files: docker-bake.hcl
-          targets: default
-          push: true
-
-  # Deploys: sets the new image tags in the ops repo (apps/geoduels), where Flux picks them up.
-  # Rollback: revert that commit.
-  deploy:
-    name: deploy
-    runs-on: ubuntu-latest
-    environment: production
-    needs:
-      - release
-      - build-amd64
-    env:
-      TAG: ${{ needs.release.outputs.tag }}
-    steps:
-      - name: Checkout ops repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.OPS_REPOSITORY }}
-          token: ${{ secrets.OPS_REPO_TOKEN }}
-
-      # yq is preinstalled on GitHub's Ubuntu runners.
-      - name: Set the image tags
-        run: |
-          set -euo pipefail
-          # The risk engine is released from its own repo.
-          yq -i '(.images[] | select(.name != "*-risk-engine") | .newTag) = strenv(TAG) + "-amd64"' \
-            apps/geoduels/kustomization.yaml
-          git diff --stat
-
-      - name: Commit to ops
-        run: |
-          set -euo pipefail
-          git config user.name "geoduels-release[bot]"
-          git config user.email "geoduels-release@users.noreply.github.com"
-          git commit -am "deploy geoduels ${TAG}" -m "From ${{ github.repository }}@${{ needs.release.outputs.sha }}"
-          # Other products release into the same repo; replay on top of theirs.
-          for _ in 1 2 3; do
-            git push && exit 0
-            git pull --rebase
-          done
-          exit 1
-
-  # arm64 images are for self-hosters; production and the deploy above use amd64 only.
-  # Built after the deploy's images, without a cache.
-  build-and-push-arm64:
-    name: build-and-push-arm64
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
-    needs:
-      - release
-      - build-amd64
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.sha }}
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Login to registry
-        run: |
-          set -euo pipefail
-          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
-          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
-
-      - name: Build and push images (arm64)
-        uses: docker/bake-action@v6
-        env:
-          TAG: ${{ needs.release.outputs.tag }}-arm64
-          PLATFORMS: linux/arm64
-          APP_VERSION: ${{ needs.release.outputs.tag }}
-          GIT_SHA: ${{ needs.release.outputs.sha }}
-        with:
-          files: docker-bake.hcl
-          targets: default
-          push: true
-
-  # Joins the per-arch images into multi-arch <tag> and latest for self-hosters.
-  publish-multiarch:
-    name: publish-multiarch
-    runs-on: ubuntu-latest
-    needs:
-      - release
-      - build-and-push-arm64
-    permissions:
-      contents: read
-      packages: write
-    env:
-      TAG: ${{ needs.release.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.sha }}
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Login to registry
-        run: |
-          set -euo pipefail
-          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
-          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
-
-      - name: Create manifest lists
-        run: |
-          set -euo pipefail
-          # Image names come from the bake file, so new services are picked up automatically.
-          for image in $(docker buildx bake -f docker-bake.hcl --print default | jq -r '.target[].tags[]'); do
-            tags=(-t "$image")
-            # Pre-releases (v1.2.3-rc1) don't move latest.
-            if [[ "$TAG" != *-* ]]; then
-              tags+=(-t "${image%:*}:latest")
-            fi
-            docker buildx imagetools create "${tags[@]}" "$image-amd64" "$image-arm64"
-          done

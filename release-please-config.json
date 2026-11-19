@@ -4,5 +4,7 @@
   "include-component-in-tag": false,
   "packages": {
     ".": {}
-  }
+  },
+  "draft": true,
+  "force-tag-creation": true
 }

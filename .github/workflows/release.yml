@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   release:
-    uses: sourcelocation/.github/.github/workflows/release.yml@2ac41d692fe5919c86b8c0664b46e6a3583825ff # master
+    uses: sourcelocation/.github/.github/workflows/release.yml@4ac8064e28fb1fe1d2aef547ac38b217da4db715 # master
     with:
       platforms: '["linux/amd64", "linux/arm64"]'
     permissions:

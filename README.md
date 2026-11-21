@@ -1,48 +1,113 @@
-<img src="web/public/icon.v1.png" height="64" />
+<p align="center">
+  <a href="https://geoduels.io"><img src="web/public/icon.v1.png" alt="GeoDuels" width="96"></a>
+</p>
 
-# GeoDuels
+<h1 align="center">GeoDuels</h1>
 
-A free multiplayer geography game with community maps and competitive duels. Play at [geoduels.io](https://geoduels.io/).
+<p align="center">
+  <b>A free, open-source geography game built for head-to-head play.</b><br>
+  Drop into Street View, pin where you think you are, and outguess a real opponent.
+</p>
 
-Not a pretty readme, but does the job.
+<p align="center">
+  <a href="https://geoduels.io"><b>Play now</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://discord.gg/xxz8V9UU7Z">Discord</a>
+  &nbsp;·&nbsp;
+  <a href="#how-it-works">How it works</a>
+  &nbsp;·&nbsp;
+  <a href="#run-your-own">Run your own</a>
+</p>
 
-## Running GeoDuels yourself
+<p align="center">
+  <a href="https://github.com/sourcelocation/geoduels/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/sourcelocation/geoduels?style=flat-square&label=release"></a>
+  <a href="https://github.com/sourcelocation/geoduels/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sourcelocation/geoduels/ci.yml?branch=master&style=flat-square&label=ci"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square"></a>
+</p>
 
-### Development
+<p align="center">
+  <a href="https://geoduels.io"><img src=".github/assets/duel.gif" alt="A GeoDuels duel: both players guess on the map, the round reveals the answer, and the loser's health drops" width="100%"></a>
+</p>
 
-You need Docker, Go 1.26, Node 22 (matching CI), and [Overmind](https://github.com/DarthSim/overmind) (`brew install overmind`). All commands run from the repository root.
+## Features
+
+- **Ranked duels** with seasons and a leaderboard
+- **Team duels and free-for-alls** in custom lobbies with friends
+- **Community maps**, curated and validated against Street View
+- **Parties, friends, chat and an inbox**, live across devices
+- **Cheater mitigations**, with staff review and an audit log of every staff action
+- **Sign in with Google or Discord**, or play as a guest
+- **[Browser extension](extension/)** for extra Street View controls, on [Chrome](https://chromewebstore.google.com/detail/geoduels-enhancer/ecdjkhpicnccgbkdimbbjbnppnkeelmd) and [Firefox](https://addons.mozilla.org/en-US/firefox/addon/geoduels-enhancer/)
+
+## How it works
+
+A duel is two people racing a clock. Every guess has to land instantly, a deploy can't end a match, and a cheater can't keep anyone's rating for long. Here's how GeoDuels manages all three.
+
+```mermaid
+flowchart TB
+    players([Players]) --> caddy[Caddy]
+    caddy --> web
+    caddy -- /api --> api
+    caddy -- /api/live --> gw
+    subgraph stateless [Stateless: add pods to scale]
+        web[Next.js]
+        api[API]
+        gw[Gateways]
+    end
+    api -. publish .-> nats{{NATS}}
+    gw -. subscribe .-> nats
+    gw -- match sockets --> node[Gameplay nodes<br>matches in memory]
+    api --> pg[(PostgreSQL)]
+    node --> pg
+    mod -- reads guesses --> pg
+    subgraph anticheat [Anti-cheat]
+        mod[Moderation worker] --> risk[Risk engine<br>private]
+    end
+```
+
+- **Everything is stateless** except the gameplay nodes, which keep matches in RAM so guesses never wait on the database. That lets GeoDuels scale about as far as you need.
+- **No maintenance breaks required,** since every service rolls out on its own. Gameplay nodes are replaced one at a time: each stops taking new matches and finishes its current ones, while the other keeps hosting.
+- **No unnecessary cross-server communication.** NATS only carries what truly has to cross servers *right now*. Postgres stores the rest: accounts, Glicko ratings, matches, chat history and the job queue.
+- **Bold and strict architecture.** No inheritance, no type casts. This alone puts constraints on code, incentivising everyone working on project to write better code - catches more bugs than you'd expect.
+- **Cheaters face an in-house private anticheat.** Stored in a private repo, it scores the speed and accuracy of every guess, and victims are refunded as if they'd beaten the cheater.
+- **Shipping is one merge.** release-please tags it, CI builds six images for amd64 and arm64, and Flux deploys them to k3s. Every pod migrates the database before it starts, so the new version goes live on its own.
+
+## Run your own
+
+[`compose.yaml`](compose.yaml) runs the released images (amd64 and arm64), with Caddy getting the certificate.
+
+```sh
+cp .env.example .env   # then set the values marked "Self-hosting"
+docker compose up -d
+```
+
+Set `COMPOSE_PROFILES=app,workers,tls` and a `GEODUELS_VERSION` such as `v2.3.0`. Behind your own reverse proxy, leave out `tls` and send everything to port 24000. The `db-migrate` service brings the schema up to date before anything else starts.
+
+<details>
+<summary><b>Develop locally</b></summary>
+
+<br>
+
+You need Docker, Go 1.26, Node 22 and [Overmind](https://github.com/DarthSim/overmind).
 
 ```sh
 cp .env.example .env
-
-cd backend
-go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
-cd ..
-
-docker compose up -d
+(cd backend && go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate)
+docker compose up -d     # Postgres and NATS
 npm --prefix web ci
-overmind start
+overmind start           # Go services under Air, Next's dev server
 ```
 
-Open `http://localhost:24000`. Docker runs only Postgres and NATS; the `Procfile` runs everything else on your machine, with the Go services under Air, rebuilt and restarted as you edit. Next's dev server takes the front door's port and routes `/api` as production's ingress does. See [development notes](docs/development.md#local-infrastructure).
+Open http://localhost:24000. Every service reloads as you edit, and Next routes `/api` the way production's ingress does. To run the images instead, stop Overmind and run `COMPOSE_PROFILES=app docker compose up -d --build`.
 
-To run it as production does, from images, stop Overmind and run `COMPOSE_PROFILES=app docker compose up -d --build`, which serves the same address.
+More in the [development notes](docs/development.md): generated code, tests, releases and map tools.
 
-### Self-hosted
+</details>
 
-`compose.yaml` runs the published images (amd64 and arm64) with every port bound to host loopback. On the server, copy `.env.example` to `.env` and change what it marks "Self-hosting": `NEXT_PUBLIC_SITE_URL`, new secrets, `GEODUELS_VERSION` (for example `v2.2.7`), and `COMPOSE_PROFILES=app,workers,tls`, with which Caddy gets the certificate and serves ports 80 and 443. Behind a reverse proxy of your own (nginx, say), leave `tls` out and send everything to port 24000. Then:
+## Contributing
 
-```sh
-docker compose up -d
-```
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) first: commits follow Conventional Commits, and contributions fall under the [CLA](CONTRIBUTOR_LICENSE_AGREEMENT.md).
 
-The `db-migrate` service brings the database to the release's schema before anything that uses it starts.
+## License
 
-To run your own changes, leave `GEODUELS_VERSION` empty and add `--build`, or build and push the images with `docker buildx bake` and point `REGISTRY` and `GEODUELS_VERSION` at them (see [development notes](docs/development.md)).
-
-## Development references
-
-- [AGENTS.md](AGENTS.md): constraints and cross-cutting behavior to preserve.
-- [Development notes](docs/development.md): generated code, meaningful verification, local infrastructure, releases, and map tools.
-- [Extension notes](extension/README.md): local installation and production packaging.
-- [Contributor agreement](CONTRIBUTOR_LICENSE_AGREEMENT.md) and [license](LICENSE): contribution and licensing terms.
+[AGPL-3.0](LICENSE).

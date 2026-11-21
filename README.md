@@ -43,26 +43,16 @@
 
 A duel is two people racing a clock. Every guess has to land instantly, a deploy can't end a match, and a cheater can't keep anyone's rating for long. Here's how GeoDuels manages all three.
 
-```mermaid
-flowchart TB
-    players([Players]) --> caddy[Caddy]
-    caddy --> web
-    caddy -- /api --> api
-    caddy -- /api/live --> gw
-    subgraph stateless [Stateless: add pods to scale]
-        web[Next.js]
-        api[API]
-        gw[Gateways]
-    end
-    api -. publish .-> nats{{NATS}}
-    gw -. subscribe .-> nats
-    gw -- match sockets --> node[Gameplay nodes<br>matches in memory]
-    api --> pg[(PostgreSQL)]
-    node --> pg
-    mod -- reads guesses --> pg
-    subgraph anticheat [Anti-cheat]
-        mod[Moderation worker] --> risk[Risk engine<br>private]
-    end
+```
+ browser ──► front (Caddy) ──► web (Next.js)
+                │
+                ├── /api ──────► api (Go) ────────────────────────────┐
+                │                                                     │
+                └── /api/live ─► gateway (Go) ──► gameplay node (Go)  ├──► PostgreSQL
+                                   ▲            one match, one node   │    (state, jobs)
+                                   │                                  │
+                                   └──── NATS ◄── api, workers ───────┘
+                                    live events to whoever holds the socket
 ```
 
 - **Everything is stateless** except the gameplay nodes, which keep matches in RAM so guesses never wait on the database. That lets GeoDuels scale about as far as you need.
